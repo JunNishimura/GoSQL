@@ -28,25 +28,25 @@ func TestBlockIdEquals(t *testing.T) {
 		want  bool
 	}{
 		{
-			name: "same filename and blkNum",
+			name: "returns true when filename and blkNum are both equal",
 			a:    NewBlockId("test.db", 1),
 			b:    NewBlockId("test.db", 1),
 			want: true,
 		},
 		{
-			name: "different blkNum",
+			name: "returns false when blkNum differs",
 			a:    NewBlockId("test.db", 1),
 			b:    NewBlockId("test.db", 2),
 			want: false,
 		},
 		{
-			name: "different filename",
+			name: "returns false when filename differs",
 			a:    NewBlockId("a.db", 1),
 			b:    NewBlockId("b.db", 1),
 			want: false,
 		},
 		{
-			name: "different filename and blkNum",
+			name: "returns false when both filename and blkNum differ",
 			a:    NewBlockId("a.db", 1),
 			b:    NewBlockId("b.db", 2),
 			want: false,
@@ -63,7 +63,7 @@ func TestBlockIdEquals(t *testing.T) {
 }
 
 func TestBlockIdHashCode(t *testing.T) {
-	t.Run("same blocks produce same hash", func(t *testing.T) {
+	t.Run("returns same hash when filename and blkNum are both equal", func(t *testing.T) {
 		a := NewBlockId("test.db", 1)
 		b := NewBlockId("test.db", 1)
 		if a.HashCode() != b.HashCode() {
@@ -71,7 +71,7 @@ func TestBlockIdHashCode(t *testing.T) {
 		}
 	})
 
-	t.Run("different blocks produce different hash", func(t *testing.T) {
+	t.Run("returns different hash when blkNum differs", func(t *testing.T) {
 		a := NewBlockId("test.db", 1)
 		b := NewBlockId("test.db", 2)
 		if a.HashCode() == b.HashCode() {

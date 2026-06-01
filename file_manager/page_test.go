@@ -33,10 +33,10 @@ func TestSetGetInt(t *testing.T) {
 		offset int
 		value  int32
 	}{
-		{"positive value", 0, 42},
-		{"zero", 0, 0},
-		{"negative value", 0, -1},
-		{"non-zero offset", 4, 100},
+		{"stores and retrieves a positive int32 value", 0, 42},
+		{"stores and retrieves zero", 0, 0},
+		{"stores and retrieves a negative int32 value", 0, -1},
+		{"stores and retrieves value at non-zero offset", 4, 100},
 	}
 
 	for _, tt := range tests {
@@ -56,9 +56,9 @@ func TestSetGetBytes(t *testing.T) {
 		offset int
 		value  []byte
 	}{
-		{"non-empty bytes", 0, []byte{1, 2, 3}},
-		{"empty bytes", 0, []byte{}},
-		{"non-zero offset", 8, []byte{9, 8, 7}},
+		{"stores and retrieves non-empty byte slice", 0, []byte{1, 2, 3}},
+		{"stores and retrieves empty byte slice", 0, []byte{}},
+		{"stores and retrieves bytes at non-zero offset", 8, []byte{9, 8, 7}},
 	}
 
 	for _, tt := range tests {
@@ -90,10 +90,10 @@ func TestSetGetString(t *testing.T) {
 		offset int
 		value  string
 	}{
-		{"ascii string", 0, "hello"},
-		{"empty string", 0, ""},
-		{"multibyte string", 0, "日本語"},
-		{"non-zero offset", 16, "world"},
+		{"stores and retrieves ASCII string", 0, "hello"},
+		{"stores and retrieves empty string", 0, ""},
+		{"stores and retrieves multibyte UTF-8 string", 0, "日本語"},
+		{"stores and retrieves string at non-zero offset", 16, "world"},
 	}
 
 	for _, tt := range tests {
@@ -110,17 +110,20 @@ func TestSetGetString(t *testing.T) {
 func TestMaxLength(t *testing.T) {
 	p := NewPageByBlockSize(64)
 	tests := []struct {
+		name   string
 		strlen int
 		want   int
 	}{
-		{0, 4},
-		{1, 4 + utf8.UTFMax},
-		{10, 4 + 10*utf8.UTFMax},
+		{"returns 4 bytes for empty string (length prefix only)", 0, 4},
+		{"returns 4 plus UTFMax for single character string", 1, 4 + utf8.UTFMax},
+		{"returns 4 plus UTFMax times strlen for multi-character string", 10, 4 + 10*utf8.UTFMax},
 	}
 
 	for _, tt := range tests {
-		if got := p.MaxLength(tt.strlen); got != tt.want {
-			t.Errorf("MaxLength(%d) = %d, want %d", tt.strlen, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.MaxLength(tt.strlen); got != tt.want {
+				t.Errorf("MaxLength(%d) = %d, want %d", tt.strlen, got, tt.want)
+			}
+		})
 	}
 }
