@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ type FileManager struct {
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
 		}
 	}
 	return &FileManager{
@@ -33,11 +34,13 @@ func (f *FileManager) Read(blockId *BlockId, p *Page) error {
 
 	offset := int64(blockId.blkNum) * int64(f.blockSize)
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return err
+		return fmt.Errorf("seek block %s: %w", blockId, err)
 	}
 
-	_, err = io.ReadFull(file, p.contents())
-	return err
+	if _, err = io.ReadFull(file, p.contents()); err != nil {
+		return fmt.Errorf("read block %s: %w", blockId, err)
+	}
+	return nil
 }
 
 func (f *FileManager) getFile(fileName string) (*os.File, error) {
@@ -46,7 +49,7 @@ func (f *FileManager) getFile(fileName string) (*os.File, error) {
 		var err error
 		file, err = os.OpenFile(filepath.Join(f.dbDirectory, fileName), os.O_RDWR|os.O_CREATE, 0666)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("open file %s: %w", filepath.Join(f.dbDirectory, fileName), err)
 		}
 		f.openFiles[fileName] = file
 	}
@@ -61,7 +64,7 @@ func (f *FileManager) Write(blockId *BlockId, p *Page) error {
 
 	offset := int64(blockId.blkNum) * int64(f.blockSize)
 	if _, err := file.WriteAt(p.contents(), offset); err != nil {
-		return err
+		return fmt.Errorf("write block %s: %w", blockId, err)
 	}
 
 	return nil
@@ -75,14 +78,14 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 
 	info, err := file.Stat()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat file %s: %w", fileName, err)
 	}
 	newBlockNum := int(info.Size()) / f.blockSize
 
 	newBytes := make([]byte, f.blockSize)
 	offset := int64(newBlockNum) * int64(f.blockSize)
 	if _, err := file.WriteAt(newBytes, offset); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("append block to %s: %w", fileName, err)
 	}
 
 	return NewBlockId(fileName, newBlockNum), nil
@@ -96,7 +99,7 @@ func (f *FileManager) Length(fileName string) (int, error) {
 
 	info, err := file.Stat()
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stat file %s: %w", fileName, err)
 	}
 
 	return int(info.Size()) / f.blockSize, nil
