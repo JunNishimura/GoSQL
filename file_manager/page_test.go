@@ -7,23 +7,58 @@ import (
 )
 
 func TestNewPageByBlockSize(t *testing.T) {
-	p := NewPageByBlockSize(400)
-	if len(p.buf) != 400 {
-		t.Errorf("buf length = %d, want %d", len(p.buf), 400)
+	tests := []struct {
+		name      string
+		blockSize int
+	}{
+		{
+			name:      "allocates buffer with given block size",
+			blockSize: 400,
+		},
+		{
+			name:      "allocates zero-initialized buffer",
+			blockSize: 8,
+		},
 	}
-	for _, b := range p.buf {
-		if b != 0 {
-			t.Error("buf should be zero-initialized")
-			break
-		}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPageByBlockSize(tt.blockSize)
+			if len(p.buf) != tt.blockSize {
+				t.Errorf("buf length = %d, want %d", len(p.buf), tt.blockSize)
+			}
+			for _, b := range p.buf {
+				if b != 0 {
+					t.Error("buf should be zero-initialized")
+					break
+				}
+			}
+		})
 	}
 }
 
 func TestNewPageByBytes(t *testing.T) {
-	src := []byte{1, 2, 3}
-	p := NewPageByBytes(src)
-	if !bytes.Equal(p.buf, src) {
-		t.Errorf("buf = %v, want %v", p.buf, src)
+	tests := []struct {
+		name string
+		src  []byte
+	}{
+		{
+			name: "wraps given byte slice",
+			src:  []byte{1, 2, 3},
+		},
+		{
+			name: "wraps empty byte slice",
+			src:  []byte{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPageByBytes(tt.src)
+			if !bytes.Equal(p.buf, tt.src) {
+				t.Errorf("buf = %v, want %v", p.buf, tt.src)
+			}
+		})
 	}
 }
 
@@ -33,10 +68,26 @@ func TestSetGetInt(t *testing.T) {
 		offset int
 		value  int32
 	}{
-		{"stores and retrieves a positive int32 value", 0, 42},
-		{"stores and retrieves zero", 0, 0},
-		{"stores and retrieves a negative int32 value", 0, -1},
-		{"stores and retrieves value at non-zero offset", 4, 100},
+		{
+			name:   "stores and retrieves a positive int32 value",
+			offset: 0,
+			value:  42,
+		},
+		{
+			name:   "stores and retrieves zero",
+			offset: 0,
+			value:  0,
+		},
+		{
+			name:   "stores and retrieves a negative int32 value",
+			offset: 0,
+			value:  -1,
+		},
+		{
+			name:   "stores and retrieves value at non-zero offset",
+			offset: 4,
+			value:  100,
+		},
 	}
 
 	for _, tt := range tests {
@@ -56,9 +107,21 @@ func TestSetGetBytes(t *testing.T) {
 		offset int
 		value  []byte
 	}{
-		{"stores and retrieves non-empty byte slice", 0, []byte{1, 2, 3}},
-		{"stores and retrieves empty byte slice", 0, []byte{}},
-		{"stores and retrieves bytes at non-zero offset", 8, []byte{9, 8, 7}},
+		{
+			name:   "stores and retrieves non-empty byte slice",
+			offset: 0,
+			value:  []byte{1, 2, 3},
+		},
+		{
+			name:   "stores and retrieves empty byte slice",
+			offset: 0,
+			value:  []byte{},
+		},
+		{
+			name:   "stores and retrieves bytes at non-zero offset",
+			offset: 8,
+			value:  []byte{9, 8, 7},
+		},
 	}
 
 	for _, tt := range tests {
@@ -90,10 +153,26 @@ func TestSetGetString(t *testing.T) {
 		offset int
 		value  string
 	}{
-		{"stores and retrieves ASCII string", 0, "hello"},
-		{"stores and retrieves empty string", 0, ""},
-		{"stores and retrieves multibyte UTF-8 string", 0, "日本語"},
-		{"stores and retrieves string at non-zero offset", 16, "world"},
+		{
+			name:   "stores and retrieves ASCII string",
+			offset: 0,
+			value:  "hello",
+		},
+		{
+			name:   "stores and retrieves empty string",
+			offset: 0,
+			value:  "",
+		},
+		{
+			name:   "stores and retrieves multibyte UTF-8 string",
+			offset: 0,
+			value:  "日本語",
+		},
+		{
+			name:   "stores and retrieves string at non-zero offset",
+			offset: 16,
+			value:  "world",
+		},
 	}
 
 	for _, tt := range tests {
@@ -114,9 +193,21 @@ func TestMaxLength(t *testing.T) {
 		strlen int
 		want   int
 	}{
-		{"returns 4 bytes for empty string (length prefix only)", 0, 4},
-		{"returns 4 plus UTFMax for single character string", 1, 4 + utf8.UTFMax},
-		{"returns 4 plus UTFMax times strlen for multi-character string", 10, 4 + 10*utf8.UTFMax},
+		{
+			name:   "returns 4 bytes for empty string (length prefix only)",
+			strlen: 0,
+			want:   4,
+		},
+		{
+			name:   "returns 4 plus UTFMax for single character string",
+			strlen: 1,
+			want:   4 + utf8.UTFMax,
+		},
+		{
+			name:   "returns 4 plus UTFMax times strlen for multi-character string",
+			strlen: 10,
+			want:   4 + 10*utf8.UTFMax,
+		},
 	}
 
 	for _, tt := range tests {

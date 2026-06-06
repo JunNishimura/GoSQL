@@ -3,29 +3,73 @@ package filemanager
 import "testing"
 
 func TestNewBlockId(t *testing.T) {
-	b := NewBlockId("test.db", 3)
-	if b.FileName() != "test.db" {
-		t.Errorf("FileName() = %q, want %q", b.FileName(), "test.db")
+	tests := []struct {
+		name     string
+		fileName string
+		blkNum   int
+	}{
+		{
+			name:     "creates BlockId with given filename and blkNum",
+			fileName: "test.db",
+			blkNum:   3,
+		},
+		{
+			name:     "creates BlockId with zero blkNum",
+			fileName: "test.db",
+			blkNum:   0,
+		},
 	}
-	if b.Number() != 3 {
-		t.Errorf("Number() = %d, want %d", b.Number(), 3)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewBlockId(tt.fileName, tt.blkNum)
+			if b.FileName() != tt.fileName {
+				t.Errorf("FileName() = %q, want %q", b.FileName(), tt.fileName)
+			}
+			if b.Number() != tt.blkNum {
+				t.Errorf("Number() = %d, want %d", b.Number(), tt.blkNum)
+			}
+		})
 	}
 }
 
 func TestBlockIdString(t *testing.T) {
-	b := NewBlockId("test.db", 3)
-	want := "[file test.db, block 3]"
-	if b.String() != want {
-		t.Errorf("String() = %q, want %q", b.String(), want)
+	tests := []struct {
+		name     string
+		fileName string
+		blkNum   int
+		want     string
+	}{
+		{
+			name:     "formats filename and blkNum into string",
+			fileName: "test.db",
+			blkNum:   3,
+			want:     "[file test.db, block 3]",
+		},
+		{
+			name:     "formats zero blkNum into string",
+			fileName: "test.db",
+			blkNum:   0,
+			want:     "[file test.db, block 0]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := NewBlockId(tt.fileName, tt.blkNum)
+			if got := b.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestBlockIdEquals(t *testing.T) {
 	tests := []struct {
-		name  string
-		a     *BlockId
-		b     *BlockId
-		want  bool
+		name string
+		a    *BlockId
+		b    *BlockId
+		want bool
 	}{
 		{
 			name: "returns true when filename and blkNum are both equal",
@@ -63,19 +107,34 @@ func TestBlockIdEquals(t *testing.T) {
 }
 
 func TestBlockIdHashCode(t *testing.T) {
-	t.Run("returns same hash when filename and blkNum are both equal", func(t *testing.T) {
-		a := NewBlockId("test.db", 1)
-		b := NewBlockId("test.db", 1)
-		if a.HashCode() != b.HashCode() {
-			t.Errorf("HashCode() = %d, want %d", a.HashCode(), b.HashCode())
-		}
-	})
+	tests := []struct {
+		name     string
+		a        *BlockId
+		b        *BlockId
+		wantSame bool
+	}{
+		{
+			name:     "returns same hash when filename and blkNum are both equal",
+			a:        NewBlockId("test.db", 1),
+			b:        NewBlockId("test.db", 1),
+			wantSame: true,
+		},
+		{
+			name:     "returns different hash when blkNum differs",
+			a:        NewBlockId("test.db", 1),
+			b:        NewBlockId("test.db", 2),
+			wantSame: false,
+		},
+	}
 
-	t.Run("returns different hash when blkNum differs", func(t *testing.T) {
-		a := NewBlockId("test.db", 1)
-		b := NewBlockId("test.db", 2)
-		if a.HashCode() == b.HashCode() {
-			t.Errorf("HashCode() unexpectedly equal: %d", a.HashCode())
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.wantSame && tt.a.HashCode() != tt.b.HashCode() {
+				t.Errorf("HashCode() = %d, want %d", tt.a.HashCode(), tt.b.HashCode())
+			}
+			if !tt.wantSame && tt.a.HashCode() == tt.b.HashCode() {
+				t.Errorf("HashCode() unexpectedly equal: %d", tt.a.HashCode())
+			}
+		})
+	}
 }
