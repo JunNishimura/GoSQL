@@ -36,6 +36,27 @@ func TestFoo(t *testing.T) {
 
 Test case names must describe what is being tested, so the intent is clear without reading the implementation.
 
+## Error Handling
+
+When returning errors, wrap them with `fmt.Errorf` and `%w` to add context about which operation failed.
+
+```go
+// Bad
+return nil, err
+
+// Good
+return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
+```
+
+Use `%w` (not `%v`) so callers can inspect the original error with `errors.Is` / `errors.As`.
+
+**When to wrap:**
+- Returning an error from an external call (os, io, etc.) where the caller cannot tell what operation failed without context.
+
+**When NOT to wrap:**
+- Re-returning an error that has already been wrapped to avoid double-wrapping.
+- The function name and call site already make the context obvious.
+
 ```go
 // Bad
 {"case1", ...},
