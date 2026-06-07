@@ -1,5 +1,16 @@
 # GoSQL
 
+## Development Workflow
+
+Follow the TDD cycle: **List → Red → Green → Refactor**
+
+- **List**: enumerate the tasks to work on and choose which one to tackle. Skip this step if the task is already clear.
+- **Red**: write failing tests, then stop and wait for user confirmation before proceeding
+- **Green**: implement the minimum code to make the tests pass
+- **Refactor**: clean up the code while keeping tests green
+
+Do NOT proceed from Red to Green without explicit user approval.
+
 ## Commit Message
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format:
