@@ -3,6 +3,7 @@ package filemanager
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 	"unicode/utf8"
 )
 
@@ -27,6 +28,47 @@ func (p *Page) SetInt(offset int, value int32) error {
 		return fmt.Errorf("SetInt: offset %d out of bounds (buf size %d)", offset, len(p.buf))
 	}
 	binary.BigEndian.PutUint32(p.buf[offset:], uint32(value))
+	return nil
+}
+
+func (p *Page) GetShort(offset int) int16 {
+	return int16(binary.BigEndian.Uint16(p.buf[offset:]))
+}
+
+func (p *Page) SetShort(offset int, value int16) error {
+	if offset+2 > len(p.buf) {
+		return fmt.Errorf("SetShort: offset %d out of bounds (buf size %d)", offset, len(p.buf))
+	}
+	binary.BigEndian.PutUint16(p.buf[offset:], uint16(value))
+	return nil
+}
+
+func (p *Page) GetBool(offset int) bool {
+	return p.buf[offset] != 0
+}
+
+func (p *Page) SetBool(offset int, value bool) error {
+	if offset+1 > len(p.buf) {
+		return fmt.Errorf("SetBool: offset %d out of bounds (buf size %d)", offset, len(p.buf))
+	}
+	if value {
+		p.buf[offset] = 1
+	} else {
+		p.buf[offset] = 0
+	}
+	return nil
+}
+
+func (p *Page) GetDate(offset int) time.Time {
+	unix := int64(binary.BigEndian.Uint64(p.buf[offset:]))
+	return time.Unix(unix, 0)
+}
+
+func (p *Page) SetDate(offset int, value time.Time) error {
+	if offset+8 > len(p.buf) {
+		return fmt.Errorf("SetDate: offset %d out of bounds (buf size %d)", offset, len(p.buf))
+	}
+	binary.BigEndian.PutUint64(p.buf[offset:], uint64(value.Unix()))
 	return nil
 }
 
