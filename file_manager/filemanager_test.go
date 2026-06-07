@@ -51,19 +51,25 @@ func TestNewFileManager(t *testing.T) {
 
 func TestWriteAndRead(t *testing.T) {
 	tests := []struct {
-		name      string
-		blk       *BlockId
-		writeData string
+		name              string
+		blk               *BlockId
+		writeData         string
+		wantBlocksWritten int
+		wantBlocksRead    int
 	}{
 		{
-			name:      "reads back data written to block 0",
-			blk:       NewBlockId(testFileName, 0),
-			writeData: "hello",
+			name:              "reads back data written to block 0",
+			blk:               NewBlockId(testFileName, 0),
+			writeData:         "hello",
+			wantBlocksWritten: 1,
+			wantBlocksRead:    1,
 		},
 		{
-			name:      "reads back data written to block 1 at correct offset",
-			blk:       NewBlockId(testFileName, 1),
-			writeData: "block one",
+			name:              "reads back data written to block 1 at correct offset",
+			blk:               NewBlockId(testFileName, 1),
+			writeData:         "block one",
+			wantBlocksWritten: 1,
+			wantBlocksRead:    1,
 		},
 	}
 
@@ -83,6 +89,14 @@ func TestWriteAndRead(t *testing.T) {
 			}
 			if got := readPage.GetString(0); got != tt.writeData {
 				t.Errorf("GetString() = %q, want %q", got, tt.writeData)
+			}
+
+			stats := fm.GetStats()
+			if stats.BlocksWritten() != tt.wantBlocksWritten {
+				t.Errorf("BlocksWritten() = %d, want %d", stats.BlocksWritten(), tt.wantBlocksWritten)
+			}
+			if stats.BlocksRead() != tt.wantBlocksRead {
+				t.Errorf("BlocksRead() = %d, want %d", stats.BlocksRead(), tt.wantBlocksRead)
 			}
 		})
 	}

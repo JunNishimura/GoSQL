@@ -7,10 +7,24 @@ import (
 	"path/filepath"
 )
 
+type Stats struct {
+	blocksRead    int
+	blocksWritten int
+}
+
+func (s *Stats) BlocksRead() int {
+	return s.blocksRead
+}
+
+func (s *Stats) BlocksWritten() int {
+	return s.blocksWritten
+}
+
 type FileManager struct {
 	dbDirectory string
 	blockSize   int
 	openFiles   map[string]*os.File
+	stats       Stats
 }
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
@@ -40,6 +54,7 @@ func (f *FileManager) Read(blockId *BlockId, p *Page) error {
 	if _, err = io.ReadFull(file, p.contents()); err != nil {
 		return fmt.Errorf("read block %s: %w", blockId, err)
 	}
+	f.stats.blocksRead++
 	return nil
 }
 
@@ -66,7 +81,7 @@ func (f *FileManager) Write(blockId *BlockId, p *Page) error {
 	if _, err := file.WriteAt(p.contents(), offset); err != nil {
 		return fmt.Errorf("write block %s: %w", blockId, err)
 	}
-
+	f.stats.blocksWritten++
 	return nil
 }
 
@@ -89,6 +104,10 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 	}
 
 	return NewBlockId(fileName, newBlockNum), nil
+}
+
+func (f *FileManager) GetStats() Stats {
+	return f.stats
 }
 
 func (f *FileManager) Length(fileName string) (int, error) {
