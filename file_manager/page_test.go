@@ -93,7 +93,9 @@ func TestSetGetInt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewPageByBlockSize(64)
-			p.SetInt(tt.offset, tt.value)
+			if err := p.SetInt(tt.offset, tt.value); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
 			if got := p.GetInt(tt.offset); got != tt.value {
 				t.Errorf("GetInt() = %d, want %d", got, tt.value)
 			}
@@ -127,7 +129,9 @@ func TestSetGetBytes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewPageByBlockSize(64)
-			p.SetBytes(tt.offset, tt.value)
+			if err := p.SetBytes(tt.offset, tt.value); err != nil {
+				t.Fatalf("SetBytes() error = %v", err)
+			}
 			if got := p.GetBytes(tt.offset); !bytes.Equal(got, tt.value) {
 				t.Errorf("GetBytes() = %v, want %v", got, tt.value)
 			}
@@ -137,7 +141,9 @@ func TestSetGetBytes(t *testing.T) {
 
 func TestGetBytesReturnsIndependentCopy(t *testing.T) {
 	p := NewPageByBlockSize(64)
-	p.SetBytes(0, []byte{1, 2, 3})
+	if err := p.SetBytes(0, []byte{1, 2, 3}); err != nil {
+		t.Fatalf("SetBytes() error = %v", err)
+	}
 
 	got := p.GetBytes(0)
 	got[0] = 99
@@ -178,9 +184,133 @@ func TestSetGetString(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewPageByBlockSize(128)
-			p.SetString(tt.offset, tt.value)
+			if err := p.SetString(tt.offset, tt.value); err != nil {
+				t.Fatalf("SetString() error = %v", err)
+			}
 			if got := p.GetString(tt.offset); got != tt.value {
 				t.Errorf("GetString() = %q, want %q", got, tt.value)
+			}
+		})
+	}
+}
+
+func TestSetIntBoundsCheck(t *testing.T) {
+	tests := []struct {
+		name    string
+		bufSize int
+		offset  int
+		wantErr bool
+	}{
+		{
+			name:    "returns no error when int fits exactly in buffer",
+			bufSize: 4,
+			offset:  0,
+			wantErr: false,
+		},
+		{
+			name:    "returns error when offset plus 4 bytes exceeds buffer size",
+			bufSize: 4,
+			offset:  1,
+			wantErr: true,
+		},
+		{
+			name:    "returns error when offset is equal to buffer size",
+			bufSize: 4,
+			offset:  4,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPageByBlockSize(tt.bufSize)
+			err := p.SetInt(tt.offset, 42)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SetInt() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSetBytesBoundsCheck(t *testing.T) {
+	tests := []struct {
+		name    string
+		bufSize int
+		offset  int
+		value   []byte
+		wantErr bool
+	}{
+		{
+			name:    "returns no error when bytes fit exactly in buffer",
+			bufSize: 7,
+			offset:  0,
+			value:   []byte{1, 2, 3},
+			wantErr: false,
+		},
+		{
+			name:    "returns error when data exceeds buffer size",
+			bufSize: 6,
+			offset:  0,
+			value:   []byte{1, 2, 3},
+			wantErr: true,
+		},
+		{
+			name:    "returns error when offset plus data exceeds buffer size",
+			bufSize: 8,
+			offset:  2,
+			value:   []byte{1, 2, 3},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPageByBlockSize(tt.bufSize)
+			err := p.SetBytes(tt.offset, tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SetBytes() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestSetStringBoundsCheck(t *testing.T) {
+	tests := []struct {
+		name    string
+		bufSize int
+		offset  int
+		value   string
+		wantErr bool
+	}{
+		{
+			name:    "returns no error when string fits exactly in buffer",
+			bufSize: 9,
+			offset:  0,
+			value:   "hello",
+			wantErr: false,
+		},
+		{
+			name:    "returns error when string exceeds buffer size",
+			bufSize: 8,
+			offset:  0,
+			value:   "hello",
+			wantErr: true,
+		},
+		{
+			name:    "returns error when offset plus string exceeds buffer size",
+			bufSize: 10,
+			offset:  2,
+			value:   "hello",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewPageByBlockSize(tt.bufSize)
+			err := p.SetString(tt.offset, tt.value)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SetString() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}

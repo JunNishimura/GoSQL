@@ -78,7 +78,9 @@ func TestWriteAndRead(t *testing.T) {
 			fm, _ := newTestFileManager(t)
 
 			writePage := NewPageByBlockSize(testBlockSize)
-			writePage.SetString(0, tt.writeData)
+			if err := writePage.SetString(0, tt.writeData); err != nil {
+				t.Fatalf("SetString() error = %v", err)
+			}
 			if err := fm.Write(tt.blk, writePage); err != nil {
 				t.Fatalf("Write() error = %v", err)
 			}
