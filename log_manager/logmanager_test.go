@@ -68,6 +68,12 @@ func TestNewLogManager(t *testing.T) {
 			if lm.currentBlock.Number() != tt.wantBlkNum {
 				t.Errorf("currentBlock.Number() = %d, want %d", lm.currentBlock.Number(), tt.wantBlkNum)
 			}
+			if lm.latestLSN != 0 {
+				t.Errorf("latestLSN = %d, want 0", lm.latestLSN)
+			}
+			if lm.lastSavedLSN != 0 {
+				t.Errorf("lastSavedLSN = %d, want 0", lm.lastSavedLSN)
+			}
 
 			length, err := fm.Length(testLogFile)
 			if err != nil {

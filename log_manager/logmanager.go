@@ -9,6 +9,8 @@ type LogManager struct {
 	logFile      string
 	logPage      *filemanager.Page
 	currentBlock *filemanager.BlockId
+	latestLSN    int
+	lastSavedLSN int
 }
 
 func NewLogManager(fm *filemanager.FileManager, logFile string) (*LogManager, error) {
