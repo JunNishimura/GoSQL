@@ -1,8 +1,12 @@
 package logmanager
 
 import (
-	"github.com/JunNishimura/GoSQL/file_manager"
+	"sync"
+
+	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
+
+const intBytes = 4
 
 type LogManager struct {
 	fileManager  *filemanager.FileManager
@@ -11,6 +15,7 @@ type LogManager struct {
 	currentBlock *filemanager.BlockId
 	latestLSN    int
 	lastSavedLSN int
+	mu           sync.Mutex
 }
 
 func NewLogManager(fm *filemanager.FileManager, logFile string) (*LogManager, error) {
@@ -70,4 +75,36 @@ func (lm *LogManager) flush() error {
 	}
 	lm.lastSavedLSN = lm.latestLSN
 	return nil
+}
+
+func (lm *LogManager) Append(logRecord []byte) (int, error) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	boundary := int(lm.logPage.GetInt(0))
+	recordSize := len(logRecord)
+	bytesNeeded := recordSize + intBytes
+
+	if boundary-bytesNeeded < intBytes {
+		if err := lm.flush(); err != nil {
+			return 0, err
+		}
+		blk, err := lm.appendNewBlock()
+		if err != nil {
+			return 0, err
+		}
+		lm.currentBlock = blk
+		boundary = int(lm.logPage.GetInt(0))
+	}
+
+	recordPosition := boundary - bytesNeeded
+	if err := lm.logPage.SetBytes(recordPosition, logRecord); err != nil {
+		return 0, err
+	}
+	if err := lm.logPage.SetInt(0, int32(recordPosition)); err != nil {
+		return 0, err
+	}
+
+	lm.latestLSN++
+	return lm.latestLSN, nil
 }

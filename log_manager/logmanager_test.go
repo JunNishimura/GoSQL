@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	testBlockSize = 400
-	testLogFile   = "test.log"
+	testBlockSize      = 400
+	testLogFile        = "test.log"
+	smallTestBlockSize = 20
 )
 
 func newTestFileManager(t *testing.T) *filemanager.FileManager {
@@ -232,6 +233,71 @@ func TestFlush(t *testing.T) {
 			gotFlushed := readPage.GetInt(4) == 999
 			if gotFlushed != tt.wantFlushed {
 				t.Errorf("flushed to disk = %v, want %v", gotFlushed, tt.wantFlushed)
+			}
+		})
+	}
+}
+
+func TestAppend(t *testing.T) {
+	tests := []struct {
+		name       string
+		records    [][]byte
+		wantLSN    int
+		wantBlkNum int
+	}{
+		{
+			name:       "first record fits in the initial block",
+			records:    [][]byte{[]byte("AB")},
+			wantLSN:    1,
+			wantBlkNum: 0,
+		},
+		{
+			name:       "second record still fits in the initial block",
+			records:    [][]byte{[]byte("AB"), []byte("CD")},
+			wantLSN:    2,
+			wantBlkNum: 0,
+		},
+		{
+			name:       "third record overflows into a new block",
+			records:    [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")},
+			wantLSN:    3,
+			wantBlkNum: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fm, err := filemanager.NewFileManager(dir, smallTestBlockSize)
+			if err != nil {
+				t.Fatalf("NewFileManager() error = %v", err)
+			}
+			lm, err := NewLogManager(fm, testLogFile)
+			if err != nil {
+				t.Fatalf("NewLogManager() error = %v", err)
+			}
+
+			var lsn int
+			var lastRecord []byte
+			for _, rec := range tt.records {
+				lsn, err = lm.Append(rec)
+				if err != nil {
+					t.Fatalf("Append() error = %v", err)
+				}
+				lastRecord = rec
+			}
+
+			if lsn != tt.wantLSN {
+				t.Errorf("Append() = %d, want %d", lsn, tt.wantLSN)
+			}
+			if lm.currentBlock.Number() != tt.wantBlkNum {
+				t.Errorf("currentBlock.Number() = %d, want %d", lm.currentBlock.Number(), tt.wantBlkNum)
+			}
+
+			boundary := lm.logPage.GetInt(0)
+			got := lm.logPage.GetBytes(int(boundary))
+			if string(got) != string(lastRecord) {
+				t.Errorf("stored record = %q, want %q", got, lastRecord)
 			}
 		})
 	}
