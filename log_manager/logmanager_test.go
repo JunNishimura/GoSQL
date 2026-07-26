@@ -167,3 +167,72 @@ func TestAppendNewBlock(t *testing.T) {
 		})
 	}
 }
+
+func TestFlush(t *testing.T) {
+	tests := []struct {
+		name             string
+		lastSavedLSN     int
+		latestLSN        int
+		lsn              int
+		wantFlushed      bool
+		wantLastSavedLSN int
+	}{
+		{
+			name:             "flushes when lsn is greater than lastSavedLSN",
+			lastSavedLSN:     0,
+			latestLSN:        5,
+			lsn:              3,
+			wantFlushed:      true,
+			wantLastSavedLSN: 5,
+		},
+		{
+			name:             "does not flush when lsn equals lastSavedLSN",
+			lastSavedLSN:     3,
+			latestLSN:        5,
+			lsn:              3,
+			wantFlushed:      false,
+			wantLastSavedLSN: 3,
+		},
+		{
+			name:             "does not flush when lsn is less than lastSavedLSN",
+			lastSavedLSN:     5,
+			latestLSN:        7,
+			lsn:              3,
+			wantFlushed:      false,
+			wantLastSavedLSN: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm := newTestFileManager(t)
+			lm, err := NewLogManager(fm, testLogFile)
+			if err != nil {
+				t.Fatalf("NewLogManager() error = %v", err)
+			}
+
+			if err := lm.logPage.SetInt(4, 999); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+			lm.lastSavedLSN = tt.lastSavedLSN
+			lm.latestLSN = tt.latestLSN
+
+			if err := lm.Flush(tt.lsn); err != nil {
+				t.Fatalf("Flush() error = %v", err)
+			}
+
+			if lm.lastSavedLSN != tt.wantLastSavedLSN {
+				t.Errorf("lastSavedLSN = %d, want %d", lm.lastSavedLSN, tt.wantLastSavedLSN)
+			}
+
+			readPage := filemanager.NewPageByBlockSize(testBlockSize)
+			if err := fm.Read(lm.currentBlock, readPage); err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			gotFlushed := readPage.GetInt(4) == 999
+			if gotFlushed != tt.wantFlushed {
+				t.Errorf("flushed to disk = %v, want %v", gotFlushed, tt.wantFlushed)
+			}
+		})
+	}
+}

@@ -56,3 +56,18 @@ func (lm *LogManager) appendNewBlock() (*filemanager.BlockId, error) {
 
 	return blk, nil
 }
+
+func (lm *LogManager) Flush(lsn int) error {
+	if lsn > lm.lastSavedLSN {
+		return lm.flush()
+	}
+	return nil
+}
+
+func (lm *LogManager) flush() error {
+	if err := lm.fileManager.Write(lm.currentBlock, lm.logPage); err != nil {
+		return err
+	}
+	lm.lastSavedLSN = lm.latestLSN
+	return nil
+}
