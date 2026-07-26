@@ -40,6 +40,10 @@ func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 	}, nil
 }
 
+func (f *FileManager) BlockSize() int {
+	return f.blockSize
+}
+
 func (f *FileManager) Read(blockId *BlockId, p *Page) error {
 	file, err := f.getFile(blockId.filename)
 	if err != nil {
