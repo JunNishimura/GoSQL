@@ -1,6 +1,9 @@
 package logmanager
 
 import (
+	"fmt"
+	"sort"
+	"sync"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/file_manager"
@@ -300,5 +303,50 @@ func TestAppend(t *testing.T) {
 				t.Errorf("stored record = %q, want %q", got, lastRecord)
 			}
 		})
+	}
+}
+
+func TestAppendConcurrent(t *testing.T) {
+	const goroutineCount = 100
+
+	fm, err := filemanager.NewFileManager(t.TempDir(), smallTestBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	lm, err := NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	lsns := make([]int, 0, goroutineCount)
+
+	for i := 0; i < goroutineCount; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			record := []byte(fmt.Sprintf("record-%03d", i))
+			lsn, err := lm.Append(record)
+			if err != nil {
+				t.Errorf("Append() error = %v", err)
+				return
+			}
+			mu.Lock()
+			lsns = append(lsns, lsn)
+			mu.Unlock()
+		}(i)
+	}
+	wg.Wait()
+
+	if len(lsns) != goroutineCount {
+		t.Fatalf("got %d LSNs, want %d", len(lsns), goroutineCount)
+	}
+
+	sort.Ints(lsns)
+	for i, lsn := range lsns {
+		if lsn != i+1 {
+			t.Errorf("lsns[%d] = %d, want %d (LSNs must be unique and sequential)", i, lsn, i+1)
+		}
 	}
 }
