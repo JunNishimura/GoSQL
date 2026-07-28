@@ -108,3 +108,10 @@ func (lm *LogManager) Append(logRecord []byte) (int, error) {
 	lm.latestLSN++
 	return lm.latestLSN, nil
 }
+
+func (lm *LogManager) Iterator() (*LogIterator, error) {
+	if err := lm.flush(); err != nil {
+		return nil, err
+	}
+	return NewLogIterator(lm.fileManager, lm.currentBlock)
+}

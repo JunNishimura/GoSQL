@@ -350,3 +350,45 @@ func TestAppendConcurrent(t *testing.T) {
 		}
 	}
 }
+
+func TestIterator(t *testing.T) {
+	dir := t.TempDir()
+	fm, err := filemanager.NewFileManager(dir, smallTestBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	lm, err := NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+
+	records := [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")}
+	for _, rec := range records {
+		if _, err := lm.Append(rec); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+
+	it, err := lm.Iterator()
+	if err != nil {
+		t.Fatalf("Iterator() error = %v", err)
+	}
+
+	wantOrder := [][]byte{[]byte("EF"), []byte("CD"), []byte("AB")}
+	for i, want := range wantOrder {
+		if !it.HasNext() {
+			t.Fatalf("HasNext() = false before reading record %d, want true", i)
+		}
+		got, err := it.Next()
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("Next()[%d] = %q, want %q", i, got, want)
+		}
+	}
+
+	if it.HasNext() {
+		t.Error("HasNext() = true after reading all records, want false")
+	}
+}
