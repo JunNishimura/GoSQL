@@ -37,6 +37,17 @@ func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 	return nil
 }
 
+func (bm *BufferManager) FlushAll(txNum int) error {
+	for _, buf := range bm.bufferPool {
+		if buf.txNum == txNum {
+			if err := buf.flush(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 	buf := bm.findExistingBuffer(blk)
 	if buf == nil {

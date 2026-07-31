@@ -345,3 +345,82 @@ func TestTryToPin(t *testing.T) {
 		})
 	}
 }
+
+func TestFlushAll(t *testing.T) {
+	onDisk := []int32{100, 101, 102}
+	inMemory := []int32{900, 901, 902}
+
+	tests := []struct {
+		name        string
+		txNums      []int
+		flushTxNum  int
+		wantFlushed []bool
+	}{
+		{
+			name:        "flushes only the buffers modified by the given transaction",
+			txNums:      []int{1, 2, 1},
+			flushTxNum:  1,
+			wantFlushed: []bool{true, false, true},
+		},
+		{
+			name:        "flushes nothing when no buffer belongs to the given transaction",
+			txNums:      []int{1, 2, 3},
+			flushTxNum:  4,
+			wantFlushed: []bool{false, false, false},
+		},
+		{
+			name:        "flushes nothing when every buffer is unmodified",
+			txNums:      []int{-1, -1, -1},
+			flushTxNum:  -1,
+			wantFlushed: []bool{false, false, false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, onDisk)
+
+			bm, err := NewBufferManager(fm, lm, len(tt.txNums))
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+			for i, txNum := range tt.txNums {
+				buf := bm.bufferPool[i]
+				buf.blk = filemanager.NewBlockId(testDataFile, i)
+				buf.lsn = appendLogRecord(t, lm)
+				buf.txNum = txNum
+				if err := buf.contents.SetInt(0, inMemory[i]); err != nil {
+					t.Fatalf("SetInt() error = %v", err)
+				}
+			}
+
+			if err := bm.FlushAll(tt.flushTxNum); err != nil {
+				t.Fatalf("FlushAll() error = %v", err)
+			}
+
+			for i, wantFlushed := range tt.wantFlushed {
+				page := filemanager.NewPageByBlockSize(testBlockSize)
+				if err := fm.Read(filemanager.NewBlockId(testDataFile, i), page); err != nil {
+					t.Fatalf("Read() error = %v", err)
+				}
+
+				want := onDisk[i]
+				if wantFlushed {
+					want = inMemory[i]
+				}
+				if got := page.GetInt(0); got != want {
+					t.Errorf("block %d on disk = %d, want %d", i, got, want)
+				}
+
+				wantTxNum := tt.txNums[i]
+				if wantFlushed {
+					wantTxNum = -1
+				}
+				if got := bm.bufferPool[i].txNum; got != wantTxNum {
+					t.Errorf("bufferPool[%d].txNum = %d, want %d", i, got, wantTxNum)
+				}
+			}
+		})
+	}
+}
