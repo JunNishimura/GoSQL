@@ -59,6 +59,12 @@ func TestNewBuffer(t *testing.T) {
 			if buf.pins != 0 {
 				t.Errorf("pins = %d, want 0", buf.pins)
 			}
+			if buf.txNum != -1 {
+				t.Errorf("txNum = %d, want -1", buf.txNum)
+			}
+			if buf.lsn != -1 {
+				t.Errorf("lsn = %d, want -1", buf.lsn)
+			}
 
 			// Page keeps its buffer unexported, so the size is verified through
 			// the bounds check of SetInt at the last writable offset and one past it.
@@ -101,6 +107,69 @@ func TestPin(t *testing.T) {
 
 			if buf.pins != tt.wantPins {
 				t.Errorf("pins = %d, want %d", buf.pins, tt.wantPins)
+			}
+		})
+	}
+}
+
+func TestSetModified(t *testing.T) {
+	type modification struct {
+		txNum int
+		lsn   int
+	}
+
+	tests := []struct {
+		name          string
+		modifications []modification
+		wantTxNum     int
+		wantLSN       int
+	}{
+		{
+			name:          "records both txNum and lsn when lsn is positive",
+			modifications: []modification{{txNum: 1, lsn: 5}},
+			wantTxNum:     1,
+			wantLSN:       5,
+		},
+		{
+			name:          "records lsn when lsn is 0",
+			modifications: []modification{{txNum: 1, lsn: 0}},
+			wantTxNum:     1,
+			wantLSN:       0,
+		},
+		{
+			name:          "leaves lsn at its initial value when lsn is negative",
+			modifications: []modification{{txNum: 1, lsn: -1}},
+			wantTxNum:     1,
+			wantLSN:       -1,
+		},
+		{
+			name:          "keeps the previously recorded lsn when a later call passes a negative lsn",
+			modifications: []modification{{txNum: 1, lsn: 5}, {txNum: 2, lsn: -1}},
+			wantTxNum:     2,
+			wantLSN:       5,
+		},
+		{
+			name:          "overwrites the previously recorded lsn when a later call passes a larger lsn",
+			modifications: []modification{{txNum: 1, lsn: 5}, {txNum: 2, lsn: 9}},
+			wantTxNum:     2,
+			wantLSN:       9,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			buf := NewBuffer(fm, lm)
+
+			for _, m := range tt.modifications {
+				buf.SetModified(m.txNum, m.lsn)
+			}
+
+			if buf.txNum != tt.wantTxNum {
+				t.Errorf("txNum = %d, want %d", buf.txNum, tt.wantTxNum)
+			}
+			if buf.lsn != tt.wantLSN {
+				t.Errorf("lsn = %d, want %d", buf.lsn, tt.wantLSN)
 			}
 		})
 	}

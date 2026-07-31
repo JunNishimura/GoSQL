@@ -10,6 +10,8 @@ type Buffer struct {
 	logManager  *logmanager.LogManager
 	contents    *filemanager.Page
 	pins        int
+	txNum       int
+	lsn         int
 }
 
 func NewBuffer(fm *filemanager.FileManager, lm *logmanager.LogManager) *Buffer {
@@ -17,6 +19,15 @@ func NewBuffer(fm *filemanager.FileManager, lm *logmanager.LogManager) *Buffer {
 		fileManager: fm,
 		logManager:  lm,
 		contents:    filemanager.NewPageByBlockSize(fm.BlockSize()),
+		txNum:       -1,
+		lsn:         -1,
+	}
+}
+
+func (b *Buffer) SetModified(txNum, lsn int) {
+	b.txNum = txNum
+	if lsn >= 0 {
+		b.lsn = lsn
 	}
 }
 
