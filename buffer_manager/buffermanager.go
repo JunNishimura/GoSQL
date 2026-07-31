@@ -37,6 +37,26 @@ func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 	return nil
 }
 
+func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
+	buf := bm.findExistingBuffer(blk)
+	if buf == nil {
+		buf = bm.chooseUnpinnedBuffer()
+		if buf == nil {
+			return nil, nil
+		}
+		if err := buf.assignToBlock(blk); err != nil {
+			return nil, err
+		}
+	}
+
+	if !buf.isPinned() {
+		bm.numAvailable--
+	}
+	buf.pin()
+
+	return buf, nil
+}
+
 func (bm *BufferManager) chooseUnpinnedBuffer() *Buffer {
 	for _, buf := range bm.bufferPool {
 		if !buf.isPinned() {

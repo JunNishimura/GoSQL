@@ -218,3 +218,130 @@ func TestChooseUnpinnedBuffer(t *testing.T) {
 		})
 	}
 }
+
+// prepareDataFile appends one block to the data file per given value and writes
+// that value at offset 0, so that a page loaded from disk can be told apart from
+// one that was never read.
+func prepareDataFile(t *testing.T, fm *filemanager.FileManager, values []int32) {
+	t.Helper()
+
+	for _, value := range values {
+		blk, err := fm.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+		page := filemanager.NewPageByBlockSize(testBlockSize)
+		if err := page.SetInt(0, value); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		if err := fm.Write(blk, page); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	}
+}
+
+func TestTryToPin(t *testing.T) {
+	tests := []struct {
+		name             string
+		pins             []int
+		assigned         []int
+		targetBlkNum     int
+		wantIndex        int
+		wantPins         int
+		wantContents     int32
+		wantNumAvailable int
+	}{
+		{
+			name:             "assigns the block to an unpinned buffer when no buffer holds it",
+			pins:             []int{0, 0, 0},
+			assigned:         []int{unassigned, unassigned, unassigned},
+			targetBlkNum:     1,
+			wantIndex:        0,
+			wantPins:         1,
+			wantContents:     101,
+			wantNumAvailable: 2,
+		},
+		{
+			name:             "reuses the buffer already holding the block without reloading it from disk",
+			pins:             []int{0, 0, 0},
+			assigned:         []int{unassigned, 1, unassigned},
+			targetBlkNum:     1,
+			wantIndex:        1,
+			wantPins:         1,
+			wantContents:     0,
+			wantNumAvailable: 2,
+		},
+		{
+			name:             "keeps numAvailable unchanged when the buffer holding the block is already pinned",
+			pins:             []int{0, 1, 0},
+			assigned:         []int{unassigned, 1, unassigned},
+			targetBlkNum:     1,
+			wantIndex:        1,
+			wantPins:         2,
+			wantContents:     0,
+			wantNumAvailable: 2,
+		},
+		{
+			name:             "returns nil when every buffer is pinned and none holds the block",
+			pins:             []int{1, 1, 1},
+			assigned:         []int{0, 2, 3},
+			targetBlkNum:     1,
+			wantIndex:        -1,
+			wantNumAvailable: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{100, 101, 102, 103})
+
+			bm, err := NewBufferManager(fm, lm, len(tt.pins))
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+			numAvailable := 0
+			for i := range tt.pins {
+				if tt.assigned[i] != unassigned {
+					bm.bufferPool[i].blk = filemanager.NewBlockId(testDataFile, tt.assigned[i])
+				}
+				for j := 0; j < tt.pins[i]; j++ {
+					bm.bufferPool[i].pin()
+				}
+				if tt.pins[i] == 0 {
+					numAvailable++
+				}
+			}
+			bm.numAvailable = numAvailable
+
+			targetBlk := filemanager.NewBlockId(testDataFile, tt.targetBlkNum)
+			got, err := bm.tryToPin(targetBlk)
+			if err != nil {
+				t.Fatalf("tryToPin() error = %v", err)
+			}
+
+			if bm.numAvailable != tt.wantNumAvailable {
+				t.Errorf("numAvailable = %d, want %d", bm.numAvailable, tt.wantNumAvailable)
+			}
+
+			if tt.wantIndex == -1 {
+				if got != nil {
+					t.Errorf("tryToPin() = %v, want nil", got)
+				}
+				return
+			}
+			if got != bm.bufferPool[tt.wantIndex] {
+				t.Fatalf("tryToPin() = %v, want bufferPool[%d]", got, tt.wantIndex)
+			}
+			if !got.blk.Equals(targetBlk) {
+				t.Errorf("blk = %v, want %v", got.blk, targetBlk)
+			}
+			if got.pins != tt.wantPins {
+				t.Errorf("pins = %d, want %d", got.pins, tt.wantPins)
+			}
+			if contents := got.contents.GetInt(0); contents != tt.wantContents {
+				t.Errorf("contents.GetInt(0) = %d, want %d", contents, tt.wantContents)
+			}
+		})
+	}
+}
