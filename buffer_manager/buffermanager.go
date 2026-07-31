@@ -36,3 +36,12 @@ func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 	}
 	return nil
 }
+
+func (bm *BufferManager) chooseUnpinnedBuffer() *Buffer {
+	for _, buf := range bm.bufferPool {
+		if !buf.isPinned() {
+			return buf
+		}
+	}
+	return nil
+}
