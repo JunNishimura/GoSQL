@@ -9,6 +9,7 @@ import (
 
 const (
 	testLogFile   = "test.log"
+	testDataFile  = "test.tbl"
 	testBlockSize = 400
 )
 
@@ -64,6 +65,9 @@ func TestNewBuffer(t *testing.T) {
 			}
 			if buf.lsn != -1 {
 				t.Errorf("lsn = %d, want -1", buf.lsn)
+			}
+			if buf.blk != nil {
+				t.Errorf("blk = %v, want nil", buf.blk)
 			}
 
 			// Page keeps its buffer unexported, so the size is verified through
@@ -262,6 +266,178 @@ func TestUnpin(t *testing.T) {
 
 			if buf.pins != tt.wantPins {
 				t.Errorf("pins = %d, want %d", buf.pins, tt.wantPins)
+			}
+		})
+	}
+}
+
+// appendLogRecord writes a record into the log page kept in memory and returns
+// its LSN. The record only reaches disk once the log manager is flushed.
+func appendLogRecord(t *testing.T, lm *logmanager.LogManager) int {
+	t.Helper()
+
+	lsn, err := lm.Append([]byte("record"))
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	return lsn
+}
+
+// logFlushed reports whether the log manager has written its page to disk, which
+// shows up as a boundary smaller than the block size in block 0 of the log file.
+func logFlushed(t *testing.T, fm *filemanager.FileManager) bool {
+	t.Helper()
+
+	page := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := fm.Read(filemanager.NewBlockId(testLogFile, 0), page); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	return int(page.GetInt(0)) < testBlockSize
+}
+
+func TestFlush(t *testing.T) {
+	const modifiedValue = 999
+
+	tests := []struct {
+		name        string
+		txNum       int
+		wantWritten bool
+	}{
+		{
+			name:        "keeps the block on disk untouched when txNum is negative",
+			txNum:       -1,
+			wantWritten: false,
+		},
+		{
+			name:        "writes the page to disk when txNum is 0",
+			txNum:       0,
+			wantWritten: true,
+		},
+		{
+			name:        "writes the page to disk when txNum is positive",
+			txNum:       3,
+			wantWritten: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+
+			buf := NewBuffer(fm, lm)
+			buf.blk = blk
+			buf.lsn = appendLogRecord(t, lm)
+			buf.txNum = tt.txNum
+			if err := buf.contents.SetInt(0, modifiedValue); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+
+			if err := buf.flush(); err != nil {
+				t.Fatalf("flush() error = %v", err)
+			}
+
+			readPage := filemanager.NewPageByBlockSize(testBlockSize)
+			if err := fm.Read(blk, readPage); err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if gotWritten := readPage.GetInt(0) == modifiedValue; gotWritten != tt.wantWritten {
+				t.Errorf("block written to disk = %v, want %v", gotWritten, tt.wantWritten)
+			}
+
+			// The log record must reach disk before the modified page does.
+			if gotLogFlushed := logFlushed(t, fm); gotLogFlushed != tt.wantWritten {
+				t.Errorf("log flushed = %v, want %v", gotLogFlushed, tt.wantWritten)
+			}
+
+			if buf.txNum != -1 {
+				t.Errorf("txNum = %d, want -1", buf.txNum)
+			}
+		})
+	}
+}
+
+func TestAssignToBlock(t *testing.T) {
+	const (
+		modifiedValue = 999
+		newBlockValue = 777
+	)
+
+	tests := []struct {
+		name            string
+		txNum           int
+		pins            int
+		wantOldBlkFlush bool
+	}{
+		{
+			name:            "discards the unmodified page and loads the new block",
+			txNum:           -1,
+			pins:            3,
+			wantOldBlkFlush: false,
+		},
+		{
+			name:            "flushes the modified page before loading the new block",
+			txNum:           1,
+			pins:            3,
+			wantOldBlkFlush: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			oldBlk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+			newBlk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+
+			newBlkPage := filemanager.NewPageByBlockSize(testBlockSize)
+			if err := newBlkPage.SetInt(0, newBlockValue); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+			if err := fm.Write(newBlk, newBlkPage); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+
+			buf := NewBuffer(fm, lm)
+			buf.blk = oldBlk
+			buf.lsn = appendLogRecord(t, lm)
+			buf.txNum = tt.txNum
+			buf.pins = tt.pins
+			if err := buf.contents.SetInt(0, modifiedValue); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+
+			if err := buf.assignToBlock(newBlk); err != nil {
+				t.Fatalf("assignToBlock() error = %v", err)
+			}
+
+			if buf.blk != newBlk {
+				t.Errorf("blk = %v, want %v", buf.blk, newBlk)
+			}
+			if got := buf.contents.GetInt(0); got != newBlockValue {
+				t.Errorf("contents.GetInt(0) = %d, want %d", got, newBlockValue)
+			}
+			if buf.pins != 0 {
+				t.Errorf("pins = %d, want 0", buf.pins)
+			}
+			if buf.txNum != -1 {
+				t.Errorf("txNum = %d, want -1", buf.txNum)
+			}
+
+			oldBlkPage := filemanager.NewPageByBlockSize(testBlockSize)
+			if err := fm.Read(oldBlk, oldBlkPage); err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			if gotFlushed := oldBlkPage.GetInt(0) == modifiedValue; gotFlushed != tt.wantOldBlkFlush {
+				t.Errorf("old block written to disk = %v, want %v", gotFlushed, tt.wantOldBlkFlush)
 			}
 		})
 	}
