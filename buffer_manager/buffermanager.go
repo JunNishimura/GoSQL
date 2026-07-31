@@ -2,6 +2,7 @@ package buffermanager
 
 import (
 	"fmt"
+	"sync"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
@@ -10,6 +11,8 @@ import (
 type BufferManager struct {
 	bufferPool   []*Buffer
 	numAvailable int
+	mu           sync.Mutex
+	cond         *sync.Cond
 }
 
 func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, numBuffers int) (*BufferManager, error) {
@@ -22,10 +25,24 @@ func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, nu
 		bufferPool[i] = NewBuffer(fm, lm)
 	}
 
-	return &BufferManager{
+	bm := &BufferManager{
 		bufferPool:   bufferPool,
 		numAvailable: numBuffers,
-	}, nil
+	}
+	bm.cond = sync.NewCond(&bm.mu)
+
+	return bm, nil
+}
+
+func (bm *BufferManager) Unpin(buf *Buffer) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
+	buf.unpin()
+	if !buf.isPinned() {
+		bm.numAvailable++
+		bm.cond.Broadcast()
+	}
 }
 
 func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {

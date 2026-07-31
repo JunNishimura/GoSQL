@@ -62,6 +62,9 @@ func TestNewBufferManager(t *testing.T) {
 			if bm.numAvailable != tt.numBuffers {
 				t.Errorf("numAvailable = %d, want %d", bm.numAvailable, tt.numBuffers)
 			}
+			if bm.cond == nil {
+				t.Fatal("cond is nil, want non-nil")
+			}
 
 			seen := make(map[*Buffer]bool, tt.numBuffers)
 			for i, buf := range bm.bufferPool {
@@ -341,6 +344,67 @@ func TestTryToPin(t *testing.T) {
 			}
 			if contents := got.contents.GetInt(0); contents != tt.wantContents {
 				t.Errorf("contents.GetInt(0) = %d, want %d", contents, tt.wantContents)
+			}
+		})
+	}
+}
+
+func TestBufferManagerUnpin(t *testing.T) {
+	const poolSize = 3
+
+	tests := []struct {
+		name             string
+		pinCalls         int
+		unpinCalls       int
+		wantPins         int
+		wantNumAvailable int
+	}{
+		{
+			name:             "returns the buffer to the pool when its only pin is released",
+			pinCalls:         1,
+			unpinCalls:       1,
+			wantPins:         0,
+			wantNumAvailable: poolSize,
+		},
+		{
+			name:             "keeps the buffer unavailable while another pin remains",
+			pinCalls:         2,
+			unpinCalls:       1,
+			wantPins:         1,
+			wantNumAvailable: poolSize - 1,
+		},
+		{
+			name:             "returns the buffer to the pool once every pin is released",
+			pinCalls:         2,
+			unpinCalls:       2,
+			wantPins:         0,
+			wantNumAvailable: poolSize,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			bm, err := NewBufferManager(fm, lm, poolSize)
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+
+			buf := bm.bufferPool[0]
+			for i := 0; i < tt.pinCalls; i++ {
+				buf.pin()
+			}
+			bm.numAvailable = poolSize - 1
+
+			for i := 0; i < tt.unpinCalls; i++ {
+				bm.Unpin(buf)
+			}
+
+			if buf.pins != tt.wantPins {
+				t.Errorf("pins = %d, want %d", buf.pins, tt.wantPins)
+			}
+			if bm.numAvailable != tt.wantNumAvailable {
+				t.Errorf("numAvailable = %d, want %d", bm.numAvailable, tt.wantNumAvailable)
 			}
 		})
 	}
