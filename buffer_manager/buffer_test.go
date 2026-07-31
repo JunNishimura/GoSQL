@@ -7,7 +7,10 @@ import (
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
-const testLogFile = "test.log"
+const (
+	testLogFile   = "test.log"
+	testBlockSize = 400
+)
 
 func newTestManagers(t *testing.T, blockSize int) (*filemanager.FileManager, *logmanager.LogManager) {
 	t.Helper()
