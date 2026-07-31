@@ -27,3 +27,12 @@ func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, nu
 		numAvailable: numBuffers,
 	}, nil
 }
+
+func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
+	for _, buf := range bm.bufferPool {
+		if buf.blk != nil && buf.blk.Equals(blk) {
+			return buf
+		}
+	}
+	return nil
+}
