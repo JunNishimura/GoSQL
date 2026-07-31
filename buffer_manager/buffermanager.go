@@ -1,16 +1,25 @@
 package buffermanager
 
 import (
+	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
+const defaultMaxWaitTime = 10 * time.Second
+
+// ErrBufferAbort is returned when no buffer becomes available within maxWaitTime.
+// The caller is expected to abort its transaction and retry.
+var ErrBufferAbort = errors.New("no buffer available")
+
 type BufferManager struct {
 	bufferPool   []*Buffer
 	numAvailable int
+	maxWaitTime  time.Duration
 	mu           sync.Mutex
 	cond         *sync.Cond
 }
@@ -28,10 +37,41 @@ func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, nu
 	bm := &BufferManager{
 		bufferPool:   bufferPool,
 		numAvailable: numBuffers,
+		maxWaitTime:  defaultMaxWaitTime,
 	}
 	bm.cond = sync.NewCond(&bm.mu)
 
 	return bm, nil
+}
+
+func (bm *BufferManager) Pin(blk *filemanager.BlockId) (*Buffer, error) {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
+	// sync.Cond cannot wait with a deadline, so a timer wakes the waiters up once
+	// maxWaitTime has passed.
+	timedOut := false
+	timer := time.AfterFunc(bm.maxWaitTime, func() {
+		bm.mu.Lock()
+		timedOut = true
+		bm.mu.Unlock()
+		bm.cond.Broadcast()
+	})
+	defer timer.Stop()
+
+	for {
+		buf, err := bm.tryToPin(blk)
+		if err != nil {
+			return nil, err
+		}
+		if buf != nil {
+			return buf, nil
+		}
+		if timedOut {
+			return nil, fmt.Errorf("pin block %s: %w", blk, ErrBufferAbort)
+		}
+		bm.cond.Wait()
+	}
 }
 
 func (bm *BufferManager) Unpin(buf *Buffer) {
@@ -55,6 +95,9 @@ func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 }
 
 func (bm *BufferManager) FlushAll(txNum int) error {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
 	for _, buf := range bm.bufferPool {
 		if buf.txNum == txNum {
 			if err := buf.flush(); err != nil {

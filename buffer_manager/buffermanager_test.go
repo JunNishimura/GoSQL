@@ -1,7 +1,9 @@
 package buffermanager
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
@@ -346,6 +348,163 @@ func TestTryToPin(t *testing.T) {
 				t.Errorf("contents.GetInt(0) = %d, want %d", contents, tt.wantContents)
 			}
 		})
+	}
+}
+
+func TestBufferManagerPin(t *testing.T) {
+	const poolSize = 2
+
+	tests := []struct {
+		name             string
+		targets          []int
+		wantIndex        int
+		wantPins         int
+		wantContents     int32
+		wantNumAvailable int
+	}{
+		{
+			name:             "loads the requested block into a free buffer",
+			targets:          []int{1},
+			wantIndex:        0,
+			wantPins:         1,
+			wantContents:     101,
+			wantNumAvailable: poolSize - 1,
+		},
+		{
+			name:             "reuses the buffer already holding the block without consuming another one",
+			targets:          []int{1, 1},
+			wantIndex:        0,
+			wantPins:         2,
+			wantContents:     101,
+			wantNumAvailable: poolSize - 1,
+		},
+		{
+			name:             "takes a second buffer when a different block is requested",
+			targets:          []int{0, 1},
+			wantIndex:        1,
+			wantPins:         1,
+			wantContents:     101,
+			wantNumAvailable: poolSize - 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{100, 101})
+
+			bm, err := NewBufferManager(fm, lm, poolSize)
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+
+			var got *Buffer
+			for _, blkNum := range tt.targets {
+				got, err = bm.Pin(filemanager.NewBlockId(testDataFile, blkNum))
+				if err != nil {
+					t.Fatalf("Pin() error = %v", err)
+				}
+			}
+
+			if got != bm.bufferPool[tt.wantIndex] {
+				t.Fatalf("Pin() = %v, want bufferPool[%d]", got, tt.wantIndex)
+			}
+			if got.pins != tt.wantPins {
+				t.Errorf("pins = %d, want %d", got.pins, tt.wantPins)
+			}
+			if contents := got.contents.GetInt(0); contents != tt.wantContents {
+				t.Errorf("contents.GetInt(0) = %d, want %d", contents, tt.wantContents)
+			}
+			if bm.numAvailable != tt.wantNumAvailable {
+				t.Errorf("numAvailable = %d, want %d", bm.numAvailable, tt.wantNumAvailable)
+			}
+		})
+	}
+}
+
+func TestBufferManagerPinWaitsUntilABufferIsUnpinned(t *testing.T) {
+	fm, lm := newTestManagers(t, testBlockSize)
+	prepareDataFile(t, fm, []int32{100, 101})
+
+	bm, err := NewBufferManager(fm, lm, 1)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	held, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	type pinResult struct {
+		buf *Buffer
+		err error
+	}
+	done := make(chan pinResult, 1)
+	go func() {
+		buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+		done <- pinResult{buf: buf, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		t.Fatalf("Pin() returned (%v, %v) while the pool was full, want it to keep waiting", got.buf, got.err)
+	case <-time.After(50 * time.Millisecond):
+		// Still waiting, which is the expected behaviour.
+	}
+
+	bm.Unpin(held)
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Pin() error = %v", got.err)
+		}
+		if got.buf != bm.bufferPool[0] {
+			t.Fatalf("Pin() = %v, want bufferPool[0]", got.buf)
+		}
+		if contents := got.buf.contents.GetInt(0); contents != 101 {
+			t.Errorf("contents.GetInt(0) = %d, want 101", contents)
+		}
+		if bm.numAvailable != 0 {
+			t.Errorf("numAvailable = %d, want 0", bm.numAvailable)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Pin() did not return after the buffer was unpinned")
+	}
+}
+
+func TestBufferManagerPinTimesOutWhenNoBufferBecomesAvailable(t *testing.T) {
+	const maxWaitTime = 50 * time.Millisecond
+
+	fm, lm := newTestManagers(t, testBlockSize)
+	prepareDataFile(t, fm, []int32{100, 101})
+
+	bm, err := NewBufferManager(fm, lm, 1)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+	bm.maxWaitTime = maxWaitTime
+
+	if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0)); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	start := time.Now()
+	got, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrBufferAbort) {
+		t.Errorf("Pin() error = %v, want %v", err, ErrBufferAbort)
+	}
+	if got != nil {
+		t.Errorf("Pin() = %v, want nil", got)
+	}
+	if elapsed < maxWaitTime {
+		t.Errorf("Pin() gave up after %v, want it to wait at least %v", elapsed, maxWaitTime)
+	}
+	if bm.numAvailable != 0 {
+		t.Errorf("numAvailable = %d, want 0", bm.numAvailable)
 	}
 }
 
