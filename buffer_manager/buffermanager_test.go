@@ -351,6 +351,63 @@ func TestTryToPin(t *testing.T) {
 	}
 }
 
+func TestTryToPinRecordsReadTime(t *testing.T) {
+	tests := []struct {
+		name          string
+		assigned      []int
+		pinBlkNums    []int
+		wantReadTimes []int
+	}{
+		{
+			name:          "stamps an increasing readTime every time a block is newly assigned",
+			assigned:      []int{unassigned, unassigned, unassigned},
+			pinBlkNums:    []int{1, 2, 3},
+			wantReadTimes: []int{1, 2, 3},
+		},
+		{
+			name:          "leaves readTime untouched when the buffer already holds the block",
+			assigned:      []int{unassigned, 1, unassigned},
+			pinBlkNums:    []int{1},
+			wantReadTimes: []int{0, 0, 0},
+		},
+		{
+			name:          "stamps only the buffer that receives a newly assigned block",
+			assigned:      []int{unassigned, 1, unassigned},
+			pinBlkNums:    []int{1, 2},
+			wantReadTimes: []int{1, 0, 0},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{100, 101, 102, 103})
+
+			bm, err := NewBufferManager(fm, lm, len(tt.assigned))
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+			for i, blkNum := range tt.assigned {
+				if blkNum != unassigned {
+					bm.bufferPool[i].blk = filemanager.NewBlockId(testDataFile, blkNum)
+				}
+			}
+
+			for _, blkNum := range tt.pinBlkNums {
+				if _, err := bm.tryToPin(filemanager.NewBlockId(testDataFile, blkNum)); err != nil {
+					t.Fatalf("tryToPin() error = %v", err)
+				}
+			}
+
+			for i, want := range tt.wantReadTimes {
+				if got := bm.bufferPool[i].readTime; got != want {
+					t.Errorf("bufferPool[%d].readTime = %d, want %d", i, got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestBufferManagerPin(t *testing.T) {
 	const poolSize = 2
 
@@ -564,6 +621,60 @@ func TestBufferManagerUnpin(t *testing.T) {
 			}
 			if bm.numAvailable != tt.wantNumAvailable {
 				t.Errorf("numAvailable = %d, want %d", bm.numAvailable, tt.wantNumAvailable)
+			}
+		})
+	}
+}
+
+func TestBufferManagerUnpinRecordsUnpinTime(t *testing.T) {
+	tests := []struct {
+		name           string
+		pins           []int
+		unpinIndexes   []int
+		wantUnpinTimes []int
+	}{
+		{
+			name:           "stamps unpinTime when the last pin on the buffer is released",
+			pins:           []int{1, 1},
+			unpinIndexes:   []int{0},
+			wantUnpinTimes: []int{1, 0},
+		},
+		{
+			name:           "leaves unpinTime untouched while another pin remains",
+			pins:           []int{2},
+			unpinIndexes:   []int{0},
+			wantUnpinTimes: []int{0},
+		},
+		{
+			name:           "stamps an increasing unpinTime in the order the buffers become unpinned",
+			pins:           []int{1, 1, 1},
+			unpinIndexes:   []int{2, 0, 1},
+			wantUnpinTimes: []int{2, 3, 1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			bm, err := NewBufferManager(fm, lm, len(tt.pins))
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+			for i, pins := range tt.pins {
+				for j := 0; j < pins; j++ {
+					bm.bufferPool[i].pin()
+				}
+			}
+			bm.numAvailable = 0
+
+			for _, i := range tt.unpinIndexes {
+				bm.Unpin(bm.bufferPool[i])
+			}
+
+			for i, want := range tt.wantUnpinTimes {
+				if got := bm.bufferPool[i].unpinTime; got != want {
+					t.Errorf("bufferPool[%d].unpinTime = %d, want %d", i, got, want)
+				}
 			}
 		})
 	}

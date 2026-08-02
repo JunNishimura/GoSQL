@@ -21,8 +21,16 @@ type BufferManager struct {
 	numAvailable int
 	maxWaitTime  time.Duration
 	strategy     replacementStrategy
+	tick         int
 	mu           sync.Mutex
 	cond         *sync.Cond
+}
+
+// nextTick returns a monotonically increasing timestamp shared by readTime and
+// unpinTime, so that the two can be compared against each other.
+func (bm *BufferManager) nextTick() int {
+	bm.tick++
+	return bm.tick
 }
 
 func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, numBuffers int) (*BufferManager, error) {
@@ -82,6 +90,7 @@ func (bm *BufferManager) Unpin(buf *Buffer) {
 
 	buf.unpin()
 	if !buf.isPinned() {
+		buf.unpinTime = bm.nextTick()
 		bm.numAvailable++
 		bm.cond.Broadcast()
 	}
@@ -120,6 +129,7 @@ func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 		if err := buf.assignToBlock(blk); err != nil {
 			return nil, err
 		}
+		buf.readTime = bm.nextTick()
 	}
 
 	if !buf.isPinned() {
