@@ -34,8 +34,17 @@ func (bm *BufferManager) nextTick() int {
 }
 
 func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, numBuffers int) (*BufferManager, error) {
+	return NewBufferManagerWithPolicy(fm, lm, numBuffers, NaivePolicy)
+}
+
+func NewBufferManagerWithPolicy(fm *filemanager.FileManager, lm *logmanager.LogManager, numBuffers int, policy ReplacementPolicy) (*BufferManager, error) {
 	if numBuffers <= 0 {
 		return nil, fmt.Errorf("numBuffers must be positive: got %d", numBuffers)
+	}
+
+	strategy, err := newReplacementStrategy(policy)
+	if err != nil {
+		return nil, err
 	}
 
 	bufferPool := make([]*Buffer, numBuffers)
@@ -47,7 +56,7 @@ func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, nu
 		bufferPool:   bufferPool,
 		numAvailable: numBuffers,
 		maxWaitTime:  defaultMaxWaitTime,
-		strategy:     &naiveStrategy{},
+		strategy:     strategy,
 	}
 	bm.cond = sync.NewCond(&bm.mu)
 

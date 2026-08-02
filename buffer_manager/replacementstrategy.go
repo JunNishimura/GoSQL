@@ -1,9 +1,37 @@
 package buffermanager
 
+import "fmt"
+
+// ReplacementPolicy names the strategy a BufferManager uses to pick the buffer
+// to replace.
+type ReplacementPolicy int
+
+const (
+	NaivePolicy ReplacementPolicy = iota
+	FIFOPolicy
+	LRUPolicy
+	ClockPolicy
+)
+
 // replacementStrategy decides which unpinned buffer to reuse when no buffer
 // already holds the requested block. It returns nil when every buffer is pinned.
 type replacementStrategy interface {
 	chooseUnpinnedBuffer(pool []*Buffer) *Buffer
+}
+
+func newReplacementStrategy(policy ReplacementPolicy) (replacementStrategy, error) {
+	switch policy {
+	case NaivePolicy:
+		return &naiveStrategy{}, nil
+	case FIFOPolicy:
+		return &fifoStrategy{}, nil
+	case LRUPolicy:
+		return &lruStrategy{}, nil
+	case ClockPolicy:
+		return &clockStrategy{}, nil
+	default:
+		return nil, fmt.Errorf("unknown replacement policy: %d", policy)
+	}
 }
 
 // naiveStrategy scans the pool from the beginning and takes the first unpinned

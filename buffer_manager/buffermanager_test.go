@@ -2,6 +2,7 @@ package buffermanager
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -754,6 +755,162 @@ func TestFlushAll(t *testing.T) {
 				if got := bm.bufferPool[i].txNum; got != wantTxNum {
 					t.Errorf("bufferPool[%d].txNum = %d, want %d", i, got, wantTxNum)
 				}
+			}
+		})
+	}
+}
+
+func TestNewBufferManagerWithPolicy(t *testing.T) {
+	tests := []struct {
+		name         string
+		policy       ReplacementPolicy
+		wantStrategy replacementStrategy
+		wantErr      bool
+	}{
+		{
+			name:         "builds a manager that replaces buffers naively",
+			policy:       NaivePolicy,
+			wantStrategy: &naiveStrategy{},
+		},
+		{
+			name:         "builds a manager that replaces buffers in FIFO order",
+			policy:       FIFOPolicy,
+			wantStrategy: &fifoStrategy{},
+		},
+		{
+			name:         "builds a manager that replaces the least recently used buffer",
+			policy:       LRUPolicy,
+			wantStrategy: &lruStrategy{},
+		},
+		{
+			name:         "builds a manager that replaces buffers in clock order",
+			policy:       ClockPolicy,
+			wantStrategy: &clockStrategy{},
+		},
+		{
+			name:    "returns an error when the policy is unknown",
+			policy:  ReplacementPolicy(99),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+
+			bm, err := NewBufferManagerWithPolicy(fm, lm, 3, tt.policy)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("NewBufferManagerWithPolicy() error = nil, want error")
+				}
+				if bm != nil {
+					t.Errorf("NewBufferManagerWithPolicy() = %v, want nil on error", bm)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("NewBufferManagerWithPolicy() error = %v", err)
+			}
+			if got, want := reflect.TypeOf(bm.strategy), reflect.TypeOf(tt.wantStrategy); got != want {
+				t.Errorf("strategy = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestNewBufferManagerDefaultsToNaivePolicy(t *testing.T) {
+	fm, lm := newTestManagers(t, testBlockSize)
+
+	bm, err := NewBufferManager(fm, lm, 3)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	if _, ok := bm.strategy.(*naiveStrategy); !ok {
+		t.Errorf("strategy = %T, want *naiveStrategy", bm.strategy)
+	}
+}
+
+// TestBufferManagerPinReplacesTheBufferChosenByPolicy drives the pool through a
+// sequence whose outcome is the same under every policy, and then pins one more
+// block so that each policy is forced to pick a different victim:
+//
+//	readTime  = {6, 2, 8, 4} -> FIFO picks bufferPool[1]
+//	unpinTime = {12, 11, 9, 10} -> LRU picks bufferPool[2]
+//	every buffer unpinned -> naive picks bufferPool[0]
+//	clock hand left at 3 -> clock picks bufferPool[3]
+func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
+	const poolSize = 4
+
+	tests := []struct {
+		name      string
+		policy    ReplacementPolicy
+		wantIndex int
+	}{
+		{
+			name:      "naive replaces the first buffer in the pool",
+			policy:    NaivePolicy,
+			wantIndex: 0,
+		},
+		{
+			name:      "FIFO replaces the buffer whose block was read in first",
+			policy:    FIFOPolicy,
+			wantIndex: 1,
+		},
+		{
+			name:      "LRU replaces the buffer that was unpinned first",
+			policy:    LRUPolicy,
+			wantIndex: 2,
+		},
+		{
+			name:      "clock replaces the buffer following the one replaced last",
+			policy:    ClockPolicy,
+			wantIndex: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{100, 101, 102, 103, 104, 105, 106})
+
+			bm, err := NewBufferManagerWithPolicy(fm, lm, poolSize, tt.policy)
+			if err != nil {
+				t.Fatalf("NewBufferManagerWithPolicy() error = %v", err)
+			}
+
+			pin := func(blkNum int) *Buffer {
+				t.Helper()
+				buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, blkNum))
+				if err != nil {
+					t.Fatalf("Pin(%d) error = %v", blkNum, err)
+				}
+				return buf
+			}
+
+			// Fill the pool, then reassign bufferPool[0] and bufferPool[2] so
+			// that the read-in order no longer matches the pool order.
+			block0 := pin(0)
+			block1 := pin(1)
+			block2 := pin(2)
+			block3 := pin(3)
+			bm.Unpin(block0)
+			block4 := pin(4)
+			bm.Unpin(block2)
+			block5 := pin(5)
+
+			// Release every buffer in an order that differs from both the pool
+			// order and the read-in order.
+			bm.Unpin(block5)
+			bm.Unpin(block3)
+			bm.Unpin(block1)
+			bm.Unpin(block4)
+
+			got := pin(6)
+
+			if got != bm.bufferPool[tt.wantIndex] {
+				t.Errorf("Pin(6) = %v, want bufferPool[%d]", got, tt.wantIndex)
 			}
 		})
 	}
