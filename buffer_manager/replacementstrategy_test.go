@@ -107,65 +107,88 @@ func TestFifoStrategyChooseUnpinnedBuffer(t *testing.T) {
 	}
 }
 
+// pinChange reports that the buffer at the given pool index became pinned or
+// unpinned, mirroring what the manager tells a strategy.
+type pinChange struct {
+	index  int
+	pinned bool
+}
+
+func pinnedBuffer(index int) pinChange {
+	return pinChange{index: index, pinned: true}
+}
+
+func unpinnedBuffer(index int) pinChange {
+	return pinChange{index: index}
+}
+
 func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
+	const poolSize = 3
+
 	tests := []struct {
-		name       string
-		pins       []int
-		readTimes  []int
-		unpinTimes []int
-		wantIndex  int
+		name      string
+		changes   []pinChange
+		wantIndex int
 	}{
 		{
-			name:       "returns the buffer unpinned first rather than the first buffer in the pool",
-			pins:       []int{0, 0, 0},
-			readTimes:  []int{1, 2, 3},
-			unpinTimes: []int{6, 4, 5},
-			wantIndex:  1,
+			name:      "returns the head of the pool while no buffer has been used yet",
+			changes:   nil,
+			wantIndex: 0,
 		},
 		{
-			name:       "skips the buffer unpinned first when it is pinned",
-			pins:       []int{1, 0, 0},
-			readTimes:  []int{1, 2, 3},
-			unpinTimes: []int{4, 6, 5},
-			wantIndex:  2,
+			name: "returns the buffer that was unpinned first rather than the head of the pool",
+			changes: []pinChange{
+				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
+				unpinnedBuffer(1), unpinnedBuffer(2), unpinnedBuffer(0),
+			},
+			wantIndex: 1,
 		},
 		{
-			name:       "returns a buffer that has never been unpinned before any unpinned one",
-			pins:       []int{0, 0, 0},
-			readTimes:  []int{1, 2, 3},
-			unpinTimes: []int{5, 0, 4},
-			wantIndex:  1,
+			name: "returns the only buffer that has been unpinned again",
+			changes: []pinChange{
+				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
+				unpinnedBuffer(2),
+			},
+			wantIndex: 2,
 		},
 		{
-			name:       "follows unpinTime when it disagrees with readTime",
-			pins:       []int{0, 0, 0},
-			readTimes:  []int{1, 2, 3},
-			unpinTimes: []int{6, 5, 4},
-			wantIndex:  2,
+			name: "sends a buffer to the back of the queue when it is unpinned again",
+			changes: []pinChange{
+				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
+				unpinnedBuffer(1), unpinnedBuffer(2), unpinnedBuffer(0),
+				pinnedBuffer(1), unpinnedBuffer(1),
+			},
+			wantIndex: 2,
 		},
 		{
-			name:       "returns nil when every buffer is pinned",
-			pins:       []int{1, 1, 1},
-			readTimes:  []int{1, 2, 3},
-			unpinTimes: []int{4, 5, 6},
-			wantIndex:  -1,
+			name: "returns nil when every buffer is pinned",
+			changes: []pinChange{
+				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
+			},
+			wantIndex: -1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pool := make([]*Buffer, len(tt.pins))
+			pool := make([]*Buffer, poolSize)
 			for i := range pool {
-				pool[i] = &Buffer{
-					pins:      tt.pins[i],
-					readTime:  tt.readTimes[i],
-					unpinTime: tt.unpinTimes[i],
-				}
+				pool[i] = &Buffer{}
 			}
 
-			got := (&lruStrategy{newScanStrategy(pool)}).chooseUnpinnedBuffer()
+			strategy := newLRUStrategy(pool)
+			for _, change := range tt.changes {
+				buf := pool[change.index]
+				if change.pinned {
+					buf.pin()
+					strategy.bufferPinned(buf)
+					continue
+				}
+				buf.unpin()
+				strategy.bufferUnpinned(buf)
+			}
 
-			assertChosen(t, got, pool, tt.wantIndex)
+			assertChosen(t, strategy.chooseUnpinnedBuffer(), pool, tt.wantIndex)
 		})
 	}
 }

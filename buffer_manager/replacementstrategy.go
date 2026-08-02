@@ -1,6 +1,9 @@
 package buffermanager
 
-import "fmt"
+import (
+	"container/list"
+	"fmt"
+)
 
 // ReplacementPolicy names the strategy a BufferManager uses to pick the buffer
 // to replace.
@@ -33,7 +36,7 @@ func newReplacementStrategy(policy ReplacementPolicy, pool []*Buffer) (replaceme
 	case FIFOPolicy:
 		return &fifoStrategy{newScanStrategy(pool)}, nil
 	case LRUPolicy:
-		return &lruStrategy{newScanStrategy(pool)}, nil
+		return newLRUStrategy(pool), nil
 	case ClockPolicy:
 		return &clockStrategy{scanStrategy: newScanStrategy(pool)}, nil
 	case UnmodifiedFirstPolicy:
@@ -100,13 +103,51 @@ func (s *fifoStrategy) chooseUnpinnedBuffer() *Buffer {
 }
 
 // lruStrategy takes the unpinned buffer that was unpinned the longest time ago,
-// on the assumption that it is the least likely to be needed again.
+// on the assumption that it is the least likely to be needed again. It keeps the
+// unpinned buffers queued in that order, so that a choice costs no search of the
+// pool. element locates a buffer's node, so that leaving the queue costs none
+// either.
 type lruStrategy struct {
-	scanStrategy
+	queue   *list.List
+	element map[*Buffer]*list.Element
+}
+
+func newLRUStrategy(pool []*Buffer) *lruStrategy {
+	s := &lruStrategy{
+		queue:   list.New(),
+		element: make(map[*Buffer]*list.Element, len(pool)),
+	}
+
+	// Every buffer starts out unpinned, so the queue starts in pool order.
+	for _, buf := range pool {
+		s.element[buf] = s.queue.PushBack(buf)
+	}
+
+	return s
 }
 
 func (s *lruStrategy) chooseUnpinnedBuffer() *Buffer {
-	return oldestUnpinnedBuffer(s.pool, func(buf *Buffer) int { return buf.unpinTime })
+	oldest := s.queue.Front()
+	if oldest == nil {
+		return nil
+	}
+	return oldest.Value.(*Buffer)
+}
+
+func (s *lruStrategy) bufferPinned(buf *Buffer) {
+	element, queued := s.element[buf]
+	if !queued {
+		return
+	}
+	s.queue.Remove(element)
+	delete(s.element, buf)
+}
+
+func (s *lruStrategy) bufferUnpinned(buf *Buffer) {
+	if _, queued := s.element[buf]; queued {
+		return
+	}
+	s.element[buf] = s.queue.PushBack(buf)
 }
 
 // clockStrategy scans the pool as if it were a circle, starting at the buffer
