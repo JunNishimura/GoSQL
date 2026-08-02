@@ -169,62 +169,6 @@ func TestFindExistingBuffer(t *testing.T) {
 	}
 }
 
-func TestChooseUnpinnedBuffer(t *testing.T) {
-	tests := []struct {
-		name      string
-		pins      []int
-		wantIndex int
-	}{
-		{
-			name:      "returns the first buffer when none of them is pinned",
-			pins:      []int{0, 0, 0},
-			wantIndex: 0,
-		},
-		{
-			name:      "skips the pinned head and returns the first unpinned buffer",
-			pins:      []int{2, 0, 0},
-			wantIndex: 1,
-		},
-		{
-			name:      "returns the last buffer when it is the only unpinned one",
-			pins:      []int{1, 1, 0},
-			wantIndex: 2,
-		},
-		{
-			name:      "returns nil when every buffer is pinned",
-			pins:      []int{1, 1, 1},
-			wantIndex: -1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fm, lm := newTestManagers(t, testBlockSize)
-			bm, err := NewBufferManager(fm, lm, len(tt.pins))
-			if err != nil {
-				t.Fatalf("NewBufferManager() error = %v", err)
-			}
-			for i, pins := range tt.pins {
-				for j := 0; j < pins; j++ {
-					bm.bufferPool[i].pin()
-				}
-			}
-
-			got := bm.chooseUnpinnedBuffer()
-
-			if tt.wantIndex == -1 {
-				if got != nil {
-					t.Errorf("chooseUnpinnedBuffer() = %v, want nil", got)
-				}
-				return
-			}
-			if got != bm.bufferPool[tt.wantIndex] {
-				t.Errorf("chooseUnpinnedBuffer() = %v, want bufferPool[%d]", got, tt.wantIndex)
-			}
-		})
-	}
-}
-
 // prepareDataFile appends one block to the data file per given value and writes
 // that value at offset 0, so that a page loaded from disk can be told apart from
 // one that was never read.

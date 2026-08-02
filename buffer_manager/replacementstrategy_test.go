@@ -2,6 +2,64 @@ package buffermanager
 
 import "testing"
 
+// assertChosen checks that a strategy returned the expected buffer, where an
+// index of -1 means that no buffer was expected at all.
+func assertChosen(t *testing.T, got *Buffer, pool []*Buffer, wantIndex int) {
+	t.Helper()
+
+	if wantIndex == -1 {
+		if got != nil {
+			t.Errorf("chooseUnpinnedBuffer() = %v, want nil", got)
+		}
+		return
+	}
+	if got != pool[wantIndex] {
+		t.Errorf("chooseUnpinnedBuffer() = %v, want pool[%d]", got, wantIndex)
+	}
+}
+
+func TestNaiveStrategyChooseUnpinnedBuffer(t *testing.T) {
+	tests := []struct {
+		name      string
+		pins      []int
+		wantIndex int
+	}{
+		{
+			name:      "returns the first buffer when none of them is pinned",
+			pins:      []int{0, 0, 0},
+			wantIndex: 0,
+		},
+		{
+			name:      "skips the pinned head and returns the first unpinned buffer",
+			pins:      []int{2, 0, 0},
+			wantIndex: 1,
+		},
+		{
+			name:      "returns the last buffer when it is the only unpinned one",
+			pins:      []int{1, 1, 0},
+			wantIndex: 2,
+		},
+		{
+			name:      "returns nil when every buffer is pinned",
+			pins:      []int{1, 1, 1},
+			wantIndex: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := make([]*Buffer, len(tt.pins))
+			for i := range pool {
+				pool[i] = &Buffer{pins: tt.pins[i]}
+			}
+
+			got := (&naiveStrategy{}).chooseUnpinnedBuffer(pool)
+
+			assertChosen(t, got, pool, tt.wantIndex)
+		})
+	}
+}
+
 func TestFifoStrategyChooseUnpinnedBuffer(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -44,15 +102,7 @@ func TestFifoStrategyChooseUnpinnedBuffer(t *testing.T) {
 
 			got := (&fifoStrategy{}).chooseUnpinnedBuffer(pool)
 
-			if tt.wantIndex == -1 {
-				if got != nil {
-					t.Errorf("chooseUnpinnedBuffer() = %v, want nil", got)
-				}
-				return
-			}
-			if got != pool[tt.wantIndex] {
-				t.Errorf("chooseUnpinnedBuffer() = %v, want pool[%d]", got, tt.wantIndex)
-			}
+			assertChosen(t, got, pool, tt.wantIndex)
 		})
 	}
 }
@@ -115,15 +165,7 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 
 			got := (&lruStrategy{}).chooseUnpinnedBuffer(pool)
 
-			if tt.wantIndex == -1 {
-				if got != nil {
-					t.Errorf("chooseUnpinnedBuffer() = %v, want nil", got)
-				}
-				return
-			}
-			if got != pool[tt.wantIndex] {
-				t.Errorf("chooseUnpinnedBuffer() = %v, want pool[%d]", got, tt.wantIndex)
-			}
+			assertChosen(t, got, pool, tt.wantIndex)
 		})
 	}
 }
