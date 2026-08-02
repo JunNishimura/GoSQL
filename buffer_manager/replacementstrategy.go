@@ -18,3 +18,20 @@ func (s *naiveStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
 	}
 	return nil
 }
+
+// fifoStrategy takes the unpinned buffer whose block was read in the longest
+// time ago, regardless of how recently that buffer was used.
+type fifoStrategy struct{}
+
+func (s *fifoStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
+	var chosen *Buffer
+	for _, buf := range pool {
+		if buf.isPinned() {
+			continue
+		}
+		if chosen == nil || buf.readTime < chosen.readTime {
+			chosen = buf
+		}
+	}
+	return chosen
+}
