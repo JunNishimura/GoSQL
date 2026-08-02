@@ -63,13 +63,6 @@ func (bm *BufferManager) GetStats() Stats {
 	return bm.stats
 }
 
-// nextTick returns a monotonically increasing timestamp shared by readTime and
-// unpinTime, so that the two can be compared against each other.
-func (bm *BufferManager) nextTick() int {
-	bm.tick++
-	return bm.tick
-}
-
 func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, numBuffers int) (*BufferManager, error) {
 	return NewBufferManagerWithPolicy(fm, lm, numBuffers, NaivePolicy)
 }
@@ -145,7 +138,6 @@ func (bm *BufferManager) Unpin(buf *Buffer) {
 
 	buf.unpin()
 	if !buf.isPinned() {
-		buf.unpinTime = bm.nextTick()
 		bm.numAvailable++
 		bm.strategy.bufferUnpinned(buf)
 		bm.cond.Broadcast()
@@ -214,7 +206,8 @@ func (bm *BufferManager) assignBufferToBlock(buf *Buffer, blk *filemanager.Block
 	}
 
 	bm.bufferByBlock[*blk] = buf
-	buf.readTime = bm.nextTick()
+	bm.tick++
+	buf.readTime = bm.tick
 
 	return nil
 }

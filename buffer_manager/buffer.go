@@ -14,7 +14,6 @@ type Buffer struct {
 	txNum       int
 	lsn         int
 	readTime    int
-	unpinTime   int
 }
 
 func NewBuffer(fm *filemanager.FileManager, lm *logmanager.LogManager) *Buffer {

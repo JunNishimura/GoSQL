@@ -579,60 +579,6 @@ func TestBufferManagerUnpin(t *testing.T) {
 	}
 }
 
-func TestBufferManagerUnpinRecordsUnpinTime(t *testing.T) {
-	tests := []struct {
-		name           string
-		pins           []int
-		unpinIndexes   []int
-		wantUnpinTimes []int
-	}{
-		{
-			name:           "stamps unpinTime when the last pin on the buffer is released",
-			pins:           []int{1, 1},
-			unpinIndexes:   []int{0},
-			wantUnpinTimes: []int{1, 0},
-		},
-		{
-			name:           "leaves unpinTime untouched while another pin remains",
-			pins:           []int{2},
-			unpinIndexes:   []int{0},
-			wantUnpinTimes: []int{0},
-		},
-		{
-			name:           "stamps an increasing unpinTime in the order the buffers become unpinned",
-			pins:           []int{1, 1, 1},
-			unpinIndexes:   []int{2, 0, 1},
-			wantUnpinTimes: []int{2, 3, 1},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fm, lm := newTestManagers(t, testBlockSize)
-			bm, err := NewBufferManager(fm, lm, len(tt.pins))
-			if err != nil {
-				t.Fatalf("NewBufferManager() error = %v", err)
-			}
-			for i, pins := range tt.pins {
-				for j := 0; j < pins; j++ {
-					bm.bufferPool[i].pin()
-				}
-			}
-			bm.numAvailable = 0
-
-			for _, i := range tt.unpinIndexes {
-				bm.Unpin(bm.bufferPool[i])
-			}
-
-			for i, want := range tt.wantUnpinTimes {
-				if got := bm.bufferPool[i].unpinTime; got != want {
-					t.Errorf("bufferPool[%d].unpinTime = %d, want %d", i, got, want)
-				}
-			}
-		})
-	}
-}
-
 func TestFlushAll(t *testing.T) {
 	onDisk := []int32{100, 101, 102}
 	inMemory := []int32{900, 901, 902}
@@ -799,8 +745,8 @@ func TestNewBufferManagerDefaultsToNaivePolicy(t *testing.T) {
 // sequence whose outcome is the same under every policy, and then pins one more
 // block so that each policy is forced to pick a different victim:
 //
-//	readTime  = {6, 2, 8, 4} -> FIFO picks bufferPool[1]
-//	unpinTime = {12, 11, 9, 10} -> LRU picks bufferPool[2]
+//	readTime = {6, 2, 8, 4} -> FIFO picks bufferPool[1]
+//	unpinned in the order 2, 3, 1, 0 -> LRU picks bufferPool[2]
 //	every buffer unpinned -> naive picks bufferPool[0]
 //	clock hand left at 3 -> clock picks bufferPool[3]
 func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
