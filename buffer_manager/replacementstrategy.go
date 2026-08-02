@@ -11,6 +11,7 @@ const (
 	FIFOPolicy
 	LRUPolicy
 	ClockPolicy
+	UnmodifiedFirstPolicy
 )
 
 // replacementStrategy decides which unpinned buffer to reuse when no buffer
@@ -29,6 +30,8 @@ func newReplacementStrategy(policy ReplacementPolicy) (replacementStrategy, erro
 		return &lruStrategy{}, nil
 	case ClockPolicy:
 		return &clockStrategy{}, nil
+	case UnmodifiedFirstPolicy:
+		return &unmodifiedFirstStrategy{}, nil
 	default:
 		return nil, fmt.Errorf("unknown replacement policy: %d", policy)
 	}
@@ -93,4 +96,20 @@ func (s *clockStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
 		}
 	}
 	return nil
+}
+
+// unmodifiedFirstStrategy takes a buffer that needs no write-back whenever one
+// is available, so that replacing it costs a single disk read instead of a read
+// plus the write of the page and of the log records protecting it.
+type unmodifiedFirstStrategy struct {
+	fallback naiveStrategy
+}
+
+func (s *unmodifiedFirstStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
+	for _, buf := range pool {
+		if !buf.isPinned() && !buf.isModified() {
+			return buf
+		}
+	}
+	return s.fallback.chooseUnpinnedBuffer(pool)
 }

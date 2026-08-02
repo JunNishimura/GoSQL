@@ -229,3 +229,58 @@ func TestClockStrategyChooseUnpinnedBuffer(t *testing.T) {
 		})
 	}
 }
+
+func TestUnmodifiedFirstStrategyChooseUnpinnedBuffer(t *testing.T) {
+	tests := []struct {
+		name string
+		pins []int
+		// txNums holds the transaction that modified each buffer, where -1
+		// marks a buffer that needs no write-back.
+		txNums    []int
+		wantIndex int
+	}{
+		{
+			name:      "skips a modified buffer and returns the first unmodified one",
+			pins:      []int{0, 0, 0},
+			txNums:    []int{5, -1, -1},
+			wantIndex: 1,
+		},
+		{
+			name:      "falls back to the first unpinned buffer when every unpinned buffer is modified",
+			pins:      []int{0, 0, 0},
+			txNums:    []int{1, 2, 3},
+			wantIndex: 0,
+		},
+		{
+			name:      "skips an unmodified buffer that is pinned",
+			pins:      []int{1, 0, 0},
+			txNums:    []int{-1, 5, -1},
+			wantIndex: 2,
+		},
+		{
+			name:      "falls back to a modified buffer when the only unmodified one is pinned",
+			pins:      []int{1, 0, 0},
+			txNums:    []int{-1, 5, 6},
+			wantIndex: 1,
+		},
+		{
+			name:      "returns nil when every buffer is pinned even though none is modified",
+			pins:      []int{1, 1, 1},
+			txNums:    []int{-1, -1, -1},
+			wantIndex: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := make([]*Buffer, len(tt.pins))
+			for i := range pool {
+				pool[i] = &Buffer{pins: tt.pins[i], txNum: tt.txNums[i]}
+			}
+
+			got := (&unmodifiedFirstStrategy{}).chooseUnpinnedBuffer(pool)
+
+			assertChosen(t, got, pool, tt.wantIndex)
+		})
+	}
+}

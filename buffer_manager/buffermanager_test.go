@@ -732,6 +732,11 @@ func TestNewBufferManagerWithPolicy(t *testing.T) {
 			wantStrategy: &clockStrategy{},
 		},
 		{
+			name:         "builds a manager that prefers to replace unmodified buffers",
+			policy:       UnmodifiedFirstPolicy,
+			wantStrategy: &unmodifiedFirstStrategy{},
+		},
+		{
 			name:    "returns an error when the policy is unknown",
 			policy:  ReplacementPolicy(99),
 			wantErr: true,
