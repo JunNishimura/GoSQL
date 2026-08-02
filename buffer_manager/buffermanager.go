@@ -20,6 +20,7 @@ type BufferManager struct {
 	bufferPool   []*Buffer
 	numAvailable int
 	maxWaitTime  time.Duration
+	strategy     replacementStrategy
 	mu           sync.Mutex
 	cond         *sync.Cond
 }
@@ -38,6 +39,7 @@ func NewBufferManager(fm *filemanager.FileManager, lm *logmanager.LogManager, nu
 		bufferPool:   bufferPool,
 		numAvailable: numBuffers,
 		maxWaitTime:  defaultMaxWaitTime,
+		strategy:     &naiveStrategy{},
 	}
 	bm.cond = sync.NewCond(&bm.mu)
 
@@ -129,10 +131,5 @@ func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 }
 
 func (bm *BufferManager) chooseUnpinnedBuffer() *Buffer {
-	for _, buf := range bm.bufferPool {
-		if !buf.isPinned() {
-			return buf
-		}
-	}
-	return nil
+	return bm.strategy.chooseUnpinnedBuffer(bm.bufferPool)
 }
