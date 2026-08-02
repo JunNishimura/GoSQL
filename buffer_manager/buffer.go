@@ -46,8 +46,15 @@ func (b *Buffer) isPinned() bool {
 	return b.pins > 0
 }
 
+// isModified reports whether the buffer holds changes that are not on disk yet.
+// txNum carries that fact: it names the transaction that made the changes, and
+// flush resets it once they have been written out.
+func (b *Buffer) isModified() bool {
+	return b.txNum >= 0
+}
+
 func (b *Buffer) flush() error {
-	if b.txNum < 0 {
+	if !b.isModified() {
 		return nil
 	}
 

@@ -231,6 +231,62 @@ func TestIsPinned(t *testing.T) {
 	}
 }
 
+func TestIsModified(t *testing.T) {
+	tests := []struct {
+		name       string
+		txNum      int
+		flushAfter bool
+		want       bool
+	}{
+		{
+			name:  "returns false when the buffer has never been modified",
+			txNum: -1,
+			want:  false,
+		},
+		{
+			name:  "returns true when the buffer is modified by transaction 0",
+			txNum: 0,
+			want:  true,
+		},
+		{
+			name:  "returns true when the buffer is modified by a positive transaction",
+			txNum: 3,
+			want:  true,
+		},
+		{
+			name:       "returns false once the modified buffer has been flushed",
+			txNum:      3,
+			flushAfter: true,
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+
+			buf := NewBuffer(fm, lm)
+			buf.blk = blk
+			buf.lsn = appendLogRecord(t, lm)
+			buf.txNum = tt.txNum
+
+			if tt.flushAfter {
+				if err := buf.flush(); err != nil {
+					t.Fatalf("flush() error = %v", err)
+				}
+			}
+
+			if got := buf.isModified(); got != tt.want {
+				t.Errorf("isModified() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUnpin(t *testing.T) {
 	tests := []struct {
 		name       string
