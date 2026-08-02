@@ -79,14 +79,14 @@ func NewBufferManagerWithPolicy(fm *filemanager.FileManager, lm *logmanager.LogM
 		return nil, fmt.Errorf("numBuffers must be positive: got %d", numBuffers)
 	}
 
-	strategy, err := newReplacementStrategy(policy)
-	if err != nil {
-		return nil, err
-	}
-
 	bufferPool := make([]*Buffer, numBuffers)
 	for i := range bufferPool {
 		bufferPool[i] = NewBuffer(fm, lm)
+	}
+
+	strategy, err := newReplacementStrategy(policy, bufferPool)
+	if err != nil {
+		return nil, err
 	}
 
 	bm := &BufferManager{
@@ -147,6 +147,7 @@ func (bm *BufferManager) Unpin(buf *Buffer) {
 	if !buf.isPinned() {
 		buf.unpinTime = bm.nextTick()
 		bm.numAvailable++
+		bm.strategy.bufferUnpinned(buf)
 		bm.cond.Broadcast()
 	}
 }
@@ -188,6 +189,7 @@ func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 
 	if !buf.isPinned() {
 		bm.numAvailable--
+		bm.strategy.bufferPinned(buf)
 	}
 	buf.pin()
 
@@ -218,5 +220,5 @@ func (bm *BufferManager) assignBufferToBlock(buf *Buffer, blk *filemanager.Block
 }
 
 func (bm *BufferManager) chooseUnpinnedBuffer() *Buffer {
-	return bm.strategy.chooseUnpinnedBuffer(bm.bufferPool)
+	return bm.strategy.chooseUnpinnedBuffer()
 }

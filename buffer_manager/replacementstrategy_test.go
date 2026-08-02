@@ -53,7 +53,7 @@ func TestNaiveStrategyChooseUnpinnedBuffer(t *testing.T) {
 				pool[i] = &Buffer{pins: tt.pins[i]}
 			}
 
-			got := (&naiveStrategy{}).chooseUnpinnedBuffer(pool)
+			got := (&naiveStrategy{newScanStrategy(pool)}).chooseUnpinnedBuffer()
 
 			assertChosen(t, got, pool, tt.wantIndex)
 		})
@@ -100,7 +100,7 @@ func TestFifoStrategyChooseUnpinnedBuffer(t *testing.T) {
 				pool[i] = &Buffer{pins: tt.pins[i], readTime: tt.readTimes[i]}
 			}
 
-			got := (&fifoStrategy{}).chooseUnpinnedBuffer(pool)
+			got := (&fifoStrategy{newScanStrategy(pool)}).chooseUnpinnedBuffer()
 
 			assertChosen(t, got, pool, tt.wantIndex)
 		})
@@ -163,7 +163,7 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 				}
 			}
 
-			got := (&lruStrategy{}).chooseUnpinnedBuffer(pool)
+			got := (&lruStrategy{newScanStrategy(pool)}).chooseUnpinnedBuffer()
 
 			assertChosen(t, got, pool, tt.wantIndex)
 		})
@@ -212,9 +212,9 @@ func TestClockStrategyChooseUnpinnedBuffer(t *testing.T) {
 				pool[i] = &Buffer{pins: tt.pins[i]}
 			}
 
-			strategy := &clockStrategy{}
+			strategy := &clockStrategy{scanStrategy: newScanStrategy(pool)}
 			for call, want := range tt.wantIndexes {
-				got := strategy.chooseUnpinnedBuffer(pool)
+				got := strategy.chooseUnpinnedBuffer()
 
 				if want == -1 {
 					if got != nil {
@@ -278,7 +278,7 @@ func TestUnmodifiedFirstStrategyChooseUnpinnedBuffer(t *testing.T) {
 				pool[i] = &Buffer{pins: tt.pins[i], txNum: tt.txNums[i]}
 			}
 
-			got := (&unmodifiedFirstStrategy{}).chooseUnpinnedBuffer(pool)
+			got := (&unmodifiedFirstStrategy{naiveStrategy{newScanStrategy(pool)}}).chooseUnpinnedBuffer()
 
 			assertChosen(t, got, pool, tt.wantIndex)
 		})
@@ -350,7 +350,7 @@ func TestLeastRecentlyModifiedStrategyChooseUnpinnedBuffer(t *testing.T) {
 				}
 			}
 
-			got := (&leastRecentlyModifiedStrategy{}).chooseUnpinnedBuffer(pool)
+			got := (&leastRecentlyModifiedStrategy{naiveStrategy{newScanStrategy(pool)}}).chooseUnpinnedBuffer()
 
 			assertChosen(t, got, pool, tt.wantIndex)
 		})
