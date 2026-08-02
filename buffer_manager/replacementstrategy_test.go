@@ -284,3 +284,75 @@ func TestUnmodifiedFirstStrategyChooseUnpinnedBuffer(t *testing.T) {
 		})
 	}
 }
+
+func TestLeastRecentlyModifiedStrategyChooseUnpinnedBuffer(t *testing.T) {
+	tests := []struct {
+		name string
+		pins []int
+		// txNums marks each buffer as modified, where -1 means unmodified, and
+		// lsns holds the log record protecting it, where -1 means none.
+		txNums    []int
+		lsns      []int
+		wantIndex int
+	}{
+		{
+			name:      "returns the modified buffer with the lowest LSN",
+			pins:      []int{0, 0, 0},
+			txNums:    []int{1, 1, 1},
+			lsns:      []int{30, 10, 20},
+			wantIndex: 1,
+		},
+		{
+			name:      "skips an unmodified buffer even when its LSN is the lowest",
+			pins:      []int{0, 0, 0},
+			txNums:    []int{-1, 1, 1},
+			lsns:      []int{5, 30, 20},
+			wantIndex: 2,
+		},
+		{
+			name:      "prefers a modified buffer whose changes were never logged",
+			pins:      []int{0, 0, 0},
+			txNums:    []int{1, 1, 1},
+			lsns:      []int{10, -1, 5},
+			wantIndex: 1,
+		},
+		{
+			name:      "skips a pinned buffer even when its LSN is the lowest",
+			pins:      []int{1, 0, 0},
+			txNums:    []int{1, 1, 1},
+			lsns:      []int{5, 30, 20},
+			wantIndex: 2,
+		},
+		{
+			name:      "falls back to the first unpinned buffer when none of them is modified",
+			pins:      []int{0, 0, 0},
+			txNums:    []int{-1, -1, -1},
+			lsns:      []int{30, 10, 20},
+			wantIndex: 0,
+		},
+		{
+			name:      "returns nil when every buffer is pinned",
+			pins:      []int{1, 1, 1},
+			txNums:    []int{1, 1, 1},
+			lsns:      []int{10, 20, 30},
+			wantIndex: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := make([]*Buffer, len(tt.pins))
+			for i := range pool {
+				pool[i] = &Buffer{
+					pins:  tt.pins[i],
+					txNum: tt.txNums[i],
+					lsn:   tt.lsns[i],
+				}
+			}
+
+			got := (&leastRecentlyModifiedStrategy{}).chooseUnpinnedBuffer(pool)
+
+			assertChosen(t, got, pool, tt.wantIndex)
+		})
+	}
+}

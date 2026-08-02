@@ -737,6 +737,11 @@ func TestNewBufferManagerWithPolicy(t *testing.T) {
 			wantStrategy: &unmodifiedFirstStrategy{},
 		},
 		{
+			name:         "builds a manager that replaces the modified buffer with the lowest LSN",
+			policy:       LeastRecentlyModifiedPolicy,
+			wantStrategy: &leastRecentlyModifiedStrategy{},
+		},
+		{
 			name:    "returns an error when the policy is unknown",
 			policy:  ReplacementPolicy(99),
 			wantErr: true,

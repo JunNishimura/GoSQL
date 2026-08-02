@@ -12,6 +12,7 @@ const (
 	LRUPolicy
 	ClockPolicy
 	UnmodifiedFirstPolicy
+	LeastRecentlyModifiedPolicy
 )
 
 // replacementStrategy decides which unpinned buffer to reuse when no buffer
@@ -32,6 +33,8 @@ func newReplacementStrategy(policy ReplacementPolicy) (replacementStrategy, erro
 		return &clockStrategy{}, nil
 	case UnmodifiedFirstPolicy:
 		return &unmodifiedFirstStrategy{}, nil
+	case LeastRecentlyModifiedPolicy:
+		return &leastRecentlyModifiedStrategy{}, nil
 	default:
 		return nil, fmt.Errorf("unknown replacement policy: %d", policy)
 	}
@@ -110,6 +113,29 @@ func (s *unmodifiedFirstStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
 		if !buf.isPinned() && !buf.isModified() {
 			return buf
 		}
+	}
+	return s.fallback.chooseUnpinnedBuffer(pool)
+}
+
+// leastRecentlyModifiedStrategy takes the modified buffer with the lowest LSN.
+// The log records protecting it are the most likely to be on disk already, so
+// writing the buffer out needs no further log flush.
+type leastRecentlyModifiedStrategy struct {
+	fallback naiveStrategy
+}
+
+func (s *leastRecentlyModifiedStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
+	var chosen *Buffer
+	for _, buf := range pool {
+		if buf.isPinned() || !buf.isModified() {
+			continue
+		}
+		if chosen == nil || buf.lsn < chosen.lsn {
+			chosen = buf
+		}
+	}
+	if chosen != nil {
+		return chosen
 	}
 	return s.fallback.chooseUnpinnedBuffer(pool)
 }
