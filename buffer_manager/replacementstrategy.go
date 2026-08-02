@@ -49,3 +49,20 @@ type lruStrategy struct{}
 func (s *lruStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
 	return oldestUnpinnedBuffer(pool, func(buf *Buffer) int { return buf.unpinTime })
 }
+
+// clockStrategy scans the pool as if it were a circle, starting at the buffer
+// following the one it replaced last.
+type clockStrategy struct {
+	hand int
+}
+
+func (s *clockStrategy) chooseUnpinnedBuffer(pool []*Buffer) *Buffer {
+	for i := 0; i < len(pool); i++ {
+		index := (s.hand + i) % len(pool)
+		if buf := pool[index]; !buf.isPinned() {
+			s.hand = (index + 1) % len(pool)
+			return buf
+		}
+	}
+	return nil
+}

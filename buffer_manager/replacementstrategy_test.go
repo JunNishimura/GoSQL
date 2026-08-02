@@ -127,3 +127,63 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 		})
 	}
 }
+
+func TestClockStrategyChooseUnpinnedBuffer(t *testing.T) {
+	tests := []struct {
+		name string
+		pins []int
+		// wantIndexes holds the buffer expected from each successive call, so
+		// that the movement of the clock hand can be observed. -1 means nil.
+		wantIndexes []int
+	}{
+		{
+			name:        "resumes the scan at the buffer following the one it returned",
+			pins:        []int{0, 0, 0},
+			wantIndexes: []int{0, 1, 2},
+		},
+		{
+			name:        "wraps around to the head of the pool after the last buffer",
+			pins:        []int{0, 0, 0},
+			wantIndexes: []int{0, 1, 2, 0},
+		},
+		{
+			name:        "skips a pinned buffer while scanning forward",
+			pins:        []int{0, 1, 0},
+			wantIndexes: []int{0, 2},
+		},
+		{
+			name:        "wraps around past the pinned buffers at the end of the pool",
+			pins:        []int{0, 0, 1},
+			wantIndexes: []int{0, 1, 0},
+		},
+		{
+			name:        "returns nil when every buffer is pinned",
+			pins:        []int{1, 1, 1},
+			wantIndexes: []int{-1},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pool := make([]*Buffer, len(tt.pins))
+			for i := range pool {
+				pool[i] = &Buffer{pins: tt.pins[i]}
+			}
+
+			strategy := &clockStrategy{}
+			for call, want := range tt.wantIndexes {
+				got := strategy.chooseUnpinnedBuffer(pool)
+
+				if want == -1 {
+					if got != nil {
+						t.Errorf("call %d: chooseUnpinnedBuffer() = %v, want nil", call+1, got)
+					}
+					continue
+				}
+				if got != pool[want] {
+					t.Errorf("call %d: chooseUnpinnedBuffer() = %v, want pool[%d]", call+1, got, want)
+				}
+			}
+		})
+	}
+}
