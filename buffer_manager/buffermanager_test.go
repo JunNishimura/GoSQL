@@ -12,6 +12,14 @@ import (
 // unassigned marks a pool slot that holds no block in the findExistingBuffer tests.
 const unassigned = -1
 
+// holdBlock puts a buffer in the state it reaches after loading a block, without
+// touching the disk, keeping the manager's block index in sync.
+func holdBlock(bm *BufferManager, index, blkNum int) {
+	blk := filemanager.NewBlockId(testDataFile, blkNum)
+	bm.bufferPool[index].blk = blk
+	bm.bufferByBlock[*blk] = bm.bufferPool[index]
+}
+
 func TestNewBufferManager(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -149,7 +157,7 @@ func TestFindExistingBuffer(t *testing.T) {
 				if blkNum == unassigned {
 					continue
 				}
-				bm.bufferPool[i].blk = filemanager.NewBlockId(testDataFile, blkNum)
+				holdBlock(bm, i, blkNum)
 			}
 
 			// A fresh BlockId is passed in so that a match cannot rely on
@@ -253,7 +261,7 @@ func TestTryToPin(t *testing.T) {
 			numAvailable := 0
 			for i := range tt.pins {
 				if tt.assigned[i] != unassigned {
-					bm.bufferPool[i].blk = filemanager.NewBlockId(testDataFile, tt.assigned[i])
+					holdBlock(bm, i, tt.assigned[i])
 				}
 				for j := 0; j < tt.pins[i]; j++ {
 					bm.bufferPool[i].pin()
@@ -334,7 +342,7 @@ func TestTryToPinRecordsReadTime(t *testing.T) {
 			}
 			for i, blkNum := range tt.assigned {
 				if blkNum != unassigned {
-					bm.bufferPool[i].blk = filemanager.NewBlockId(testDataFile, blkNum)
+					holdBlock(bm, i, blkNum)
 				}
 			}
 
@@ -665,8 +673,9 @@ func TestFlushAll(t *testing.T) {
 				t.Fatalf("NewBufferManager() error = %v", err)
 			}
 			for i, txNum := range tt.txNums {
+				holdBlock(bm, i, i)
+
 				buf := bm.bufferPool[i]
-				buf.blk = filemanager.NewBlockId(testDataFile, i)
 				buf.lsn = appendLogRecord(t, lm)
 				buf.txNum = txNum
 				if err := buf.contents.SetInt(0, inMemory[i]); err != nil {
@@ -1047,5 +1056,59 @@ func TestBufferManagerStatsCountsWaits(t *testing.T) {
 
 	if got := bm.GetStats().Waits(); got != 1 {
 		t.Errorf("Waits() = %d, want 1", got)
+	}
+}
+
+func TestFindExistingBufferAfterReassignment(t *testing.T) {
+	fm, lm := newTestManagers(t, testBlockSize)
+	prepareDataFile(t, fm, []int32{100, 101})
+
+	bm, err := NewBufferManager(fm, lm, 1)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	bm.Unpin(buf)
+	if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	if got := bm.findExistingBuffer(filemanager.NewBlockId(testDataFile, 0)); got != nil {
+		t.Errorf("findExistingBuffer(block 0) = %v after its buffer was reassigned, want nil", got)
+	}
+	if got := bm.findExistingBuffer(filemanager.NewBlockId(testDataFile, 1)); got != buf {
+		t.Errorf("findExistingBuffer(block 1) = %v, want the reassigned buffer", got)
+	}
+}
+
+func TestFindExistingBufferKeepsTheMappingOwnedByAnotherBuffer(t *testing.T) {
+	fm, lm := newTestManagers(t, testBlockSize)
+	prepareDataFile(t, fm, []int32{100, 101})
+
+	bm, err := NewBufferManager(fm, lm, 2)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	block0 := filemanager.NewBlockId(testDataFile, 0)
+	held, err := bm.Pin(block0)
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	// A failed assignment can leave a buffer naming a block it does not hold.
+	// Replacing that buffer must not disturb the buffer that really holds it.
+	bm.bufferPool[1].blk = block0
+
+	if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+
+	if got := bm.findExistingBuffer(block0); got != held {
+		t.Errorf("findExistingBuffer(block 0) = %v, want the buffer that holds it", got)
 	}
 }

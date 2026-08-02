@@ -43,14 +43,17 @@ func (s Stats) Flushes() int {
 }
 
 type BufferManager struct {
-	bufferPool   []*Buffer
-	numAvailable int
-	maxWaitTime  time.Duration
-	strategy     replacementStrategy
-	tick         int
-	stats        Stats
-	mu           sync.Mutex
-	cond         *sync.Cond
+	bufferPool []*Buffer
+	// bufferByBlock indexes the pool by the block each buffer holds, so that a pin
+	// does not have to scan every buffer to find one.
+	bufferByBlock map[filemanager.BlockId]*Buffer
+	numAvailable  int
+	maxWaitTime   time.Duration
+	strategy      replacementStrategy
+	tick          int
+	stats         Stats
+	mu            sync.Mutex
+	cond          *sync.Cond
 }
 
 func (bm *BufferManager) GetStats() Stats {
@@ -87,10 +90,11 @@ func NewBufferManagerWithPolicy(fm *filemanager.FileManager, lm *logmanager.LogM
 	}
 
 	bm := &BufferManager{
-		bufferPool:   bufferPool,
-		numAvailable: numBuffers,
-		maxWaitTime:  defaultMaxWaitTime,
-		strategy:     strategy,
+		bufferPool:    bufferPool,
+		bufferByBlock: make(map[filemanager.BlockId]*Buffer, numBuffers),
+		numAvailable:  numBuffers,
+		maxWaitTime:   defaultMaxWaitTime,
+		strategy:      strategy,
 	}
 	bm.cond = sync.NewCond(&bm.mu)
 
@@ -148,12 +152,7 @@ func (bm *BufferManager) Unpin(buf *Buffer) {
 }
 
 func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
-	for _, buf := range bm.bufferPool {
-		if buf.blk != nil && buf.blk.Equals(blk) {
-			return buf
-		}
-	}
-	return nil
+	return bm.bufferByBlock[*blk]
 }
 
 func (bm *BufferManager) FlushAll(txNum int) error {
@@ -182,13 +181,9 @@ func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 		if buf == nil {
 			return nil, nil
 		}
-		if buf.isModified() {
-			bm.stats.flushes++
-		}
-		if err := buf.assignToBlock(blk); err != nil {
+		if err := bm.assignBufferToBlock(buf, blk); err != nil {
 			return nil, err
 		}
-		buf.readTime = bm.nextTick()
 	}
 
 	if !buf.isPinned() {
@@ -197,6 +192,29 @@ func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 	buf.pin()
 
 	return buf, nil
+}
+
+// assignBufferToBlock loads blk into buf and keeps bufferByBlock pointing at the
+// buffer that actually holds each block.
+func (bm *BufferManager) assignBufferToBlock(buf *Buffer, blk *filemanager.BlockId) error {
+	// Drop the old mapping only while it still names this buffer. An assignment
+	// that failed midway can leave a buffer carrying a block id owned by another
+	// buffer, and removing that entry would hide a block that is really there.
+	if buf.blk != nil && bm.bufferByBlock[*buf.blk] == buf {
+		delete(bm.bufferByBlock, *buf.blk)
+	}
+
+	if buf.isModified() {
+		bm.stats.flushes++
+	}
+	if err := buf.assignToBlock(blk); err != nil {
+		return err
+	}
+
+	bm.bufferByBlock[*blk] = buf
+	buf.readTime = bm.nextTick()
+
+	return nil
 }
 
 func (bm *BufferManager) chooseUnpinnedBuffer() *Buffer {
