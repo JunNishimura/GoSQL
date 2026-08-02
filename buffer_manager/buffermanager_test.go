@@ -869,3 +869,183 @@ func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestBufferManagerStatsCountsPinsAndHits(t *testing.T) {
+	const poolSize = 3
+
+	tests := []struct {
+		name       string
+		pinBlkNums []int
+		wantPins   int
+		wantHits   int
+	}{
+		{
+			name:       "counts a pin and no hit when the block has to be read from disk",
+			pinBlkNums: []int{0},
+			wantPins:   1,
+			wantHits:   0,
+		},
+		{
+			name:       "counts a hit when a buffer already holds the requested block",
+			pinBlkNums: []int{0, 0},
+			wantPins:   2,
+			wantHits:   1,
+		},
+		{
+			name:       "counts no hit when every pin asks for a different block",
+			pinBlkNums: []int{0, 1, 2},
+			wantPins:   3,
+			wantHits:   0,
+		},
+		{
+			name:       "counts a hit for each repeated request of a block still in the pool",
+			pinBlkNums: []int{0, 1, 0, 1},
+			wantPins:   4,
+			wantHits:   2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{100, 101, 102})
+
+			bm, err := NewBufferManager(fm, lm, poolSize)
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+			for _, blkNum := range tt.pinBlkNums {
+				if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, blkNum)); err != nil {
+					t.Fatalf("Pin(%d) error = %v", blkNum, err)
+				}
+			}
+
+			stats := bm.GetStats()
+
+			if got := stats.Pins(); got != tt.wantPins {
+				t.Errorf("Pins() = %d, want %d", got, tt.wantPins)
+			}
+			if got := stats.Hits(); got != tt.wantHits {
+				t.Errorf("Hits() = %d, want %d", got, tt.wantHits)
+			}
+		})
+	}
+}
+
+func TestBufferManagerStatsCountsFlushes(t *testing.T) {
+	const unmodified = -1
+
+	tests := []struct {
+		name string
+		// modifyTxNum marks the pinned buffer as modified by that transaction,
+		// where unmodified leaves it alone.
+		modifyTxNum int
+		// flushAll asks the manager to write out flushAllTxNum's buffers instead
+		// of forcing a replacement.
+		flushAll      bool
+		flushAllTxNum int
+		wantFlushes   int
+	}{
+		{
+			name:        "does not count a flush when the replaced buffer is unmodified",
+			modifyTxNum: unmodified,
+			flushAll:    false,
+			wantFlushes: 0,
+		},
+		{
+			name:        "counts a flush when a modified buffer is replaced",
+			modifyTxNum: 1,
+			flushAll:    false,
+			wantFlushes: 1,
+		},
+		{
+			name:          "counts a flush when FlushAll writes the modified buffer",
+			modifyTxNum:   1,
+			flushAll:      true,
+			flushAllTxNum: 1,
+			wantFlushes:   1,
+		},
+		{
+			name:          "does not count a flush when FlushAll runs for another transaction",
+			modifyTxNum:   1,
+			flushAll:      true,
+			flushAllTxNum: 2,
+			wantFlushes:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{100, 101})
+
+			bm, err := NewBufferManager(fm, lm, 1)
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+			buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
+			if err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+			if tt.modifyTxNum != unmodified {
+				buf.SetModified(tt.modifyTxNum, -1)
+			}
+
+			if tt.flushAll {
+				if err := bm.FlushAll(tt.flushAllTxNum); err != nil {
+					t.Fatalf("FlushAll() error = %v", err)
+				}
+			} else {
+				bm.Unpin(buf)
+				if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
+					t.Fatalf("Pin() error = %v", err)
+				}
+			}
+
+			if got := bm.GetStats().Flushes(); got != tt.wantFlushes {
+				t.Errorf("Flushes() = %d, want %d", got, tt.wantFlushes)
+			}
+		})
+	}
+}
+
+func TestBufferManagerStatsCountsWaits(t *testing.T) {
+	fm, lm := newTestManagers(t, testBlockSize)
+	prepareDataFile(t, fm, []int32{100, 101})
+
+	bm, err := NewBufferManager(fm, lm, 1)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	held, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if got := bm.GetStats().Waits(); got != 0 {
+		t.Fatalf("Waits() = %d for a pin served right away, want 0", got)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+		done <- err
+	}()
+
+	// Give the second pin time to find the pool full and start waiting.
+	time.Sleep(50 * time.Millisecond)
+	bm.Unpin(held)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Pin() did not return after the buffer was unpinned")
+	}
+
+	if got := bm.GetStats().Waits(); got != 1 {
+		t.Errorf("Waits() = %d, want 1", got)
+	}
+}

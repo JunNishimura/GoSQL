@@ -16,14 +16,48 @@ const defaultMaxWaitTime = 10 * time.Second
 // The caller is expected to abort its transaction and retry.
 var ErrBufferAbort = errors.New("no buffer available")
 
+// Stats reports how the buffer pool has been used. Hits counts the pins that
+// were served without a disk read, so comparing it against Pins shows how well
+// the pool absorbs requests, while Waits shows how often the pool ran out.
+type Stats struct {
+	pins    int
+	hits    int
+	waits   int
+	flushes int
+}
+
+func (s Stats) Pins() int {
+	return s.pins
+}
+
+func (s Stats) Hits() int {
+	return s.hits
+}
+
+func (s Stats) Waits() int {
+	return s.waits
+}
+
+func (s Stats) Flushes() int {
+	return s.flushes
+}
+
 type BufferManager struct {
 	bufferPool   []*Buffer
 	numAvailable int
 	maxWaitTime  time.Duration
 	strategy     replacementStrategy
 	tick         int
+	stats        Stats
 	mu           sync.Mutex
 	cond         *sync.Cond
+}
+
+func (bm *BufferManager) GetStats() Stats {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
+	return bm.stats
 }
 
 // nextTick returns a monotonically increasing timestamp shared by readTime and
@@ -78,16 +112,24 @@ func (bm *BufferManager) Pin(blk *filemanager.BlockId) (*Buffer, error) {
 	})
 	defer timer.Stop()
 
+	// waited keeps a pin that goes around the loop several times from being
+	// counted as more than one wait.
+	waited := false
 	for {
 		buf, err := bm.tryToPin(blk)
 		if err != nil {
 			return nil, err
 		}
 		if buf != nil {
+			bm.stats.pins++
 			return buf, nil
 		}
 		if timedOut {
 			return nil, fmt.Errorf("pin block %s: %w", blk, ErrBufferAbort)
+		}
+		if !waited {
+			waited = true
+			bm.stats.waits++
 		}
 		bm.cond.Wait()
 	}
@@ -120,6 +162,9 @@ func (bm *BufferManager) FlushAll(txNum int) error {
 
 	for _, buf := range bm.bufferPool {
 		if buf.txNum == txNum {
+			if buf.isModified() {
+				bm.stats.flushes++
+			}
 			if err := buf.flush(); err != nil {
 				return err
 			}
@@ -130,10 +175,15 @@ func (bm *BufferManager) FlushAll(txNum int) error {
 
 func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 	buf := bm.findExistingBuffer(blk)
-	if buf == nil {
+	if buf != nil {
+		bm.stats.hits++
+	} else {
 		buf = bm.chooseUnpinnedBuffer()
 		if buf == nil {
 			return nil, nil
+		}
+		if buf.isModified() {
+			bm.stats.flushes++
 		}
 		if err := buf.assignToBlock(blk); err != nil {
 			return nil, err
