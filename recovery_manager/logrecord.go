@@ -1,7 +1,5 @@
 package recoverymanager
 
-const intBytes = 4
-
 // Op identifies the kind of a log record. The value is written into the log
 // file as the first int of every record, so it is part of the on-disk format
 // and existing values must not be reordered.

@@ -50,7 +50,7 @@ func (it *LogIterator) Next() ([]byte, error) {
 	}
 
 	record := it.page.GetBytes(it.currentPos)
-	it.currentPos += intBytes + len(record)
+	it.currentPos += filemanager.IntBytes + len(record)
 
 	return record, nil
 }

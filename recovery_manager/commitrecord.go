@@ -10,8 +10,8 @@ import (
 // A commit record is laid out as the op code followed by the transaction number.
 const (
 	opOffset         = 0
-	txNumOffset      = intBytes
-	commitRecordSize = 2 * intBytes
+	txNumOffset      = filemanager.IntBytes
+	commitRecordSize = 2 * filemanager.IntBytes
 )
 
 // CommitRecord marks the point at which a transaction committed.
