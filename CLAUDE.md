@@ -11,6 +11,12 @@ Follow the TDD cycle: **List → Red → Green → Refactor**
 
 Do NOT proceed from Red to Green without explicit user approval.
 
+## Comments
+
+Write all comments in English. This applies to Go doc comments, inline comments, and comments in config files such as `.github/workflows/*.yml` and `.golangci.yml`.
+
+Commit message bodies are the exception: those may be written in Japanese.
+
 ## Commit Message
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format:
