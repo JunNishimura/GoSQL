@@ -7,13 +7,6 @@ import (
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
-// A commit record is laid out as the op code followed by the transaction number.
-const (
-	opOffset         = 0
-	txNumOffset      = filemanager.IntBytes
-	commitRecordSize = 2 * filemanager.IntBytes
-)
-
 // CommitRecord marks the point at which a transaction committed.
 type CommitRecord struct {
 	txNum int
@@ -44,13 +37,9 @@ func (r *CommitRecord) String() string {
 // WriteCommitRecordToLog appends a commit record for txNum to the log and
 // returns its LSN.
 func WriteCommitRecordToLog(lm *logmanager.LogManager, txNum int) (int, error) {
-	record := make([]byte, commitRecordSize)
-	p := filemanager.NewPageByBytes(record)
-	if err := p.SetInt(opOffset, int32(Commit)); err != nil {
-		return 0, fmt.Errorf("set op of commit record: %w", err)
-	}
-	if err := p.SetInt(txNumOffset, int32(txNum)); err != nil {
-		return 0, fmt.Errorf("set txNum of commit record: %w", err)
+	record, err := newTxRecord(Commit, txNum)
+	if err != nil {
+		return 0, err
 	}
 	return lm.Append(record)
 }

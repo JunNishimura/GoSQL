@@ -4,32 +4,11 @@ import (
 	"testing"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
-	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
-const (
-	testBlockSize = 400
-	testLogFile   = "test.log"
-)
+var _ LogRecord = (*RollbackRecord)(nil)
 
-// CommitRecord must satisfy LogRecord so that the recovery manager can treat it
-// uniformly with the other record types.
-var _ LogRecord = (*CommitRecord)(nil)
-
-func newTestLogManager(t *testing.T) *logmanager.LogManager {
-	t.Helper()
-	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	lm, err := logmanager.NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-	return lm
-}
-
-func TestNewCommitRecord(t *testing.T) {
+func TestNewRollbackRecord(t *testing.T) {
 	tests := []struct {
 		name      string
 		txNum     int32
@@ -54,39 +33,39 @@ func TestNewCommitRecord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCommitRecord(newTxRecordPage(t, Commit, tt.txNum))
+			rec := NewRollbackRecord(newTxRecordPage(t, Rollback, tt.txNum))
 
 			if got := rec.TxNumber(); got != tt.wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, tt.wantTxNum)
 			}
-			if got := rec.Op(); got != Commit {
-				t.Errorf("Op() = %d, want %d (Commit)", got, Commit)
+			if got := rec.Op(); got != Rollback {
+				t.Errorf("Op() = %d, want %d (Rollback)", got, Rollback)
 			}
 		})
 	}
 }
 
-func TestCommitRecordString(t *testing.T) {
+func TestRollbackRecordString(t *testing.T) {
 	tests := []struct {
 		name  string
 		txNum int32
 		want  string
 	}{
 		{
-			name:  "formats txNum 1 as <COMMIT 1>",
+			name:  "formats txNum 1 as <ROLLBACK 1>",
 			txNum: 1,
-			want:  "<COMMIT 1>",
+			want:  "<ROLLBACK 1>",
 		},
 		{
-			name:  "formats txNum 42 as <COMMIT 42>",
+			name:  "formats txNum 42 as <ROLLBACK 42>",
 			txNum: 42,
-			want:  "<COMMIT 42>",
+			want:  "<ROLLBACK 42>",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCommitRecord(newTxRecordPage(t, Commit, tt.txNum))
+			rec := NewRollbackRecord(newTxRecordPage(t, Rollback, tt.txNum))
 
 			if got := rec.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
@@ -95,9 +74,9 @@ func TestCommitRecordString(t *testing.T) {
 	}
 }
 
-func TestCommitRecordUndo(t *testing.T) {
-	// A commit record has nothing to roll back, so Undo must succeed without
-	// touching anything, whichever transaction is being undone.
+func TestRollbackRecordUndo(t *testing.T) {
+	// A rollback record changed no data, so Undo must succeed without touching
+	// anything, whichever transaction is being undone.
 	tests := []struct {
 		name        string
 		recordTxNum int32
@@ -117,7 +96,7 @@ func TestCommitRecordUndo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCommitRecord(newTxRecordPage(t, Commit, tt.recordTxNum))
+			rec := NewRollbackRecord(newTxRecordPage(t, Rollback, tt.recordTxNum))
 
 			if err := rec.Undo(tt.undoTxNum); err != nil {
 				t.Errorf("Undo() error = %v, want nil", err)
@@ -126,7 +105,7 @@ func TestCommitRecordUndo(t *testing.T) {
 	}
 }
 
-func TestWriteCommitRecordToLog(t *testing.T) {
+func TestWriteRollbackRecordToLog(t *testing.T) {
 	tests := []struct {
 		name    string
 		txNums  []int
@@ -151,18 +130,18 @@ func TestWriteCommitRecordToLog(t *testing.T) {
 			var lsn int
 			var err error
 			for _, txNum := range tt.txNums {
-				lsn, err = WriteCommitRecordToLog(lm, txNum)
+				lsn, err = WriteRollbackRecordToLog(lm, txNum)
 				if err != nil {
-					t.Fatalf("WriteCommitRecordToLog() error = %v", err)
+					t.Fatalf("WriteRollbackRecordToLog() error = %v", err)
 				}
 			}
 
 			if lsn != tt.wantLSN {
-				t.Errorf("WriteCommitRecordToLog() = %d, want %d", lsn, tt.wantLSN)
+				t.Errorf("WriteRollbackRecordToLog() = %d, want %d", lsn, tt.wantLSN)
 			}
 
 			// The most recent record must be readable back as an equivalent
-			// CommitRecord, since recovery reads the log backwards.
+			// RollbackRecord, since recovery reads the log backwards.
 			it, err := lm.Iterator()
 			if err != nil {
 				t.Fatalf("Iterator() error = %v", err)
@@ -175,13 +154,13 @@ func TestWriteCommitRecordToLog(t *testing.T) {
 				t.Fatalf("Next() error = %v", err)
 			}
 
-			rec := NewCommitRecord(filemanager.NewPageByBytes(bytes))
+			rec := NewRollbackRecord(filemanager.NewPageByBytes(bytes))
 			wantTxNum := tt.txNums[len(tt.txNums)-1]
 			if got := rec.TxNumber(); got != wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, wantTxNum)
 			}
-			if got := rec.Op(); got != Commit {
-				t.Errorf("Op() = %d, want %d (Commit)", got, Commit)
+			if got := rec.Op(); got != Rollback {
+				t.Errorf("Op() = %d, want %d (Rollback)", got, Rollback)
 			}
 		})
 	}
