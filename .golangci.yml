@@ -1,0 +1,17 @@
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+
+  settings:
+    errcheck:
+      # hash.Hash embeds io.Writer but is documented never to return an error,
+      # so BlockId.HashCode has nothing meaningful to check.
+      exclude-functions:
+        - (hash.Hash).Write
+        - (hash.Hash32).Write
+
+  exclusions:
+    presets:
+      - std-error-handling

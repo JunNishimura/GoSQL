@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# Cancel an in-flight run when the same branch is pushed again.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Third-party actions are pinned to a commit SHA rather than a tag. Tags can be
+# moved, so only a SHA fixes what actually runs. When bumping one, update the
+# version in the trailing comment as well.
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Keep the go directive in go.mod as the single source of truth.
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      # -race: LogManager.Append and the BufferManager wait paths have
+      # concurrent tests, so data races are worth detecting here.
+      # -shuffle=on: surfaces tests that depend on execution order.
+      - name: Test
+        run: go test -race -shuffle=on ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # Pinning the action by SHA is pointless if the linter itself floats:
+          # a release that adds new checks would break CI on an unrelated day.
+          version: v2.9.0
