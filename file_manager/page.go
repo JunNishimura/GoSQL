@@ -7,6 +7,10 @@ import (
 	"unicode/utf8"
 )
 
+// IntBytes is the width of an int as stored in a Page. Callers that lay out
+// records need it to compute the offset of each field, so it is exported.
+const IntBytes = 4
+
 type Page struct {
 	buf []byte
 }
@@ -24,7 +28,7 @@ func (p *Page) GetInt(offset int) int32 {
 }
 
 func (p *Page) SetInt(offset int, value int32) error {
-	if offset+4 > len(p.buf) {
+	if offset+IntBytes > len(p.buf) {
 		return fmt.Errorf("SetInt: offset %d out of bounds (buf size %d)", offset, len(p.buf))
 	}
 	binary.BigEndian.PutUint32(p.buf[offset:], uint32(value))
@@ -75,16 +79,16 @@ func (p *Page) SetDate(offset int, value time.Time) error {
 func (p *Page) GetBytes(offset int) []byte {
 	length := int(binary.BigEndian.Uint32(p.buf[offset:]))
 	result := make([]byte, length)
-	copy(result, p.buf[offset+4:])
+	copy(result, p.buf[offset+IntBytes:])
 	return result
 }
 
 func (p *Page) SetBytes(offset int, bytes []byte) error {
-	if offset+4+len(bytes) > len(p.buf) {
+	if offset+IntBytes+len(bytes) > len(p.buf) {
 		return fmt.Errorf("SetBytes: offset %d with %d bytes out of bounds (buf size %d)", offset, len(bytes), len(p.buf))
 	}
 	binary.BigEndian.PutUint32(p.buf[offset:], uint32(len(bytes)))
-	copy(p.buf[offset+4:], bytes)
+	copy(p.buf[offset+IntBytes:], bytes)
 	return nil
 }
 
@@ -97,7 +101,7 @@ func (p *Page) SetString(offset int, value string) error {
 }
 
 func (p *Page) MaxLength(strlen int) int {
-	return 4 + strlen*utf8.UTFMax
+	return IntBytes + strlen*utf8.UTFMax
 }
 
 func (p *Page) contents() []byte {

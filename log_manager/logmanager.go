@@ -6,8 +6,6 @@ import (
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
 
-const intBytes = 4
-
 type LogManager struct {
 	fileManager  *filemanager.FileManager
 	logFile      string
@@ -83,9 +81,9 @@ func (lm *LogManager) Append(logRecord []byte) (int, error) {
 
 	boundary := int(lm.logPage.GetInt(0))
 	recordSize := len(logRecord)
-	bytesNeeded := recordSize + intBytes
+	bytesNeeded := recordSize + filemanager.IntBytes
 
-	if boundary-bytesNeeded < intBytes {
+	if boundary-bytesNeeded < filemanager.IntBytes {
 		if err := lm.flush(); err != nil {
 			return 0, err
 		}
