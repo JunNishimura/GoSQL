@@ -1,10 +1,16 @@
 package recoverymanager
 
 import (
+	"errors"
 	"fmt"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
+
+// ErrUnimplementedRecord reports an op code that this package reserves but has
+// no record type for yet. Callers can tell it apart from a corrupted log, where
+// the op code itself is not one we ever write.
+var ErrUnimplementedRecord = errors.New("log record type not implemented")
 
 // Every record starts with its op code. The records that describe a
 // transaction boundary (start, commit, rollback) follow it with the
@@ -45,6 +51,51 @@ type LogRecord interface {
 	// transaction identified by txNum. Records that changed no data return nil
 	// without doing any work.
 	Undo(txNum int) error
+}
+
+// CreateLogRecord rebuilds the record stored in bytes. Recovery reads the log
+// as raw bytes, so this is where an op code first becomes a typed record and
+// therefore where a malformed record has to be rejected.
+func CreateLogRecord(bytes []byte) (LogRecord, error) {
+	if len(bytes) < filemanager.IntBytes {
+		return nil, fmt.Errorf("log record of %d bytes is too short to hold an op code", len(bytes))
+	}
+
+	p := filemanager.NewPageByBytes(bytes)
+	op := Op(p.GetInt(opOffset))
+
+	switch op {
+	case Checkpoint:
+		return NewCheckpointRecord(), nil
+	case Start:
+		if err := checkTxRecordSize(op, bytes); err != nil {
+			return nil, err
+		}
+		return NewStartRecord(p), nil
+	case Commit:
+		if err := checkTxRecordSize(op, bytes); err != nil {
+			return nil, err
+		}
+		return NewCommitRecord(p), nil
+	case Rollback:
+		if err := checkTxRecordSize(op, bytes); err != nil {
+			return nil, err
+		}
+		return NewRollbackRecord(p), nil
+	case SetInt, SetString:
+		return nil, fmt.Errorf("op %d: %w", op, ErrUnimplementedRecord)
+	default:
+		return nil, fmt.Errorf("unknown log record op %d", op)
+	}
+}
+
+// checkTxRecordSize guards the reads that follow the op code. Page.GetInt does
+// not bounds check, so a truncated record would panic rather than fail.
+func checkTxRecordSize(op Op, bytes []byte) error {
+	if len(bytes) < txRecordSize {
+		return fmt.Errorf("log record for op %d is %d bytes, want at least %d", op, len(bytes), txRecordSize)
+	}
+	return nil
 }
 
 // newTxRecord encodes a record whose only payload is a transaction number,
