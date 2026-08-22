@@ -99,7 +99,13 @@ func CreateLogRecord(record []byte) (LogRecord, error) {
 			return nil, err
 		}
 		return rec, nil
-	case SetInt, SetString:
+	case SetInt:
+		rec, err := NewSetIntRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		return rec, nil
+	case SetString:
 		return nil, fmt.Errorf("op %d: %w", op, ErrUnimplementedRecord)
 	default:
 		return nil, fmt.Errorf("unknown log record op %d", op)
