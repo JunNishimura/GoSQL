@@ -1,10 +1,6 @@
 package recoverymanager
 
-import (
-	"testing"
-
-	filemanager "github.com/JunNishimura/GoSQL/file_manager"
-)
+import "testing"
 
 var _ LogRecord = (*StartRecord)(nil)
 
@@ -33,7 +29,10 @@ func TestNewStartRecord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewStartRecord(newTxRecordPage(t, Start, tt.txNum))
+			rec, err := NewStartRecord(newTxRecordBytes(Start, tt.txNum))
+			if err != nil {
+				t.Fatalf("NewStartRecord() error = %v", err)
+			}
 
 			if got := rec.TxNumber(); got != tt.wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, tt.wantTxNum)
@@ -65,7 +64,10 @@ func TestStartRecordString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewStartRecord(newTxRecordPage(t, Start, tt.txNum))
+			rec, err := NewStartRecord(newTxRecordBytes(Start, tt.txNum))
+			if err != nil {
+				t.Fatalf("NewStartRecord() error = %v", err)
+			}
 
 			if got := rec.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
@@ -123,7 +125,10 @@ func TestWriteStartRecordToLog(t *testing.T) {
 				t.Fatalf("Next() error = %v", err)
 			}
 
-			rec := NewStartRecord(filemanager.NewPageByBytes(bytes))
+			rec, err := NewStartRecord(bytes)
+			if err != nil {
+				t.Fatalf("NewStartRecord() error = %v", err)
+			}
 			wantTxNum := tt.txNums[len(tt.txNums)-1]
 			if got := rec.TxNumber(); got != wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, wantTxNum)

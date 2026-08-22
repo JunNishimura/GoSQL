@@ -3,7 +3,6 @@ package recoverymanager
 import (
 	"fmt"
 
-	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
@@ -12,8 +11,12 @@ type RollbackRecord struct {
 	txNum int
 }
 
-func NewRollbackRecord(p *filemanager.Page) *RollbackRecord {
-	return &RollbackRecord{txNum: int(p.GetInt(txNumOffset))}
+func NewRollbackRecord(record []byte) (*RollbackRecord, error) {
+	txNum, err := readTxRecord(record, Rollback)
+	if err != nil {
+		return nil, err
+	}
+	return &RollbackRecord{txNum: txNum}, nil
 }
 
 func (r *RollbackRecord) Op() Op {

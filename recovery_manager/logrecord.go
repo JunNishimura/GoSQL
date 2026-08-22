@@ -67,32 +67,38 @@ type Undoable interface {
 // CreateLogRecord rebuilds the record stored in bytes. Recovery reads the log
 // as raw bytes, so this is where an op code first becomes a typed record and
 // therefore where a malformed record has to be rejected.
-func CreateLogRecord(bytes []byte) (LogRecord, error) {
-	if len(bytes) < filemanager.IntBytes {
-		return nil, fmt.Errorf("log record of %d bytes is too short to hold an op code", len(bytes))
+func CreateLogRecord(record []byte) (LogRecord, error) {
+	if len(record) < filemanager.IntBytes {
+		return nil, fmt.Errorf("log record of %d bytes is too short to hold an op code", len(record))
 	}
 
-	p := filemanager.NewPageByBytes(bytes)
+	p := filemanager.NewPageByBytes(record)
 	op := Op(p.GetInt(opOffset))
 
+	// Each constructor validates the rest of the layout, so this switch only
+	// dispatches. The results are assigned before being returned because a typed
+	// nil pointer put straight into a LogRecord would not compare equal to nil.
 	switch op {
 	case Checkpoint:
 		return NewCheckpointRecord(), nil
 	case Start:
-		if err := checkTxRecordSize(op, bytes); err != nil {
+		rec, err := NewStartRecord(record)
+		if err != nil {
 			return nil, err
 		}
-		return NewStartRecord(p), nil
+		return rec, nil
 	case Commit:
-		if err := checkTxRecordSize(op, bytes); err != nil {
+		rec, err := NewCommitRecord(record)
+		if err != nil {
 			return nil, err
 		}
-		return NewCommitRecord(p), nil
+		return rec, nil
 	case Rollback:
-		if err := checkTxRecordSize(op, bytes); err != nil {
+		rec, err := NewRollbackRecord(record)
+		if err != nil {
 			return nil, err
 		}
-		return NewRollbackRecord(p), nil
+		return rec, nil
 	case SetInt, SetString:
 		return nil, fmt.Errorf("op %d: %w", op, ErrUnimplementedRecord)
 	default:
@@ -100,13 +106,16 @@ func CreateLogRecord(bytes []byte) (LogRecord, error) {
 	}
 }
 
-// checkTxRecordSize guards the reads that follow the op code. Page.GetInt does
-// not bounds check, so a truncated record would panic rather than fail.
-func checkTxRecordSize(op Op, bytes []byte) error {
-	if len(bytes) < txRecordSize {
-		return fmt.Errorf("log record for op %d is %d bytes, want at least %d", op, len(bytes), txRecordSize)
+// readTxRecord decodes the transaction number out of a record whose only
+// payload is one, and checks that the record is long enough to hold it.
+// Page.GetInt does not bounds check, so a truncated record would otherwise be
+// read past the end of the slice.
+func readTxRecord(record []byte, op Op) (int, error) {
+	if len(record) < txRecordSize {
+		return 0, fmt.Errorf("log record for op %d is %d bytes, want at least %d", op, len(record), txRecordSize)
 	}
-	return nil
+	p := filemanager.NewPageByBytes(record)
+	return int(p.GetInt(txNumOffset)), nil
 }
 
 // newTxRecord encodes a record whose only payload is a transaction number,

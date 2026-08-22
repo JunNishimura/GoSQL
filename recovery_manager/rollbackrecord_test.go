@@ -1,10 +1,6 @@
 package recoverymanager
 
-import (
-	"testing"
-
-	filemanager "github.com/JunNishimura/GoSQL/file_manager"
-)
+import "testing"
 
 var _ LogRecord = (*RollbackRecord)(nil)
 
@@ -33,7 +29,10 @@ func TestNewRollbackRecord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewRollbackRecord(newTxRecordPage(t, Rollback, tt.txNum))
+			rec, err := NewRollbackRecord(newTxRecordBytes(Rollback, tt.txNum))
+			if err != nil {
+				t.Fatalf("NewRollbackRecord() error = %v", err)
+			}
 
 			if got := rec.TxNumber(); got != tt.wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, tt.wantTxNum)
@@ -65,7 +64,10 @@ func TestRollbackRecordString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewRollbackRecord(newTxRecordPage(t, Rollback, tt.txNum))
+			rec, err := NewRollbackRecord(newTxRecordBytes(Rollback, tt.txNum))
+			if err != nil {
+				t.Fatalf("NewRollbackRecord() error = %v", err)
+			}
 
 			if got := rec.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
@@ -123,7 +125,10 @@ func TestWriteRollbackRecordToLog(t *testing.T) {
 				t.Fatalf("Next() error = %v", err)
 			}
 
-			rec := NewRollbackRecord(filemanager.NewPageByBytes(bytes))
+			rec, err := NewRollbackRecord(bytes)
+			if err != nil {
+				t.Fatalf("NewRollbackRecord() error = %v", err)
+			}
 			wantTxNum := tt.txNums[len(tt.txNums)-1]
 			if got := rec.TxNumber(); got != wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, wantTxNum)

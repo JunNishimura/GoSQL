@@ -54,7 +54,10 @@ func TestNewCommitRecord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCommitRecord(newTxRecordPage(t, Commit, tt.txNum))
+			rec, err := NewCommitRecord(newTxRecordBytes(Commit, tt.txNum))
+			if err != nil {
+				t.Fatalf("NewCommitRecord() error = %v", err)
+			}
 
 			if got := rec.TxNumber(); got != tt.wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, tt.wantTxNum)
@@ -86,7 +89,10 @@ func TestCommitRecordString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCommitRecord(newTxRecordPage(t, Commit, tt.txNum))
+			rec, err := NewCommitRecord(newTxRecordBytes(Commit, tt.txNum))
+			if err != nil {
+				t.Fatalf("NewCommitRecord() error = %v", err)
+			}
 
 			if got := rec.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
@@ -144,7 +150,10 @@ func TestWriteCommitRecordToLog(t *testing.T) {
 				t.Fatalf("Next() error = %v", err)
 			}
 
-			rec := NewCommitRecord(filemanager.NewPageByBytes(bytes))
+			rec, err := NewCommitRecord(bytes)
+			if err != nil {
+				t.Fatalf("NewCommitRecord() error = %v", err)
+			}
 			wantTxNum := tt.txNums[len(tt.txNums)-1]
 			if got := rec.TxNumber(); got != wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, wantTxNum)
