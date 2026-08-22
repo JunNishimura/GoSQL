@@ -102,6 +102,11 @@ func TestUndoableRecords(t *testing.T) {
 			record:       mustCreateLogRecord(t, newTxRecordBytes(Rollback, 1)),
 			wantUndoable: false,
 		},
+		{
+			name:         "SetIntRecord overwrote a value and is undoable",
+			record:       mustCreateLogRecord(t, newSetIntRecordBytes(t, 1, filemanager.NewBlockId(testDataFile, 2), 80, 99)),
+			wantUndoable: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -199,6 +204,13 @@ func TestCreateLogRecord(t *testing.T) {
 			wantTxNum: 3,
 			wantType:  "<ROLLBACK 3>",
 		},
+		{
+			name:      "builds a SetIntRecord from a set int op",
+			record:    newSetIntRecordBytes(t, 4, filemanager.NewBlockId(testDataFile, 2), 80, 99),
+			wantOp:    SetInt,
+			wantTxNum: 4,
+			wantType:  "<SETINT 4 [file test.tbl, block 2] 80 99>",
+		},
 	}
 
 	for _, tt := range tests {
@@ -226,16 +238,12 @@ func TestCreateLogRecord(t *testing.T) {
 }
 
 func TestCreateLogRecordUnimplementedOp(t *testing.T) {
-	// SetInt and SetString have op codes reserved but no record type yet.
-	// They must be distinguishable from a corrupted log.
+	// SetString has an op code reserved but no record type yet. It must be
+	// distinguishable from a corrupted log.
 	tests := []struct {
 		name string
 		op   Op
 	}{
-		{
-			name: "reports SetInt as unimplemented",
-			op:   SetInt,
-		},
 		{
 			name: "reports SetString as unimplemented",
 			op:   SetString,
