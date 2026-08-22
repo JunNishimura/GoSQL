@@ -74,37 +74,6 @@ func TestStartRecordString(t *testing.T) {
 	}
 }
 
-func TestStartRecordUndo(t *testing.T) {
-	// A start record changed no data, so Undo must succeed without touching
-	// anything, whichever transaction is being undone.
-	tests := []struct {
-		name        string
-		recordTxNum int32
-		undoTxNum   int
-	}{
-		{
-			name:        "succeeds when undoing the transaction that wrote the record",
-			recordTxNum: 1,
-			undoTxNum:   1,
-		},
-		{
-			name:        "succeeds when undoing a different transaction",
-			recordTxNum: 1,
-			undoTxNum:   2,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := NewStartRecord(newTxRecordPage(t, Start, tt.recordTxNum))
-
-			if err := rec.Undo(tt.undoTxNum); err != nil {
-				t.Errorf("Undo() error = %v, want nil", err)
-			}
-		})
-	}
-}
-
 func TestWriteStartRecordToLog(t *testing.T) {
 	tests := []struct {
 		name    string

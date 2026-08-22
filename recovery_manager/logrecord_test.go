@@ -21,6 +21,57 @@ func newTxRecordPage(t *testing.T, op Op, txNum int32) *filemanager.Page {
 	return p
 }
 
+// minimalRecord implements only what a record with no data to restore should
+// have to. The assertion below stops LogRecord from growing a method that such
+// a record could satisfy only with an empty body.
+type minimalRecord struct{}
+
+func (minimalRecord) Op() Op        { return Checkpoint }
+func (minimalRecord) TxNumber() int { return noTxNum }
+
+var _ LogRecord = minimalRecord{}
+
+// Only the records that changed data implement Undoable. Recovery decides
+// whether to restore a record by that distinction alone, so a boundary record
+// that started implementing it would be undone by mistake.
+func TestUndoableRecords(t *testing.T) {
+	tests := []struct {
+		name         string
+		record       LogRecord
+		wantUndoable bool
+	}{
+		{
+			name:         "CheckpointRecord changed no data and is not undoable",
+			record:       NewCheckpointRecord(),
+			wantUndoable: false,
+		},
+		{
+			name:         "StartRecord changed no data and is not undoable",
+			record:       NewStartRecord(newTxRecordPage(t, Start, 1)),
+			wantUndoable: false,
+		},
+		{
+			name:         "CommitRecord changed no data and is not undoable",
+			record:       NewCommitRecord(newTxRecordPage(t, Commit, 1)),
+			wantUndoable: false,
+		},
+		{
+			name:         "RollbackRecord changed no data and is not undoable",
+			record:       NewRollbackRecord(newTxRecordPage(t, Rollback, 1)),
+			wantUndoable: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ok := tt.record.(Undoable)
+			if ok != tt.wantUndoable {
+				t.Errorf("implements Undoable = %v, want %v", ok, tt.wantUndoable)
+			}
+		})
+	}
+}
+
 // Op codes are written into the log file, so their numeric values are part of
 // the on-disk format and must not be reordered once logs exist.
 func TestOpValues(t *testing.T) {

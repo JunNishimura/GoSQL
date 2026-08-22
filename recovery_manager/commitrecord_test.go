@@ -95,37 +95,6 @@ func TestCommitRecordString(t *testing.T) {
 	}
 }
 
-func TestCommitRecordUndo(t *testing.T) {
-	// A commit record has nothing to roll back, so Undo must succeed without
-	// touching anything, whichever transaction is being undone.
-	tests := []struct {
-		name        string
-		recordTxNum int32
-		undoTxNum   int
-	}{
-		{
-			name:        "succeeds when undoing the transaction that wrote the record",
-			recordTxNum: 1,
-			undoTxNum:   1,
-		},
-		{
-			name:        "succeeds when undoing a different transaction",
-			recordTxNum: 1,
-			undoTxNum:   2,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCommitRecord(newTxRecordPage(t, Commit, tt.recordTxNum))
-
-			if err := rec.Undo(tt.undoTxNum); err != nil {
-				t.Errorf("Undo() error = %v, want nil", err)
-			}
-		})
-	}
-}
-
 func TestWriteCommitRecordToLog(t *testing.T) {
 	tests := []struct {
 		name    string

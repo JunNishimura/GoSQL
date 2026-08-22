@@ -27,12 +27,6 @@ func (r *CheckpointRecord) TxNumber() int {
 	return noTxNum
 }
 
-// Undo does nothing: a checkpoint record records no data change, so there is
-// nothing to restore.
-func (r *CheckpointRecord) Undo(txNum int) error {
-	return nil
-}
-
 func (r *CheckpointRecord) String() string {
 	return "<CHECKPOINT>"
 }

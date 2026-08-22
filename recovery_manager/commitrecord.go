@@ -24,12 +24,6 @@ func (r *CommitRecord) TxNumber() int {
 	return r.txNum
 }
 
-// Undo does nothing: a commit record records no data change, so there is
-// nothing to restore.
-func (r *CommitRecord) Undo(txNum int) error {
-	return nil
-}
-
 func (r *CommitRecord) String() string {
 	return fmt.Sprintf("<COMMIT %d>", r.txNum)
 }

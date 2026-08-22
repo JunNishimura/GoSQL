@@ -24,12 +24,6 @@ func (r *RollbackRecord) TxNumber() int {
 	return r.txNum
 }
 
-// Undo does nothing: a rollback record records no data change, so there is
-// nothing to restore.
-func (r *RollbackRecord) Undo(txNum int) error {
-	return nil
-}
-
 func (r *RollbackRecord) String() string {
 	return fmt.Sprintf("<ROLLBACK %d>", r.txNum)
 }

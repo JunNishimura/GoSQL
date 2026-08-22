@@ -30,34 +30,6 @@ func TestCheckpointRecordString(t *testing.T) {
 	}
 }
 
-func TestCheckpointRecordUndo(t *testing.T) {
-	// A checkpoint record changed no data, so Undo must succeed without
-	// touching anything, whichever transaction is being undone.
-	tests := []struct {
-		name      string
-		undoTxNum int
-	}{
-		{
-			name:      "succeeds for txNum 1",
-			undoTxNum: 1,
-		},
-		{
-			name:      "succeeds for txNum 2",
-			undoTxNum: 2,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := NewCheckpointRecord()
-
-			if err := rec.Undo(tt.undoTxNum); err != nil {
-				t.Errorf("Undo() error = %v, want nil", err)
-			}
-		})
-	}
-}
-
 func TestWriteCheckpointRecordToLog(t *testing.T) {
 	tests := []struct {
 		name    string
