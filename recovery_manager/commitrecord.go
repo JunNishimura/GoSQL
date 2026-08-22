@@ -3,7 +3,6 @@ package recoverymanager
 import (
 	"fmt"
 
-	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
@@ -12,8 +11,12 @@ type CommitRecord struct {
 	txNum int
 }
 
-func NewCommitRecord(p *filemanager.Page) *CommitRecord {
-	return &CommitRecord{txNum: int(p.GetInt(txNumOffset))}
+func NewCommitRecord(record []byte) (*CommitRecord, error) {
+	txNum, err := readTxRecord(record, Commit)
+	if err != nil {
+		return nil, err
+	}
+	return &CommitRecord{txNum: txNum}, nil
 }
 
 func (r *CommitRecord) Op() Op {

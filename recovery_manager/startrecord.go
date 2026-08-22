@@ -3,7 +3,6 @@ package recoverymanager
 import (
 	"fmt"
 
-	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
@@ -12,8 +11,12 @@ type StartRecord struct {
 	txNum int
 }
 
-func NewStartRecord(p *filemanager.Page) *StartRecord {
-	return &StartRecord{txNum: int(p.GetInt(txNumOffset))}
+func NewStartRecord(record []byte) (*StartRecord, error) {
+	txNum, err := readTxRecord(record, Start)
+	if err != nil {
+		return nil, err
+	}
+	return &StartRecord{txNum: txNum}, nil
 }
 
 func (r *StartRecord) Op() Op {

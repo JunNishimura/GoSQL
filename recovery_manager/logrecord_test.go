@@ -7,18 +7,60 @@ import (
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
 
-// newTxRecordPage builds the log representation shared by the record types
-// whose only payload is a transaction number: the op code, then the txNum.
-func newTxRecordPage(t *testing.T, op Op, txNum int32) *filemanager.Page {
+// mustCreateLogRecord rebuilds a record that the test knows to be well formed.
+func mustCreateLogRecord(t *testing.T, record []byte) LogRecord {
 	t.Helper()
-	p := filemanager.NewPageByBlockSize(txRecordSize)
-	if err := p.SetInt(opOffset, int32(op)); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
+	rec, err := CreateLogRecord(record)
+	if err != nil {
+		t.Fatalf("CreateLogRecord() error = %v", err)
 	}
-	if err := p.SetInt(txNumOffset, txNum); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
+	return rec
+}
+
+// asLogRecord adapts a constructor's concrete result to LogRecord. Forwarding
+// the two values directly would put a typed nil pointer into the interface,
+// which does not compare equal to nil and would hide a failed construction.
+func asLogRecord[T LogRecord](rec T, err error) (LogRecord, error) {
+	if err != nil {
+		return nil, err
 	}
-	return p
+	return rec, nil
+}
+
+// Each constructor validates the bytes it is handed, so that a truncated record
+// is reported rather than read past the end of the slice.
+func TestRecordConstructorsRejectShortRecords(t *testing.T) {
+	tests := []struct {
+		name string
+		new  func([]byte) (LogRecord, error)
+	}{
+		{
+			name: "NewStartRecord rejects a record without its txNum",
+			new:  func(b []byte) (LogRecord, error) { return asLogRecord(NewStartRecord(b)) },
+		},
+		{
+			name: "NewCommitRecord rejects a record without its txNum",
+			new:  func(b []byte) (LogRecord, error) { return asLogRecord(NewCommitRecord(b)) },
+		},
+		{
+			name: "NewRollbackRecord rejects a record without its txNum",
+			new:  func(b []byte) (LogRecord, error) { return asLogRecord(NewRollbackRecord(b)) },
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// One int wide: enough for the op code, but not for the txNum.
+			rec, err := tt.new(make([]byte, filemanager.IntBytes))
+
+			if rec != nil {
+				t.Errorf("record = %v, want nil", rec)
+			}
+			if err == nil {
+				t.Fatal("error = nil, want an error")
+			}
+		})
+	}
 }
 
 // minimalRecord implements only what a record with no data to restore should
@@ -42,22 +84,22 @@ func TestUndoableRecords(t *testing.T) {
 	}{
 		{
 			name:         "CheckpointRecord changed no data and is not undoable",
-			record:       NewCheckpointRecord(),
+			record:       mustCreateLogRecord(t, newCheckpointRecordBytes()),
 			wantUndoable: false,
 		},
 		{
 			name:         "StartRecord changed no data and is not undoable",
-			record:       NewStartRecord(newTxRecordPage(t, Start, 1)),
+			record:       mustCreateLogRecord(t, newTxRecordBytes(Start, 1)),
 			wantUndoable: false,
 		},
 		{
 			name:         "CommitRecord changed no data and is not undoable",
-			record:       NewCommitRecord(newTxRecordPage(t, Commit, 1)),
+			record:       mustCreateLogRecord(t, newTxRecordBytes(Commit, 1)),
 			wantUndoable: false,
 		},
 		{
 			name:         "RollbackRecord changed no data and is not undoable",
-			record:       NewRollbackRecord(newTxRecordPage(t, Rollback, 1)),
+			record:       mustCreateLogRecord(t, newTxRecordBytes(Rollback, 1)),
 			wantUndoable: false,
 		},
 	}
