@@ -26,6 +26,17 @@ func NewBuffer(fm *filemanager.FileManager, lm *logmanager.LogManager) *Buffer {
 	}
 }
 
+// Contents exposes the page holding the block's data, so that callers outside
+// this package can read and write the block. It hands out the buffer's own page
+// rather than a copy: a caller writes the new value through it and relies on
+// flush to put that write on disk.
+//
+// The caller must have the buffer pinned, and must call SetModified after any
+// change so that the page is written out before the buffer is reused.
+func (b *Buffer) Contents() *filemanager.Page {
+	return b.contents
+}
+
 func (b *Buffer) SetModified(txNum, lsn int) {
 	b.txNum = txNum
 	if lsn >= 0 {

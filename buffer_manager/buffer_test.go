@@ -82,6 +82,90 @@ func TestNewBuffer(t *testing.T) {
 	}
 }
 
+func TestContents(t *testing.T) {
+	tests := []struct {
+		name   string
+		offset int
+		value  int32
+	}{
+		{
+			name:   "exposes a value stored at the start of the block",
+			offset: 0,
+			value:  777,
+		},
+		{
+			name:   "exposes a value stored further into the block",
+			offset: 64,
+			value:  -12345,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+
+			page := filemanager.NewPageByBlockSize(testBlockSize)
+			if err := page.SetInt(tt.offset, tt.value); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+			if err := fm.Write(blk, page); err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+
+			buf := NewBuffer(fm, lm)
+			if err := buf.assignToBlock(blk); err != nil {
+				t.Fatalf("assignToBlock() error = %v", err)
+			}
+
+			if got := buf.Contents().GetInt(tt.offset); got != tt.value {
+				t.Errorf("Contents().GetInt(%d) = %d, want %d", tt.offset, got, tt.value)
+			}
+		})
+	}
+}
+
+// Contents must hand out the buffer's own page rather than a copy. Callers such
+// as an undo restoring a pre-image write through it and expect flush to put
+// that write on disk; a copy would silently discard the change.
+func TestContentsIsTheBufferPage(t *testing.T) {
+	const (
+		txNum         = 1
+		restoredValue = 555
+	)
+
+	fm, lm := newTestManagers(t, testBlockSize)
+	blk, err := fm.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	buf := NewBuffer(fm, lm)
+	if err := buf.assignToBlock(blk); err != nil {
+		t.Fatalf("assignToBlock() error = %v", err)
+	}
+
+	if err := buf.Contents().SetInt(0, restoredValue); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	buf.SetModified(txNum, appendLogRecord(t, lm))
+
+	if err := buf.flush(); err != nil {
+		t.Fatalf("flush() error = %v", err)
+	}
+
+	readPage := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := fm.Read(blk, readPage); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got := readPage.GetInt(0); got != restoredValue {
+		t.Errorf("value on disk = %d, want %d (Contents returned a copy)", got, restoredValue)
+	}
+}
+
 func TestPin(t *testing.T) {
 	tests := []struct {
 		name     string
