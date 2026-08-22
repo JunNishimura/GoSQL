@@ -1,16 +1,10 @@
 package recoverymanager
 
 import (
-	"errors"
 	"fmt"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
-
-// ErrUnimplementedRecord reports an op code that this package reserves but has
-// no record type for yet. Callers can tell it apart from a corrupted log, where
-// the op code itself is not one we ever write.
-var ErrUnimplementedRecord = errors.New("log record type not implemented")
 
 // Every record starts with its op code. The records that describe a
 // transaction boundary (start, commit, rollback) follow it with the
@@ -106,7 +100,11 @@ func CreateLogRecord(record []byte) (LogRecord, error) {
 		}
 		return rec, nil
 	case SetString:
-		return nil, fmt.Errorf("op %d: %w", op, ErrUnimplementedRecord)
+		rec, err := NewSetStringRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		return rec, nil
 	default:
 		return nil, fmt.Errorf("unknown log record op %d", op)
 	}

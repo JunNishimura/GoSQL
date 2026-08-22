@@ -1,7 +1,6 @@
 package recoverymanager
 
 import (
-	"errors"
 	"testing"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
@@ -105,6 +104,11 @@ func TestUndoableRecords(t *testing.T) {
 		{
 			name:         "SetIntRecord overwrote a value and is undoable",
 			record:       mustCreateLogRecord(t, newSetIntRecordBytes(t, 1, filemanager.NewBlockId(testDataFile, 2), 80, 99)),
+			wantUndoable: true,
+		},
+		{
+			name:         "SetStringRecord overwrote a value and is undoable",
+			record:       mustCreateLogRecord(t, newSetStringRecordBytes(t, 1, filemanager.NewBlockId(testDataFile, 2), 80, "hi")),
 			wantUndoable: true,
 		},
 	}
@@ -211,6 +215,13 @@ func TestCreateLogRecord(t *testing.T) {
 			wantTxNum: 4,
 			wantType:  "<SETINT 4 [file test.tbl, block 2] 80 99>",
 		},
+		{
+			name:      "builds a SetStringRecord from a set string op",
+			record:    newSetStringRecordBytes(t, 5, filemanager.NewBlockId(testDataFile, 2), 80, "hi"),
+			wantOp:    SetString,
+			wantTxNum: 5,
+			wantType:  `<SETSTRING 5 [file test.tbl, block 2] 80 "hi">`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -232,33 +243,6 @@ func TestCreateLogRecord(t *testing.T) {
 				t.Errorf("record does not implement String()")
 			} else if s := got.String(); s != tt.wantType {
 				t.Errorf("String() = %q, want %q", s, tt.wantType)
-			}
-		})
-	}
-}
-
-func TestCreateLogRecordUnimplementedOp(t *testing.T) {
-	// SetString has an op code reserved but no record type yet. It must be
-	// distinguishable from a corrupted log.
-	tests := []struct {
-		name string
-		op   Op
-	}{
-		{
-			name: "reports SetString as unimplemented",
-			op:   SetString,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec, err := CreateLogRecord(newTxRecordBytes(tt.op, 1))
-
-			if rec != nil {
-				t.Errorf("CreateLogRecord() = %v, want nil", rec)
-			}
-			if !errors.Is(err, ErrUnimplementedRecord) {
-				t.Errorf("error = %v, want it to wrap ErrUnimplementedRecord", err)
 			}
 		})
 	}
@@ -288,9 +272,6 @@ func TestCreateLogRecordUnknownOp(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("error = nil, want an error")
-			}
-			if errors.Is(err, ErrUnimplementedRecord) {
-				t.Errorf("error = %v, want it not to wrap ErrUnimplementedRecord", err)
 			}
 		})
 	}
