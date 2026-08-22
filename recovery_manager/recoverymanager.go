@@ -30,3 +30,27 @@ func NewRecoveryManager(lm *logmanager.LogManager, bm *buffermanager.BufferManag
 		txNum:         txNum,
 	}, nil
 }
+
+// Commit makes the transaction's changes permanent.
+//
+// The steps are ordered so that the commit record is never on disk before the
+// data it commits: the modified buffers are written out first, and only then is
+// the commit record appended and flushed. A crash between the two leaves the
+// transaction looking unfinished, which recovery can undo, whereas the reverse
+// order would leave a committed transaction whose changes were lost.
+func (rm *RecoveryManager) Commit() error {
+	if err := rm.bufferManager.FlushAll(rm.txNum); err != nil {
+		return fmt.Errorf("flush buffers of tx %d: %w", rm.txNum, err)
+	}
+
+	lsn, err := WriteCommitRecordToLog(rm.logManager, rm.txNum)
+	if err != nil {
+		return fmt.Errorf("write commit record for tx %d: %w", rm.txNum, err)
+	}
+
+	if err := rm.logManager.Flush(lsn); err != nil {
+		return fmt.Errorf("flush log up to lsn %d: %w", lsn, err)
+	}
+
+	return nil
+}

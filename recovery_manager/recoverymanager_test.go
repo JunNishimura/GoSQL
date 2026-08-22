@@ -8,11 +8,16 @@ import (
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
-const testNumBuffers = 3
+const (
+	testNumBuffers = 3
+	testDataFile   = "test.tbl"
+)
 
 // newTestRecoveryManagerDeps builds a log manager and a buffer manager backed by
 // the same file manager, which is how they are paired in a running database.
-func newTestRecoveryManagerDeps(t *testing.T) (*logmanager.LogManager, *buffermanager.BufferManager) {
+// The file manager is returned as well so that tests can inspect what actually
+// reached the disk.
+func newTestRecoveryManagerDeps(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager) {
 	t.Helper()
 	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
 	if err != nil {
@@ -26,7 +31,7 @@ func newTestRecoveryManagerDeps(t *testing.T) (*logmanager.LogManager, *bufferma
 	if err != nil {
 		t.Fatalf("NewBufferManager() error = %v", err)
 	}
-	return lm, bm
+	return fm, lm, bm
 }
 
 // lastLogRecord reads back the most recently appended record, since the log
@@ -51,6 +56,32 @@ func lastLogRecord(t *testing.T, lm *logmanager.LogManager) LogRecord {
 	return rec
 }
 
+// lastLogRecordOnDisk reads the most recently appended record straight from the
+// log file, bypassing the log manager's in-memory page so that a record that was
+// only appended but never flushed is not visible.
+func lastLogRecordOnDisk(t *testing.T, fm *filemanager.FileManager) LogRecord {
+	t.Helper()
+	numBlocks, err := fm.Length(testLogFile)
+	if err != nil {
+		t.Fatalf("Length() error = %v", err)
+	}
+	blk := filemanager.NewBlockId(testLogFile, numBlocks-1)
+	p := filemanager.NewPageByBlockSize(fm.BlockSize())
+	if err := fm.Read(blk, p); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	boundary := int(p.GetInt(0))
+	if boundary >= fm.BlockSize() {
+		t.Fatal("the last log block on disk holds no record")
+	}
+	rec, err := CreateLogRecord(p.GetBytes(boundary))
+	if err != nil {
+		t.Fatalf("CreateLogRecord() error = %v", err)
+	}
+	return rec
+}
+
 func TestNewRecoveryManager(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -68,7 +99,7 @@ func TestNewRecoveryManager(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lm, bm := newTestRecoveryManagerDeps(t)
+			_, lm, bm := newTestRecoveryManagerDeps(t)
 
 			rm, err := NewRecoveryManager(lm, bm, tt.txNum)
 			if err != nil {
@@ -107,7 +138,7 @@ func TestNewRecoveryManagerWritesStartRecord(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lm, bm := newTestRecoveryManagerDeps(t)
+			_, lm, bm := newTestRecoveryManagerDeps(t)
 
 			if _, err := NewRecoveryManager(lm, bm, tt.txNum); err != nil {
 				t.Fatalf("NewRecoveryManager() error = %v", err)
@@ -119,6 +150,98 @@ func TestNewRecoveryManagerWritesStartRecord(t *testing.T) {
 			}
 			if got := rec.TxNumber(); got != tt.txNum {
 				t.Errorf("TxNumber() = %d, want %d", got, tt.txNum)
+			}
+		})
+	}
+}
+
+func TestRecoveryManagerCommit(t *testing.T) {
+	// The commit record must be on disk when Commit returns, since that record
+	// is what tells recovery the transaction finished. Reading the block through
+	// the file manager checks exactly that: the log manager's own iterator would
+	// flush the page first and hide a missing flush.
+	tests := []struct {
+		name  string
+		txNum int
+	}{
+		{
+			name:  "writes a commit record for txNum 1 to disk",
+			txNum: 1,
+		},
+		{
+			name:  "writes a commit record for txNum 42 to disk",
+			txNum: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm := newTestRecoveryManagerDeps(t)
+			rm, err := NewRecoveryManager(lm, bm, tt.txNum)
+			if err != nil {
+				t.Fatalf("NewRecoveryManager() error = %v", err)
+			}
+
+			if err := rm.Commit(); err != nil {
+				t.Fatalf("Commit() error = %v", err)
+			}
+
+			rec := lastLogRecordOnDisk(t, fm)
+			if got := rec.Op(); got != Commit {
+				t.Errorf("Op() = %d, want %d (Commit)", got, Commit)
+			}
+			if got := rec.TxNumber(); got != tt.txNum {
+				t.Errorf("TxNumber() = %d, want %d", got, tt.txNum)
+			}
+		})
+	}
+}
+
+func TestRecoveryManagerCommitFlushesBuffers(t *testing.T) {
+	const txNum = 1
+
+	tests := []struct {
+		name        string
+		bufferTxNum int
+		wantFlushes int
+	}{
+		{
+			name:        "flushes a buffer modified by the committing transaction",
+			bufferTxNum: txNum,
+			wantFlushes: 1,
+		},
+		{
+			name:        "leaves a buffer modified by another transaction alone",
+			bufferTxNum: txNum + 1,
+			wantFlushes: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm := newTestRecoveryManagerDeps(t)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+			buf, err := bm.Pin(blk)
+			if err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+			buf.SetModified(tt.bufferTxNum, -1)
+
+			rm, err := NewRecoveryManager(lm, bm, txNum)
+			if err != nil {
+				t.Fatalf("NewRecoveryManager() error = %v", err)
+			}
+			before := bm.GetStats().Flushes()
+
+			if err := rm.Commit(); err != nil {
+				t.Fatalf("Commit() error = %v", err)
+			}
+
+			if got := bm.GetStats().Flushes() - before; got != tt.wantFlushes {
+				t.Errorf("Flushes() increased by %d, want %d", got, tt.wantFlushes)
 			}
 		})
 	}
