@@ -40,17 +40,28 @@ const (
 )
 
 // LogRecord is a single entry in the log. The recovery manager reads the log
-// backwards and calls Undo on the records that belong to a transaction it needs
-// to roll back.
+// backwards, looking for the records that belong to a transaction it needs to
+// roll back.
 type LogRecord interface {
 	// Op reports the kind of this record.
 	Op() Op
 	// TxNumber reports the transaction that wrote this record.
 	TxNumber() int
-	// Undo restores the state this record overwrote, on behalf of the
-	// transaction identified by txNum. Records that changed no data return nil
-	// without doing any work.
-	Undo(txNum int) error
+}
+
+// Undoable is implemented by the records that changed data and therefore have
+// a pre-image to restore. The records that only mark a transaction boundary do
+// not implement it, so recovery skips them.
+//
+// Undo writes into a page rather than performing the whole restore, so that a
+// record needs to know nothing about buffers or transactions. Pinning the
+// block, marking the buffer modified and unpinning belong to the caller.
+type Undoable interface {
+	LogRecord
+	// Block reports which block this record changed.
+	Block() *filemanager.BlockId
+	// Undo writes the pre-image into p, which must hold Block().
+	Undo(p *filemanager.Page) error
 }
 
 // CreateLogRecord rebuilds the record stored in bytes. Recovery reads the log

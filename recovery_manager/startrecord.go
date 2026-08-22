@@ -24,12 +24,6 @@ func (r *StartRecord) TxNumber() int {
 	return r.txNum
 }
 
-// Undo does nothing: a start record records no data change, so there is
-// nothing to restore.
-func (r *StartRecord) Undo(txNum int) error {
-	return nil
-}
-
 func (r *StartRecord) String() string {
 	return fmt.Sprintf("<START %d>", r.txNum)
 }
