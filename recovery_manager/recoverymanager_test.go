@@ -246,3 +246,207 @@ func TestRecoveryManagerCommitFlushesBuffers(t *testing.T) {
 		})
 	}
 }
+
+// blockOnDisk reads a block straight from the file manager, so that a value the
+// buffer pool still holds in memory does not pass for one that was written out.
+func blockOnDisk(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId) *filemanager.Page {
+	t.Helper()
+	p := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := fm.Read(blk, p); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	return p
+}
+
+// writeBlockOnDisk puts a block into the state it would be in after the
+// transaction's change had already reached disk.
+func writeBlockOnDisk(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId, set func(*filemanager.Page) error) {
+	t.Helper()
+	p := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := set(p); err != nil {
+		t.Fatalf("setting up the block: %v", err)
+	}
+	if err := fm.Write(blk, p); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+}
+
+func TestRecoveryManagerRollback(t *testing.T) {
+	// Like the commit record, the rollback record must be on disk when Rollback
+	// returns, since that record is what tells recovery the transaction is over.
+	tests := []struct {
+		name  string
+		txNum int
+	}{
+		{
+			name:  "writes a rollback record for txNum 1 to disk",
+			txNum: 1,
+		},
+		{
+			name:  "writes a rollback record for txNum 42 to disk",
+			txNum: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm := newTestRecoveryManagerDeps(t)
+			rm, err := NewRecoveryManager(lm, bm, tt.txNum)
+			if err != nil {
+				t.Fatalf("NewRecoveryManager() error = %v", err)
+			}
+
+			if err := rm.Rollback(); err != nil {
+				t.Fatalf("Rollback() error = %v", err)
+			}
+
+			rec := lastLogRecordOnDisk(t, fm)
+			if got := rec.Op(); got != Rollback {
+				t.Errorf("Op() = %d, want %d (Rollback)", got, Rollback)
+			}
+			if got := rec.TxNumber(); got != tt.txNum {
+				t.Errorf("TxNumber() = %d, want %d", got, tt.txNum)
+			}
+		})
+	}
+}
+
+func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
+	const txNum = 1
+
+	tests := []struct {
+		name string
+		// setCurrent puts the value the transaction wrote into the block.
+		setCurrent func(*filemanager.Page) error
+		// logPreImage records what the value had been before that write.
+		logPreImage func(*logmanager.LogManager, *filemanager.BlockId) (int, error)
+		verify      func(*testing.T, *filemanager.Page)
+	}{
+		{
+			name:       "restores an int the transaction overwrote",
+			setCurrent: func(p *filemanager.Page) error { return p.SetInt(0, 100) },
+			logPreImage: func(lm *logmanager.LogManager, blk *filemanager.BlockId) (int, error) {
+				return WriteSetIntRecordToLog(lm, txNum, blk, 0, 42)
+			},
+			verify: func(t *testing.T, p *filemanager.Page) {
+				if got := p.GetInt(0); got != 42 {
+					t.Errorf("GetInt(0) = %d, want 42", got)
+				}
+			},
+		},
+		{
+			name:       "restores a string the transaction overwrote",
+			setCurrent: func(p *filemanager.Page) error { return p.SetString(0, "new") },
+			logPreImage: func(lm *logmanager.LogManager, blk *filemanager.BlockId) (int, error) {
+				return WriteSetStringRecordToLog(lm, txNum, blk, 0, "old")
+			},
+			verify: func(t *testing.T, p *filemanager.Page) {
+				if got := p.GetString(0); got != "old" {
+					t.Errorf("GetString(0) = %q, want %q", got, "old")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm := newTestRecoveryManagerDeps(t)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+			writeBlockOnDisk(t, fm, blk, tt.setCurrent)
+
+			rm, err := NewRecoveryManager(lm, bm, txNum)
+			if err != nil {
+				t.Fatalf("NewRecoveryManager() error = %v", err)
+			}
+			if _, err := tt.logPreImage(lm, blk); err != nil {
+				t.Fatalf("logging the pre-image: %v", err)
+			}
+
+			if err := rm.Rollback(); err != nil {
+				t.Fatalf("Rollback() error = %v", err)
+			}
+
+			// Rollback flushes the transaction's buffers, so the restored value
+			// must be readable straight from the file.
+			tt.verify(t, blockOnDisk(t, fm, blk))
+		})
+	}
+}
+
+func TestRecoveryManagerRollbackLeavesOtherTransactionsAlone(t *testing.T) {
+	const (
+		txNum      = 1
+		otherTxNum = 2
+		mineOffset = 0
+		theirs     = 8
+	)
+
+	fm, lm, bm := newTestRecoveryManagerDeps(t)
+	blk, err := fm.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error {
+		if err := p.SetInt(mineOffset, 100); err != nil {
+			return err
+		}
+		return p.SetInt(theirs, 200)
+	})
+
+	rm, err := NewRecoveryManager(lm, bm, txNum)
+	if err != nil {
+		t.Fatalf("NewRecoveryManager() error = %v", err)
+	}
+	if _, err := WriteSetIntRecordToLog(lm, txNum, blk, mineOffset, 42); err != nil {
+		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+	}
+	if _, err := WriteSetIntRecordToLog(lm, otherTxNum, blk, theirs, 84); err != nil {
+		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+	}
+
+	if err := rm.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	p := blockOnDisk(t, fm, blk)
+	if got := p.GetInt(mineOffset); got != 42 {
+		t.Errorf("GetInt(%d) = %d, want 42 (own change should be undone)", mineOffset, got)
+	}
+	if got := p.GetInt(theirs); got != 200 {
+		t.Errorf("GetInt(%d) = %d, want 200 (another transaction's change should stand)", theirs, got)
+	}
+}
+
+// The walk backwards stops at the transaction's own start record: nothing
+// written before a transaction began can belong to it.
+func TestRecoveryManagerRollbackStopsAtItsOwnStartRecord(t *testing.T) {
+	const txNum = 1
+
+	fm, lm, bm := newTestRecoveryManagerDeps(t)
+	blk, err := fm.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error { return p.SetInt(0, 100) })
+
+	// A record carrying the same txNum, appended before the transaction starts.
+	if _, err := WriteSetIntRecordToLog(lm, txNum, blk, 0, 7); err != nil {
+		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+	}
+
+	rm, err := NewRecoveryManager(lm, bm, txNum)
+	if err != nil {
+		t.Fatalf("NewRecoveryManager() error = %v", err)
+	}
+
+	if err := rm.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if got := blockOnDisk(t, fm, blk).GetInt(0); got != 100 {
+		t.Errorf("GetInt(0) = %d, want 100 (the record before the start record must not be undone)", got)
+	}
+}

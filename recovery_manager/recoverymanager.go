@@ -54,3 +54,97 @@ func (rm *RecoveryManager) Commit() error {
 
 	return nil
 }
+
+// Rollback undoes everything the transaction did and marks it as finished.
+//
+// The order mirrors Commit: the restored blocks are written out before the
+// rollback record is appended, so the record never claims a rollback that is
+// not on disk yet. A crash in between leaves the transaction looking unfinished
+// and recovery undoes it again, which is harmless because restoring a
+// pre-image twice yields the same block.
+func (rm *RecoveryManager) Rollback() error {
+	if err := rm.undoOwnRecords(); err != nil {
+		return err
+	}
+
+	if err := rm.bufferManager.FlushAll(rm.txNum); err != nil {
+		return fmt.Errorf("flush buffers of tx %d: %w", rm.txNum, err)
+	}
+
+	lsn, err := WriteRollbackRecordToLog(rm.logManager, rm.txNum)
+	if err != nil {
+		return fmt.Errorf("write rollback record for tx %d: %w", rm.txNum, err)
+	}
+
+	if err := rm.logManager.Flush(lsn); err != nil {
+		return fmt.Errorf("flush log up to lsn %d: %w", lsn, err)
+	}
+
+	return nil
+}
+
+// undoOwnRecords walks the log backwards, restoring the pre-image of every
+// record this transaction wrote.
+//
+// Reading backwards is what makes repeated changes to the same value come out
+// right: the earliest pre-image is applied last. The walk stops at the
+// transaction's own start record, since nothing written before it began can
+// belong to it.
+func (rm *RecoveryManager) undoOwnRecords() error {
+	it, err := rm.logManager.Iterator()
+	if err != nil {
+		return fmt.Errorf("read the log to roll back tx %d: %w", rm.txNum, err)
+	}
+
+	for it.HasNext() {
+		bytes, err := it.Next()
+		if err != nil {
+			return fmt.Errorf("read the log to roll back tx %d: %w", rm.txNum, err)
+		}
+
+		rec, err := CreateLogRecord(bytes)
+		if err != nil {
+			return fmt.Errorf("roll back tx %d: %w", rm.txNum, err)
+		}
+		if rec.TxNumber() != rm.txNum {
+			continue
+		}
+		if rec.Op() == Start {
+			return nil
+		}
+
+		undoable, ok := rec.(Undoable)
+		if !ok {
+			continue
+		}
+		if err := rm.undo(undoable); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// undo restores one record's pre-image. The record only knows how to write the
+// value into a page, so pinning the block it belongs to, marking the buffer as
+// modified and unpinning are done here.
+//
+// The buffer is marked with an LSN of -1 because an undo writes no log record
+// of its own, so there is nothing the buffer has to wait for before it can be
+// flushed.
+func (rm *RecoveryManager) undo(u Undoable) error {
+	blk := u.Block()
+
+	buf, err := rm.bufferManager.Pin(blk)
+	if err != nil {
+		return fmt.Errorf("pin %s to undo a record of tx %d: %w", blk, rm.txNum, err)
+	}
+	defer rm.bufferManager.Unpin(buf)
+
+	if err := u.Undo(buf.Contents()); err != nil {
+		return fmt.Errorf("undo a record of tx %d: %w", rm.txNum, err)
+	}
+	buf.SetModified(rm.txNum, -1)
+
+	return nil
+}
