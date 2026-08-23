@@ -81,3 +81,18 @@ func (cm *ConcurrencyManager) XLock(blk *filemanager.BlockId) error {
 
 	return nil
 }
+
+// Release gives up every lock the transaction took, which is what ends it.
+// A transaction holds its locks until then, so that nothing it read can change
+// under it before it finishes.
+//
+// One release per block is enough even for a block held exclusively, which took
+// two calls on the table to acquire: the exclusive lock replaced the shared
+// count rather than adding to it.
+func (cm *ConcurrencyManager) Release() {
+	for blk := range cm.locks {
+		cm.lockTable.Unlock(&blk)
+	}
+
+	clear(cm.locks)
+}

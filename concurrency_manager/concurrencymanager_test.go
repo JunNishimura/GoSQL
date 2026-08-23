@@ -265,3 +265,70 @@ func TestConcurrencyManagerXLockRecordsNothingWhenTheSharedLockIsRefused(t *test
 		t.Errorf("locks[%v] has an entry, want none", blk)
 	}
 }
+
+// Release drops everything the transaction took, which is what ends it. A block
+// held exclusively took two calls on the table to acquire, since the shared
+// lock came first, but one release: taking the exclusive lock replaced the
+// count rather than adding to it.
+func TestConcurrencyManagerRelease(t *testing.T) {
+	lt := NewLockTable()
+	cm := NewConcurrencyManager(lt)
+	readBlk := filemanager.NewBlockId(testDataFile, 0)
+	writtenBlk := filemanager.NewBlockId(testDataFile, 1)
+
+	if err := cm.SLock(readBlk); err != nil {
+		t.Fatalf("SLock() error = %v", err)
+	}
+	if err := cm.XLock(writtenBlk); err != nil {
+		t.Fatalf("XLock() error = %v", err)
+	}
+
+	cm.Release()
+
+	if got := len(cm.locks); got != 0 {
+		t.Errorf("len(locks) = %d, want 0", got)
+	}
+	if _, present := lt.locks[*readBlk]; present {
+		t.Errorf("lockTable.locks[%v] still has an entry, want none", readBlk)
+	}
+	if _, present := lt.locks[*writtenBlk]; present {
+		t.Errorf("lockTable.locks[%v] still has an entry, want none", writtenBlk)
+	}
+}
+
+func TestConcurrencyManagerReleaseLeavesOtherTransactionsLocksAlone(t *testing.T) {
+	lt := NewLockTable()
+	first := NewConcurrencyManager(lt)
+	second := NewConcurrencyManager(lt)
+	blk := filemanager.NewBlockId(testDataFile, 0)
+
+	if err := first.SLock(blk); err != nil {
+		t.Fatalf("SLock() error = %v", err)
+	}
+	if err := second.SLock(blk); err != nil {
+		t.Fatalf("SLock() error = %v", err)
+	}
+
+	first.Release()
+
+	if got := lt.locks[*blk]; got != 1 {
+		t.Errorf("lockTable.locks[%v] = %d, want 1 (the other transaction still reads it)", blk, got)
+	}
+	if got := second.locks[*blk]; got != sharedLock {
+		t.Errorf("the other manager's locks[%v] = %d, want %d", blk, got, sharedLock)
+	}
+}
+
+func TestConcurrencyManagerReleaseWithoutAnyLocks(t *testing.T) {
+	lt := NewLockTable()
+	cm := NewConcurrencyManager(lt)
+
+	cm.Release()
+
+	if got := len(cm.locks); got != 0 {
+		t.Errorf("len(locks) = %d, want 0", got)
+	}
+	if got := len(lt.locks); got != 0 {
+		t.Errorf("len(lockTable.locks) = %d, want 0", got)
+	}
+}
