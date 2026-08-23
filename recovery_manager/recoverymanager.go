@@ -55,6 +55,38 @@ func (rm *RecoveryManager) Commit() error {
 	return nil
 }
 
+// LogSetInt records the int at offset in buf as it stands now, before the
+// caller overwrites it, and returns the LSN of that record.
+//
+// Reading the pre-image here rather than taking it from the caller is what
+// pairs this with undo: the value that goes into the log is by construction the
+// one that was there, and there is no new value to record by mistake. The
+// caller writes the new value afterwards and passes the returned LSN to
+// Buffer.SetModified, so the record is on the log before the buffer can be
+// flushed.
+func (rm *RecoveryManager) LogSetInt(buf *buffermanager.Buffer, offset int) (int, error) {
+	oldVal := buf.Contents().GetInt(offset)
+
+	lsn, err := WriteSetIntRecordToLog(rm.logManager, rm.txNum, buf.Block(), offset, oldVal)
+	if err != nil {
+		return 0, fmt.Errorf("log the int at offset %d of %s for tx %d: %w", offset, buf.Block(), rm.txNum, err)
+	}
+	return lsn, nil
+}
+
+// LogSetString records the string at offset in buf as it stands now, before the
+// caller overwrites it, and returns the LSN of that record. See LogSetInt for
+// why the pre-image is read here.
+func (rm *RecoveryManager) LogSetString(buf *buffermanager.Buffer, offset int) (int, error) {
+	oldVal := buf.Contents().GetString(offset)
+
+	lsn, err := WriteSetStringRecordToLog(rm.logManager, rm.txNum, buf.Block(), offset, oldVal)
+	if err != nil {
+		return 0, fmt.Errorf("log the string at offset %d of %s for tx %d: %w", offset, buf.Block(), rm.txNum, err)
+	}
+	return lsn, nil
+}
+
 // Rollback undoes everything the transaction did and marks it as finished.
 //
 // The order mirrors Commit: the restored blocks are written out before the
