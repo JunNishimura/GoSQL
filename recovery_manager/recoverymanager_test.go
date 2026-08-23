@@ -576,3 +576,145 @@ func TestRecoveryManagerRecoverWritesCheckpoint(t *testing.T) {
 		t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
 	}
 }
+
+// LogSetInt and LogSetString read the pre-image out of the buffer before the
+// caller overwrites it, which is the half of the write path that pairs with
+// undo. What ends up in the log has to be the old value, not the new one.
+func TestRecoveryManagerLogSetValue(t *testing.T) {
+	const txNum = 1
+
+	tests := []struct {
+		name string
+		// setOld puts the value the log record must capture into the block.
+		setOld func(*filemanager.Page) error
+		// log records that value through the recovery manager.
+		log func(*RecoveryManager, *buffermanager.Buffer) (int, error)
+		// overwrite is what the caller does after logging.
+		overwrite func(*filemanager.Page) error
+		// verify checks the record that reached the log.
+		verify func(*testing.T, LogRecord)
+	}{
+		{
+			name:   "records the int a transaction is about to overwrite",
+			setOld: func(p *filemanager.Page) error { return p.SetInt(0, 42) },
+			log: func(rm *RecoveryManager, buf *buffermanager.Buffer) (int, error) {
+				return rm.LogSetInt(buf, 0)
+			},
+			overwrite: func(p *filemanager.Page) error { return p.SetInt(0, 100) },
+			verify: func(t *testing.T, rec LogRecord) {
+				if got := rec.Op(); got != SetInt {
+					t.Errorf("Op() = %d, want %d (SetInt)", got, SetInt)
+				}
+				undoable, ok := rec.(Undoable)
+				if !ok {
+					t.Fatal("record does not implement Undoable")
+				}
+				p := filemanager.NewPageByBlockSize(testBlockSize)
+				if err := undoable.Undo(p); err != nil {
+					t.Fatalf("Undo() error = %v", err)
+				}
+				if got := p.GetInt(0); got != 42 {
+					t.Errorf("logged value = %d, want 42", got)
+				}
+			},
+		},
+		{
+			name:   "records the string a transaction is about to overwrite",
+			setOld: func(p *filemanager.Page) error { return p.SetString(0, "old") },
+			log: func(rm *RecoveryManager, buf *buffermanager.Buffer) (int, error) {
+				return rm.LogSetString(buf, 0)
+			},
+			overwrite: func(p *filemanager.Page) error { return p.SetString(0, "new") },
+			verify: func(t *testing.T, rec LogRecord) {
+				if got := rec.Op(); got != SetString {
+					t.Errorf("Op() = %d, want %d (SetString)", got, SetString)
+				}
+				undoable, ok := rec.(Undoable)
+				if !ok {
+					t.Fatal("record does not implement Undoable")
+				}
+				p := filemanager.NewPageByBlockSize(testBlockSize)
+				if err := undoable.Undo(p); err != nil {
+					t.Fatalf("Undo() error = %v", err)
+				}
+				if got := p.GetString(0); got != "old" {
+					t.Errorf("logged value = %q, want %q", got, "old")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm := newTestRecoveryManagerDeps(t)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+			writeBlockOnDisk(t, fm, blk, tt.setOld)
+
+			rm, err := NewRecoveryManager(lm, bm, txNum)
+			if err != nil {
+				t.Fatalf("NewRecoveryManager() error = %v", err)
+			}
+			buf, err := bm.Pin(blk)
+			if err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+			defer bm.Unpin(buf)
+
+			lsn, err := tt.log(rm, buf)
+			if err != nil {
+				t.Fatalf("logging the pre-image: %v", err)
+			}
+			// The caller overwrites only after the record is on the log, so a
+			// record built from the new value would show up here.
+			if err := tt.overwrite(buf.Contents()); err != nil {
+				t.Fatalf("overwriting the value: %v", err)
+			}
+
+			if lsn <= 0 {
+				t.Errorf("lsn = %d, want a positive LSN", lsn)
+			}
+			tt.verify(t, lastLogRecord(t, lm))
+		})
+	}
+}
+
+// The record has to name the block the buffer holds, since that is what undo
+// pins to put the value back.
+func TestRecoveryManagerLogSetIntRecordsTheBuffersBlock(t *testing.T) {
+	const txNum = 1
+
+	fm, lm, bm := newTestRecoveryManagerDeps(t)
+	blk, err := fm.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	rm, err := NewRecoveryManager(lm, bm, txNum)
+	if err != nil {
+		t.Fatalf("NewRecoveryManager() error = %v", err)
+	}
+	buf, err := bm.Pin(blk)
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	defer bm.Unpin(buf)
+
+	if _, err := rm.LogSetInt(buf, 0); err != nil {
+		t.Fatalf("LogSetInt() error = %v", err)
+	}
+
+	rec := lastLogRecord(t, lm)
+	if got := rec.TxNumber(); got != txNum {
+		t.Errorf("TxNumber() = %d, want %d", got, txNum)
+	}
+	undoable, ok := rec.(Undoable)
+	if !ok {
+		t.Fatal("record does not implement Undoable")
+	}
+	if got := undoable.Block(); !got.Equals(blk) {
+		t.Errorf("Block() = %v, want %v", got, blk)
+	}
+}
