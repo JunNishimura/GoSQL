@@ -109,27 +109,6 @@ func TestSLockIsPerBlock(t *testing.T) {
 	}
 }
 
-// releaseExclusiveLock stands in for Unlock, which does not exist yet. It drops
-// the entry and wakes the waiters, which is what a real release has to do.
-func releaseExclusiveLock(lt *LockTable, blk *filemanager.BlockId) {
-	lt.mu.Lock()
-	delete(lt.locks, *blk)
-	lt.mu.Unlock()
-	lt.cond.Broadcast()
-}
-
-// releaseSharedLock also stands in for Unlock. It gives up one of the shared
-// holds on the block and wakes the waiters.
-func releaseSharedLock(lt *LockTable, blk *filemanager.BlockId) {
-	lt.mu.Lock()
-	lt.locks[*blk]--
-	if lt.locks[*blk] == 0 {
-		delete(lt.locks, *blk)
-	}
-	lt.mu.Unlock()
-	lt.cond.Broadcast()
-}
-
 func TestSLockWaitsForAnExclusiveLockToBeReleased(t *testing.T) {
 	lt := NewLockTable()
 	blk := filemanager.NewBlockId(testDataFile, 0)
@@ -147,7 +126,7 @@ func TestSLockWaitsForAnExclusiveLockToBeReleased(t *testing.T) {
 		// Still waiting, which is the expected behaviour.
 	}
 
-	releaseExclusiveLock(lt, blk)
+	lt.Unlock(blk)
 
 	select {
 	case err := <-done:
@@ -243,7 +222,7 @@ func TestXLockWaitsForOtherSharedLocksToBeReleased(t *testing.T) {
 		// Still waiting, which is the expected behaviour.
 	}
 
-	releaseSharedLock(lt, blk)
+	lt.Unlock(blk)
 
 	select {
 	case err := <-done:
@@ -283,5 +262,83 @@ func TestXLockTimesOutWhileOtherSharedLocksAreHeld(t *testing.T) {
 	// shared lock the caller still holds is not lost.
 	if got := lt.locks[*blk]; got != 2 {
 		t.Errorf("locks[%v] = %d, want 2", blk, got)
+	}
+}
+
+func TestUnlock(t *testing.T) {
+	tests := []struct {
+		name string
+		// held is the count already in the table; 0 means the block has no entry.
+		held int
+		// want is the count that must remain; 0 means the entry must be gone.
+		want int
+	}{
+		{
+			name: "removes the entry when the exclusive lock is released",
+			held: -1,
+			want: 0,
+		},
+		{
+			name: "removes the entry when the last shared lock is released",
+			held: 1,
+			want: 0,
+		},
+		{
+			name: "leaves the other shared lock when two were held",
+			held: 2,
+			want: 1,
+		},
+		{
+			name: "leaves the other shared locks when several were held",
+			held: 3,
+			want: 2,
+		},
+		{
+			name: "does nothing when the block is not locked",
+			held: 0,
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lt := NewLockTable()
+			blk := filemanager.NewBlockId(testDataFile, 0)
+			if tt.held != 0 {
+				lt.locks[*blk] = tt.held
+			}
+
+			lt.Unlock(blk)
+
+			// A released block must have no entry at all. A count of zero left
+			// behind would read as a lock that nobody holds.
+			got, present := lt.locks[*blk]
+			if tt.want == 0 {
+				if present {
+					t.Errorf("locks[%v] = %d, want no entry", blk, got)
+				}
+				return
+			}
+			if got != tt.want {
+				t.Errorf("locks[%v] = %d, want %d", blk, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnlockIsPerBlock(t *testing.T) {
+	lt := NewLockTable()
+	released := filemanager.NewBlockId(testDataFile, 0)
+	other := filemanager.NewBlockId(testDataFile, 1)
+	lt.locks[*released] = 1
+	lt.locks[*other] = 3
+
+	lt.Unlock(released)
+
+	if _, present := lt.locks[*released]; present {
+		t.Errorf("locks[%v] still has an entry, want none", released)
+	}
+	if got := lt.locks[*other]; got != 3 {
+		t.Errorf("locks[%v] = %d, want 3 (another block must be untouched)", other, got)
 	}
 }

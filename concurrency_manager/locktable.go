@@ -111,6 +111,30 @@ func (lt *LockTable) XLock(blk *filemanager.BlockId) error {
 	return nil
 }
 
+// Unlock gives up one hold on blk. Releasing the last shared lock, or the
+// exclusive lock, removes the entry rather than leaving a count of zero, so
+// that a block with no entry is the only way to say it is unlocked.
+//
+// Every release wakes the waiters, not only the ones that empty the entry. A
+// shared count dropping from two to one is what an exclusive request has been
+// waiting for, and deciding which releases matter would mean Unlock knowing the
+// wait condition of every other method.
+//
+// Unlocking a block that is not locked does nothing. The concurrency manager
+// only releases what it took, so this cannot happen through it.
+func (lt *LockTable) Unlock(blk *filemanager.BlockId) {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	if held := lt.locks[*blk]; held > 1 {
+		lt.locks[*blk] = held - 1
+	} else {
+		delete(lt.locks, *blk)
+	}
+
+	lt.cond.Broadcast()
+}
+
 // hasXLock reports whether blk is held exclusively. The caller must hold mu.
 func (lt *LockTable) hasXLock(blk *filemanager.BlockId) bool {
 	return lt.locks[*blk] < 0
