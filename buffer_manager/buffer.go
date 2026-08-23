@@ -26,6 +26,13 @@ func NewBuffer(fm *filemanager.FileManager, lm *logmanager.LogManager) *Buffer {
 	}
 }
 
+// Block reports which block the buffer currently holds, or nil if the buffer
+// has never been assigned one. Callers that log a change to the block, such as
+// the recovery manager, need it to name what they changed.
+func (b *Buffer) Block() *filemanager.BlockId {
+	return b.blk
+}
+
 // Contents exposes the page holding the block's data, so that callers outside
 // this package can read and write the block. It hands out the buffer's own page
 // rather than a copy: a caller writes the new value through it and relies on
