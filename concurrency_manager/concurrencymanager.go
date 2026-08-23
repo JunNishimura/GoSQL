@@ -53,3 +53,31 @@ func (cm *ConcurrencyManager) SLock(blk *filemanager.BlockId) error {
 
 	return nil
 }
+
+// XLock makes sure the transaction may write to blk, upgrading to an exclusive
+// lock unless it already holds one.
+//
+// The shared lock is taken first because that is what the table's exclusive
+// request assumes: it treats one shared hold as the caller's own, so it can
+// only tell another reader apart once this transaction has taken its own.
+// Going straight to the table would find a count of one, read it as nobody
+// else, and take the block away from the transaction reading it.
+//
+// A failed upgrade leaves the shared lock recorded, because it really is held.
+// The caller aborts and releases it along with everything else.
+func (cm *ConcurrencyManager) XLock(blk *filemanager.BlockId) error {
+	if cm.locks[*blk] == exclusiveLock {
+		return nil
+	}
+
+	if err := cm.SLock(blk); err != nil {
+		return err
+	}
+
+	if err := cm.lockTable.XLock(blk); err != nil {
+		return err
+	}
+	cm.locks[*blk] = exclusiveLock
+
+	return nil
+}
