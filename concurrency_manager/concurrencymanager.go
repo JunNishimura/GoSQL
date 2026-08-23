@@ -33,3 +33,23 @@ func NewConcurrencyManager(lt *LockTable) *ConcurrencyManager {
 		locks:     make(map[filemanager.BlockId]lockType),
 	}
 }
+
+// SLock makes sure the transaction may read blk, taking a shared lock on it if
+// it holds none yet. Holding either kind of lock is already enough, so a block
+// this transaction has locked before needs nothing.
+//
+// Asking the table twice for the same block would count one transaction as two
+// readers, and an exclusive request would then wait for a lock that nobody
+// holds.
+func (cm *ConcurrencyManager) SLock(blk *filemanager.BlockId) error {
+	if cm.locks[*blk] != noLock {
+		return nil
+	}
+
+	if err := cm.lockTable.SLock(blk); err != nil {
+		return err
+	}
+	cm.locks[*blk] = sharedLock
+
+	return nil
+}

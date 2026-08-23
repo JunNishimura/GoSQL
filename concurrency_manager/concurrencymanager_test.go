@@ -1,7 +1,9 @@
 package concurrencymanager
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
@@ -58,5 +60,108 @@ func TestNoLockIsTheZeroValue(t *testing.T) {
 	}
 	if sharedLock == exclusiveLock {
 		t.Error("sharedLock and exclusiveLock must be distinct")
+	}
+}
+
+func TestConcurrencyManagerSLock(t *testing.T) {
+	tests := []struct {
+		name string
+		// held is what this transaction has already recorded for the block.
+		held lockType
+		// tableHeld is the count already in the lock table; 0 means no entry.
+		tableHeld int
+		wantHeld  lockType
+		wantTable int
+	}{
+		{
+			name:      "takes a shared lock on a block it holds nothing on",
+			held:      noLock,
+			tableHeld: 0,
+			wantHeld:  sharedLock,
+			wantTable: 1,
+		},
+		{
+			// Going to the table again would count the same transaction twice,
+			// which would make an exclusive request wait for a lock nobody holds.
+			name:      "does not take a second shared lock on a block it already holds",
+			held:      sharedLock,
+			tableHeld: 1,
+			wantHeld:  sharedLock,
+			wantTable: 1,
+		},
+		{
+			// An exclusive lock already allows everything a shared one does.
+			name:      "leaves an exclusive lock it already holds alone",
+			held:      exclusiveLock,
+			tableHeld: -1,
+			wantHeld:  exclusiveLock,
+			wantTable: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lt := NewLockTable()
+			cm := NewConcurrencyManager(lt)
+			blk := filemanager.NewBlockId(testDataFile, 0)
+			if tt.held != noLock {
+				cm.locks[*blk] = tt.held
+			}
+			if tt.tableHeld != 0 {
+				lt.locks[*blk] = tt.tableHeld
+			}
+
+			if err := cm.SLock(blk); err != nil {
+				t.Fatalf("SLock() error = %v", err)
+			}
+
+			if got := cm.locks[*blk]; got != tt.wantHeld {
+				t.Errorf("locks[%v] = %d, want %d", blk, got, tt.wantHeld)
+			}
+			if got := lt.locks[*blk]; got != tt.wantTable {
+				t.Errorf("lockTable.locks[%v] = %d, want %d", blk, got, tt.wantTable)
+			}
+		})
+	}
+}
+
+func TestConcurrencyManagerSLockIsPerBlock(t *testing.T) {
+	lt := NewLockTable()
+	cm := NewConcurrencyManager(lt)
+	first := filemanager.NewBlockId(testDataFile, 0)
+	second := filemanager.NewBlockId(testDataFile, 1)
+
+	if err := cm.SLock(first); err != nil {
+		t.Fatalf("SLock() error = %v", err)
+	}
+	if err := cm.SLock(second); err != nil {
+		t.Fatalf("SLock() error = %v", err)
+	}
+
+	if got := cm.locks[*first]; got != sharedLock {
+		t.Errorf("locks[%v] = %d, want %d", first, got, sharedLock)
+	}
+	if got := cm.locks[*second]; got != sharedLock {
+		t.Errorf("locks[%v] = %d, want %d", second, got, sharedLock)
+	}
+}
+
+// A lock that could not be taken must not be recorded, or the transaction would
+// later release a lock it never held and believe it may read the block.
+func TestConcurrencyManagerSLockRecordsNothingWhenTheLockIsRefused(t *testing.T) {
+	lt := NewLockTable()
+	lt.maxWaitTime = 50 * time.Millisecond
+	cm := NewConcurrencyManager(lt)
+	blk := filemanager.NewBlockId(testDataFile, 0)
+	// Another transaction holds the block exclusively and never lets go.
+	lt.locks[*blk] = -1
+
+	err := cm.SLock(blk)
+
+	if !errors.Is(err, ErrLockAbort) {
+		t.Errorf("SLock() error = %v, want %v", err, ErrLockAbort)
+	}
+	if _, present := cm.locks[*blk]; present {
+		t.Errorf("locks[%v] has an entry, want none", blk)
 	}
 }
