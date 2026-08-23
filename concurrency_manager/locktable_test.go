@@ -118,6 +118,18 @@ func releaseExclusiveLock(lt *LockTable, blk *filemanager.BlockId) {
 	lt.cond.Broadcast()
 }
 
+// releaseSharedLock also stands in for Unlock. It gives up one of the shared
+// holds on the block and wakes the waiters.
+func releaseSharedLock(lt *LockTable, blk *filemanager.BlockId) {
+	lt.mu.Lock()
+	lt.locks[*blk]--
+	if lt.locks[*blk] == 0 {
+		delete(lt.locks, *blk)
+	}
+	lt.mu.Unlock()
+	lt.cond.Broadcast()
+}
+
 func TestSLockWaitsForAnExclusiveLockToBeReleased(t *testing.T) {
 	lt := NewLockTable()
 	blk := filemanager.NewBlockId(testDataFile, 0)
@@ -174,5 +186,102 @@ func TestSLockTimesOutWhileAnExclusiveLockIsHeld(t *testing.T) {
 	// A request that gave up must leave the table as it found it.
 	if got := lt.locks[*blk]; got != -1 {
 		t.Errorf("locks[%v] = %d, want -1", blk, got)
+	}
+}
+
+// XLock is only ever called by a transaction that already holds a shared lock
+// on the block, so a count of one is the caller's own lock and nothing to wait
+// for.
+func TestXLock(t *testing.T) {
+	lt := NewLockTable()
+	blk := filemanager.NewBlockId(testDataFile, 0)
+	lt.locks[*blk] = 1
+
+	if err := lt.XLock(blk); err != nil {
+		t.Fatalf("XLock() error = %v", err)
+	}
+
+	if got := lt.locks[*blk]; got != -1 {
+		t.Errorf("locks[%v] = %d, want -1", blk, got)
+	}
+}
+
+func TestXLockIsPerBlock(t *testing.T) {
+	lt := NewLockTable()
+	locked := filemanager.NewBlockId(testDataFile, 0)
+	other := filemanager.NewBlockId(testDataFile, 1)
+	lt.locks[*locked] = 1
+	lt.locks[*other] = 3
+
+	if err := lt.XLock(locked); err != nil {
+		t.Fatalf("XLock() error = %v", err)
+	}
+
+	if got := lt.locks[*locked]; got != -1 {
+		t.Errorf("locks[%v] = %d, want -1", locked, got)
+	}
+	if got := lt.locks[*other]; got != 3 {
+		t.Errorf("locks[%v] = %d, want 3 (another block must be untouched)", other, got)
+	}
+}
+
+func TestXLockWaitsForOtherSharedLocksToBeReleased(t *testing.T) {
+	lt := NewLockTable()
+	blk := filemanager.NewBlockId(testDataFile, 0)
+	// Two shared locks: the caller's own, and one held by another transaction.
+	lt.locks[*blk] = 2
+
+	done := make(chan error, 1)
+	go func() {
+		done <- lt.XLock(blk)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("XLock() returned %v while another shared lock was held, want it to keep waiting", err)
+	case <-time.After(50 * time.Millisecond):
+		// Still waiting, which is the expected behaviour.
+	}
+
+	releaseSharedLock(lt, blk)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("XLock() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("XLock() did not return after the other shared lock was released")
+	}
+
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+	if got := lt.locks[*blk]; got != -1 {
+		t.Errorf("locks[%v] = %d, want -1", blk, got)
+	}
+}
+
+func TestXLockTimesOutWhileOtherSharedLocksAreHeld(t *testing.T) {
+	const maxWaitTime = 50 * time.Millisecond
+
+	lt := NewLockTable()
+	lt.maxWaitTime = maxWaitTime
+	blk := filemanager.NewBlockId(testDataFile, 0)
+	lt.locks[*blk] = 2
+
+	start := time.Now()
+	err := lt.XLock(blk)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrLockAbort) {
+		t.Errorf("XLock() error = %v, want %v", err, ErrLockAbort)
+	}
+	if elapsed < maxWaitTime {
+		t.Errorf("XLock() gave up after %v, want it to wait at least %v", elapsed, maxWaitTime)
+	}
+	// A request that gave up must leave the table as it found it, so that the
+	// shared lock the caller still holds is not lost.
+	if got := lt.locks[*blk]; got != 2 {
+		t.Errorf("locks[%v] = %d, want 2", blk, got)
 	}
 }
