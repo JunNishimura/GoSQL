@@ -148,3 +148,83 @@ func (rm *RecoveryManager) undo(u Undoable) error {
 
 	return nil
 }
+
+// Recover undoes every transaction that the log shows as unfinished, which is
+// what the database does on start up after a crash.
+//
+// It ends by writing a checkpoint, so that a later recovery can stop there
+// instead of walking the whole log again.
+func (rm *RecoveryManager) Recover() error {
+	if err := rm.undoUnfinishedRecords(); err != nil {
+		return err
+	}
+
+	if err := rm.bufferManager.FlushAll(rm.txNum); err != nil {
+		return fmt.Errorf("flush buffers of tx %d: %w", rm.txNum, err)
+	}
+
+	lsn, err := WriteCheckpointRecordToLog(rm.logManager)
+	if err != nil {
+		return fmt.Errorf("write checkpoint record: %w", err)
+	}
+
+	if err := rm.logManager.Flush(lsn); err != nil {
+		return fmt.Errorf("flush log up to lsn %d: %w", lsn, err)
+	}
+
+	return nil
+}
+
+// undoUnfinishedRecords walks the log backwards, restoring the pre-image of
+// every record whose transaction never committed or rolled back.
+//
+// Walking backwards is what makes the finished set usable: a transaction's
+// commit or rollback record is written after everything else it did, so it is
+// always seen before the records it settles. It is also what makes repeated
+// changes to the same value come out right, since the earliest pre-image is
+// applied last.
+//
+// The walk stops at a checkpoint. A checkpoint is only written when no
+// transaction is in progress and every buffer has been flushed, so nothing
+// before it can need undoing.
+func (rm *RecoveryManager) undoUnfinishedRecords() error {
+	it, err := rm.logManager.Iterator()
+	if err != nil {
+		return fmt.Errorf("read the log to recover: %w", err)
+	}
+
+	finished := make(map[int]struct{})
+	for it.HasNext() {
+		bytes, err := it.Next()
+		if err != nil {
+			return fmt.Errorf("read the log to recover: %w", err)
+		}
+
+		rec, err := CreateLogRecord(bytes)
+		if err != nil {
+			return fmt.Errorf("recover: %w", err)
+		}
+
+		switch rec.Op() {
+		case Checkpoint:
+			return nil
+		case Commit, Rollback:
+			finished[rec.TxNumber()] = struct{}{}
+			continue
+		}
+
+		if _, done := finished[rec.TxNumber()]; done {
+			continue
+		}
+
+		undoable, ok := rec.(Undoable)
+		if !ok {
+			continue
+		}
+		if err := rm.undo(undoable); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

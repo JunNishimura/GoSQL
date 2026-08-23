@@ -450,3 +450,129 @@ func TestRecoveryManagerRollbackStopsAtItsOwnStartRecord(t *testing.T) {
 		t.Errorf("GetInt(0) = %d, want 100 (the record before the start record must not be undone)", got)
 	}
 }
+
+func TestRecoveryManagerRecover(t *testing.T) {
+	// Recovery runs under its own transaction number, which no crashed
+	// transaction in the log can have used.
+	const recoveryTxNum = 99
+
+	tests := []struct {
+		name string
+		// writeLog replays what the log held when the database came back up.
+		writeLog func(*testing.T, *logmanager.LogManager, *filemanager.BlockId)
+		want     int32
+	}{
+		{
+			name: "undoes a transaction that never finished",
+			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
+				writeSetIntRecord(t, lm, 1, blk, 42)
+			},
+			want: 42,
+		},
+		{
+			name: "leaves a committed transaction alone",
+			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
+				writeSetIntRecord(t, lm, 1, blk, 42)
+				if _, err := WriteCommitRecordToLog(lm, 1); err != nil {
+					t.Fatalf("WriteCommitRecordToLog() error = %v", err)
+				}
+			},
+			want: 100,
+		},
+		{
+			name: "leaves a rolled back transaction alone",
+			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
+				writeSetIntRecord(t, lm, 1, blk, 42)
+				if _, err := WriteRollbackRecordToLog(lm, 1); err != nil {
+					t.Fatalf("WriteRollbackRecordToLog() error = %v", err)
+				}
+			},
+			want: 100,
+		},
+		{
+			name: "undoes one transaction while leaving a committed one alone",
+			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
+				writeSetIntRecord(t, lm, 1, blk, 42)
+				if _, err := WriteCommitRecordToLog(lm, 1); err != nil {
+					t.Fatalf("WriteCommitRecordToLog() error = %v", err)
+				}
+				writeSetIntRecord(t, lm, 2, blk, 7)
+			},
+			want: 7,
+		},
+		{
+			name: "stops at a checkpoint record",
+			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
+				writeSetIntRecord(t, lm, 1, blk, 42)
+				if _, err := WriteCheckpointRecordToLog(lm); err != nil {
+					t.Fatalf("WriteCheckpointRecordToLog() error = %v", err)
+				}
+			},
+			want: 100,
+		},
+		{
+			// Reading backwards is what makes this come out right: the oldest
+			// pre-image has to be the one applied last.
+			name: "restores the oldest pre-image when a value was overwritten twice",
+			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
+				writeSetIntRecord(t, lm, 1, blk, 1)
+				writeSetIntRecord(t, lm, 1, blk, 2)
+			},
+			want: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm := newTestRecoveryManagerDeps(t)
+			blk, err := fm.Append(testDataFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+			writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error { return p.SetInt(0, 100) })
+
+			tt.writeLog(t, lm, blk)
+
+			rm, err := NewRecoveryManager(lm, bm, recoveryTxNum)
+			if err != nil {
+				t.Fatalf("NewRecoveryManager() error = %v", err)
+			}
+
+			if err := rm.Recover(); err != nil {
+				t.Fatalf("Recover() error = %v", err)
+			}
+
+			if got := blockOnDisk(t, fm, blk).GetInt(0); got != tt.want {
+				t.Errorf("GetInt(0) = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// writeSetIntRecord logs that txNum overwrote the int at offset 0 of blk, whose
+// previous value was oldVal.
+func writeSetIntRecord(t *testing.T, lm *logmanager.LogManager, txNum int, blk *filemanager.BlockId, oldVal int32) {
+	t.Helper()
+	if _, err := WriteSetIntRecordToLog(lm, txNum, blk, 0, oldVal); err != nil {
+		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+	}
+}
+
+// Recover ends by writing a checkpoint, which is what lets a later recovery
+// stop there instead of walking the whole log again.
+func TestRecoveryManagerRecoverWritesCheckpoint(t *testing.T) {
+	fm, lm, bm := newTestRecoveryManagerDeps(t)
+	rm, err := NewRecoveryManager(lm, bm, 99)
+	if err != nil {
+		t.Fatalf("NewRecoveryManager() error = %v", err)
+	}
+
+	if err := rm.Recover(); err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+
+	rec := lastLogRecordOnDisk(t, fm)
+	if got := rec.Op(); got != Checkpoint {
+		t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
+	}
+}
