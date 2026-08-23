@@ -82,6 +82,64 @@ func TestNewBuffer(t *testing.T) {
 	}
 }
 
+func TestBlock(t *testing.T) {
+	tests := []struct {
+		name string
+		// blkNum names which of the appended blocks the buffer is assigned to.
+		blkNum int
+	}{
+		{
+			name:   "reports the first block once it is assigned",
+			blkNum: 0,
+		},
+		{
+			name:   "reports the block the buffer was last assigned to",
+			blkNum: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			blks := make([]*filemanager.BlockId, 2)
+			for i := range blks {
+				blk, err := fm.Append(testDataFile)
+				if err != nil {
+					t.Fatalf("Append() error = %v", err)
+				}
+				blks[i] = blk
+			}
+
+			buf := NewBuffer(fm, lm)
+			for i := 0; i <= tt.blkNum; i++ {
+				if err := buf.assignToBlock(blks[i]); err != nil {
+					t.Fatalf("assignToBlock() error = %v", err)
+				}
+			}
+
+			got := buf.Block()
+			if got == nil {
+				t.Fatal("Block() = nil, want non-nil")
+			}
+			if !got.Equals(blks[tt.blkNum]) {
+				t.Errorf("Block() = %v, want %v", got, blks[tt.blkNum])
+			}
+		})
+	}
+}
+
+// A buffer that has never been assigned holds no block, and callers such as the
+// recovery manager have to be able to tell that apart from a real one.
+func TestBlockBeforeAssignment(t *testing.T) {
+	fm, lm := newTestManagers(t, testBlockSize)
+
+	buf := NewBuffer(fm, lm)
+
+	if got := buf.Block(); got != nil {
+		t.Errorf("Block() = %v, want nil", got)
+	}
+}
+
 func TestContents(t *testing.T) {
 	tests := []struct {
 		name   string
