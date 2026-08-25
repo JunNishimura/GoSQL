@@ -30,3 +30,33 @@ func NewBufferList(bm *BufferManager) *BufferList {
 		pinned:        make(map[filemanager.BlockId]pinnedBuffer),
 	}
 }
+
+// Buffer returns the buffer this transaction has pinned for blk, or nil if it
+// has not pinned it.
+//
+// Asking for a block the transaction never pinned is a bug in the caller, and
+// nil is what makes it show up. Handing back some other buffer would let the
+// caller write into a block it does not hold.
+func (bl *BufferList) Buffer(blk *filemanager.BlockId) *Buffer {
+	return bl.pinned[*blk].buffer
+}
+
+// Pin pins blk for this transaction and keeps the buffer, so that Buffer can
+// hand it back and the pin can be released at the end.
+//
+// Pinning a block that is already pinned raises the count rather than replacing
+// the record. The pool counts the pins too, so releasing one of them must not
+// release the others.
+func (bl *BufferList) Pin(blk *filemanager.BlockId) error {
+	buf, err := bl.bufferManager.Pin(blk)
+	if err != nil {
+		return err
+	}
+
+	held := bl.pinned[*blk]
+	held.buffer = buf
+	held.pins++
+	bl.pinned[*blk] = held
+
+	return nil
+}
