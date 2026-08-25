@@ -114,11 +114,11 @@ type pinChange struct {
 	pinned bool
 }
 
-func pinnedBuffer(index int) pinChange {
+func pinnedAt(index int) pinChange {
 	return pinChange{index: index, pinned: true}
 }
 
-func unpinnedBuffer(index int) pinChange {
+func unpinnedAt(index int) pinChange {
 	return pinChange{index: index}
 }
 
@@ -138,32 +138,32 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 		{
 			name: "returns the buffer that was unpinned first rather than the head of the pool",
 			changes: []pinChange{
-				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
-				unpinnedBuffer(1), unpinnedBuffer(2), unpinnedBuffer(0),
+				pinnedAt(0), pinnedAt(1), pinnedAt(2),
+				unpinnedAt(1), unpinnedAt(2), unpinnedAt(0),
 			},
 			wantIndex: 1,
 		},
 		{
 			name: "returns the only buffer that has been unpinned again",
 			changes: []pinChange{
-				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
-				unpinnedBuffer(2),
+				pinnedAt(0), pinnedAt(1), pinnedAt(2),
+				unpinnedAt(2),
 			},
 			wantIndex: 2,
 		},
 		{
 			name: "sends a buffer to the back of the queue when it is unpinned again",
 			changes: []pinChange{
-				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
-				unpinnedBuffer(1), unpinnedBuffer(2), unpinnedBuffer(0),
-				pinnedBuffer(1), unpinnedBuffer(1),
+				pinnedAt(0), pinnedAt(1), pinnedAt(2),
+				unpinnedAt(1), unpinnedAt(2), unpinnedAt(0),
+				pinnedAt(1), unpinnedAt(1),
 			},
 			wantIndex: 2,
 		},
 		{
 			name: "returns nil when every buffer is pinned",
 			changes: []pinChange{
-				pinnedBuffer(0), pinnedBuffer(1), pinnedBuffer(2),
+				pinnedAt(0), pinnedAt(1), pinnedAt(2),
 			},
 			wantIndex: -1,
 		},
