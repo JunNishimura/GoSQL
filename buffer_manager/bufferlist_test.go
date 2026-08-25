@@ -194,3 +194,119 @@ func TestBufferListPinRecordsNothingWhenNoBufferIsAvailable(t *testing.T) {
 		t.Errorf("pinned[%v] has an entry, want none", blk)
 	}
 }
+
+func TestBufferListUnpin(t *testing.T) {
+	tests := []struct {
+		name     string
+		pinCalls int
+		wantPins int
+		// wantAvailable is the pool's free count afterwards. The pool only
+		// counts a buffer as free once its last pin is gone.
+		wantAvailable int
+	}{
+		{
+			name:          "drops the record when the only pin is released",
+			pinCalls:      1,
+			wantPins:      0,
+			wantAvailable: testBufferListPoolSize,
+		},
+		{
+			name:          "keeps the block pinned when one of two pins is released",
+			pinCalls:      2,
+			wantPins:      1,
+			wantAvailable: testBufferListPoolSize - 1,
+		},
+		{
+			name:          "keeps the block pinned when one of three pins is released",
+			pinCalls:      3,
+			wantPins:      2,
+			wantAvailable: testBufferListPoolSize - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bm := newTestBufferManager(t)
+			bl := NewBufferList(bm)
+			blk := filemanager.NewBlockId(testDataFile, 0)
+			for i := 0; i < tt.pinCalls; i++ {
+				if err := bl.Pin(blk); err != nil {
+					t.Fatalf("Pin() error = %v", err)
+				}
+			}
+
+			bl.Unpin(blk)
+
+			// A block with no pins left must have no record at all, so that a
+			// count of zero never reads as a buffer this transaction holds.
+			held, present := bl.pinned[*blk]
+			if tt.wantPins == 0 {
+				if present {
+					t.Errorf("pinned[%v] = %+v, want no entry", blk, held)
+				}
+			} else if held.pins != tt.wantPins {
+				t.Errorf("pinned[%v].pins = %d, want %d", blk, held.pins, tt.wantPins)
+			}
+
+			if bm.numAvailable != tt.wantAvailable {
+				t.Errorf("numAvailable = %d, want %d", bm.numAvailable, tt.wantAvailable)
+			}
+		})
+	}
+}
+
+func TestBufferListUnpinABlockItHasNotPinned(t *testing.T) {
+	bm := newTestBufferManager(t)
+	bl := NewBufferList(bm)
+
+	bl.Unpin(filemanager.NewBlockId(testDataFile, 0))
+
+	if got := len(bl.pinned); got != 0 {
+		t.Errorf("len(pinned) = %d, want 0", got)
+	}
+	if bm.numAvailable != testBufferListPoolSize {
+		t.Errorf("numAvailable = %d, want %d", bm.numAvailable, testBufferListPoolSize)
+	}
+}
+
+// UnpinAll has to release a block as many times as it was pinned. Releasing
+// each block once would leave a repeatedly pinned buffer stuck in the pool for
+// the rest of the run.
+func TestBufferListUnpinAll(t *testing.T) {
+	bm := newTestBufferManager(t)
+	bl := NewBufferList(bm)
+	once := filemanager.NewBlockId(testDataFile, 0)
+	twice := filemanager.NewBlockId(testDataFile, 1)
+
+	if err := bl.Pin(once); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := bl.Pin(twice); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+	}
+
+	bl.UnpinAll()
+
+	if got := len(bl.pinned); got != 0 {
+		t.Errorf("len(pinned) = %d, want 0", got)
+	}
+	if bm.numAvailable != testBufferListPoolSize {
+		t.Errorf("numAvailable = %d, want %d", bm.numAvailable, testBufferListPoolSize)
+	}
+}
+
+func TestBufferListUnpinAllWithoutAnyPins(t *testing.T) {
+	bm := newTestBufferManager(t)
+	bl := NewBufferList(bm)
+
+	bl.UnpinAll()
+
+	if got := len(bl.pinned); got != 0 {
+		t.Errorf("len(pinned) = %d, want 0", got)
+	}
+	if bm.numAvailable != testBufferListPoolSize {
+		t.Errorf("numAvailable = %d, want %d", bm.numAvailable, testBufferListPoolSize)
+	}
+}

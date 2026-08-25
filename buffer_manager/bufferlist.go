@@ -60,3 +60,41 @@ func (bl *BufferList) Pin(blk *filemanager.BlockId) error {
 
 	return nil
 }
+
+// Unpin gives up one pin on blk. The record is dropped once the last one is
+// gone rather than left at a count of zero, so that a block with no record is
+// the only way to say this transaction does not hold it.
+//
+// Unpinning a block this transaction never pinned does nothing. The record is
+// what names the buffer to release, so without one there is nothing to do.
+func (bl *BufferList) Unpin(blk *filemanager.BlockId) {
+	held, ok := bl.pinned[*blk]
+	if !ok {
+		return
+	}
+
+	bl.bufferManager.Unpin(held.buffer)
+
+	held.pins--
+	if held.pins == 0 {
+		delete(bl.pinned, *blk)
+		return
+	}
+	bl.pinned[*blk] = held
+}
+
+// UnpinAll releases every pin this transaction holds, which is what it does
+// when it ends.
+//
+// Each block is released as many times as it was pinned. Releasing it once
+// would leave a repeatedly pinned buffer stuck in the pool for the rest of the
+// run, since the pool only frees a buffer when its last pin is gone.
+func (bl *BufferList) UnpinAll() {
+	for _, held := range bl.pinned {
+		for range held.pins {
+			bl.bufferManager.Unpin(held.buffer)
+		}
+	}
+
+	clear(bl.pinned)
+}
