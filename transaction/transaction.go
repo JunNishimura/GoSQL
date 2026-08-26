@@ -57,3 +57,20 @@ func NewTransaction(
 		txNum:              txNum,
 	}, nil
 }
+
+// Pin keeps blk in a buffer so that the transaction can read and write it.
+// Every pin has to be matched by an Unpin, or by the release that ends the
+// transaction.
+//
+// The pin goes through the transaction's own list rather than straight to the
+// pool, which is what makes that release possible: the pool records that a
+// buffer is in use, but not by whom.
+func (tx *Transaction) Pin(blk *filemanager.BlockId) error {
+	return tx.buffers.Pin(blk)
+}
+
+// Unpin gives up one pin on blk. The transaction may still hold others, so this
+// does not necessarily free the buffer.
+func (tx *Transaction) Unpin(blk *filemanager.BlockId) {
+	tx.buffers.Unpin(blk)
+}
