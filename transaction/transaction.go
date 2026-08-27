@@ -1,6 +1,7 @@
 package transaction
 
 import (
+	"errors"
 	"fmt"
 
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
@@ -9,6 +10,12 @@ import (
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 	recoverymanager "github.com/JunNishimura/GoSQL/recovery_manager"
 )
+
+// ErrBlockNotPinned reports a read or write of a block the transaction has not
+// pinned. Pinning is the caller's job, and without a pin there is no buffer to
+// work through: reaching for whatever the pool happens to hold would read, or
+// overwrite, some other block.
+var ErrBlockNotPinned = errors.New("block not pinned")
 
 // Transaction is one unit of work against the database. It ties together the
 // three things a unit of work needs: a recovery manager to log what it changed,
@@ -73,4 +80,92 @@ func (tx *Transaction) Pin(blk *filemanager.BlockId) error {
 // does not necessarily free the buffer.
 func (tx *Transaction) Unpin(blk *filemanager.BlockId) {
 	tx.buffers.Unpin(blk)
+}
+
+// GetInt returns the int at offset in blk, taking a shared lock on the block so
+// that nobody may change it until this transaction ends. Other transactions may
+// read it at the same time.
+func (tx *Transaction) GetInt(blk *filemanager.BlockId, offset int) (int32, error) {
+	if err := tx.concurrencyManager.SLock(blk); err != nil {
+		return 0, fmt.Errorf("lock %s to read an int: %w", blk, err)
+	}
+
+	buf := tx.buffers.Buffer(blk)
+	if buf == nil {
+		return 0, fmt.Errorf("read the int at offset %d of %s: %w", offset, blk, ErrBlockNotPinned)
+	}
+
+	return buf.Contents().GetInt(offset), nil
+}
+
+// GetString returns the string at offset in blk. See GetInt for how the block
+// is locked.
+func (tx *Transaction) GetString(blk *filemanager.BlockId, offset int) (string, error) {
+	if err := tx.concurrencyManager.SLock(blk); err != nil {
+		return "", fmt.Errorf("lock %s to read a string: %w", blk, err)
+	}
+
+	buf := tx.buffers.Buffer(blk)
+	if buf == nil {
+		return "", fmt.Errorf("read the string at offset %d of %s: %w", offset, blk, ErrBlockNotPinned)
+	}
+
+	return buf.Contents().GetString(offset), nil
+}
+
+// SetInt writes val at offset in blk, taking an exclusive lock so that nobody
+// may read or write the block until this transaction ends.
+//
+// The old value is logged before the new one is written. Writing first would
+// leave the log holding the new value, so undoing the record would put back what
+// the transaction wrote and lose the change it was meant to reverse.
+//
+// The buffer is stamped with this transaction's number and the LSN of that
+// record, which is what makes the pool write the log out before the block.
+func (tx *Transaction) SetInt(blk *filemanager.BlockId, offset int, val int32) error {
+	if err := tx.concurrencyManager.XLock(blk); err != nil {
+		return fmt.Errorf("lock %s to write an int: %w", blk, err)
+	}
+
+	buf := tx.buffers.Buffer(blk)
+	if buf == nil {
+		return fmt.Errorf("write the int at offset %d of %s: %w", offset, blk, ErrBlockNotPinned)
+	}
+
+	lsn, err := tx.recoveryManager.LogSetInt(buf, offset)
+	if err != nil {
+		return err
+	}
+
+	if err := buf.Contents().SetInt(offset, val); err != nil {
+		return fmt.Errorf("write the int at offset %d of %s: %w", offset, blk, err)
+	}
+	buf.SetModified(tx.txNum, lsn)
+
+	return nil
+}
+
+// SetString writes val at offset in blk. See SetInt for the locking and the
+// order the log and the block are written in.
+func (tx *Transaction) SetString(blk *filemanager.BlockId, offset int, val string) error {
+	if err := tx.concurrencyManager.XLock(blk); err != nil {
+		return fmt.Errorf("lock %s to write a string: %w", blk, err)
+	}
+
+	buf := tx.buffers.Buffer(blk)
+	if buf == nil {
+		return fmt.Errorf("write the string at offset %d of %s: %w", offset, blk, ErrBlockNotPinned)
+	}
+
+	lsn, err := tx.recoveryManager.LogSetString(buf, offset)
+	if err != nil {
+		return err
+	}
+
+	if err := buf.Contents().SetString(offset, val); err != nil {
+		return fmt.Errorf("write the string at offset %d of %s: %w", offset, blk, err)
+	}
+	buf.SetModified(tx.txNum, lsn)
+
+	return nil
 }

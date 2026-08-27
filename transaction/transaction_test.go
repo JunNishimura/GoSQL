@@ -1,7 +1,9 @@
 package transaction
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
 	concurrencymanager "github.com/JunNishimura/GoSQL/concurrency_manager"
@@ -161,20 +163,60 @@ func appendBlock(t *testing.T, fm *filemanager.FileManager) *filemanager.BlockId
 	return blk
 }
 
-func newTestTransaction(t *testing.T) (*filemanager.FileManager, *Transaction) {
+// newTestTransaction returns a started transaction along with the pieces a test
+// needs to check what it did: the file to read blocks back from, the log to
+// find its records in, and the pool to flush through.
+func newTestTransaction(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager, *Transaction) {
 	t.Helper()
 	fm, lm, bm, lt := newTestDeps(t)
 	tx, err := NewTransaction(fm, lm, bm, lt, 1)
 	if err != nil {
 		t.Fatalf("NewTransaction() error = %v", err)
 	}
-	return fm, tx
+	return fm, lm, bm, tx
+}
+
+// lastLogRecord rebuilds the most recently appended record, since the log
+// iterator walks the log backwards.
+func lastLogRecord(t *testing.T, lm *logmanager.LogManager) recoverymanager.LogRecord {
+	t.Helper()
+	it, err := lm.Iterator()
+	if err != nil {
+		t.Fatalf("Iterator() error = %v", err)
+	}
+	if !it.HasNext() {
+		t.Fatal("HasNext() = false, want a record")
+	}
+	bytes, err := it.Next()
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	rec, err := recoverymanager.CreateLogRecord(bytes)
+	if err != nil {
+		t.Fatalf("CreateLogRecord() error = %v", err)
+	}
+	return rec
+}
+
+// undonePage applies a record's pre-image to an empty page, which is how a test
+// reads the value the record captured.
+func undonePage(t *testing.T, rec recoverymanager.LogRecord) *filemanager.Page {
+	t.Helper()
+	undoable, ok := rec.(recoverymanager.Undoable)
+	if !ok {
+		t.Fatalf("record %v does not implement Undoable", rec)
+	}
+	p := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := undoable.Undo(p); err != nil {
+		t.Fatalf("Undo() error = %v", err)
+	}
+	return p
 }
 
 // Pinning has to go through the transaction's own list rather than straight to
 // the pool, or the pin would not be released when the transaction ends.
 func TestTransactionPin(t *testing.T) {
-	fm, tx := newTestTransaction(t)
+	fm, _, _, tx := newTestTransaction(t)
 	blk := appendBlock(t, fm)
 
 	if err := tx.Pin(blk); err != nil {
@@ -191,7 +233,7 @@ func TestTransactionPin(t *testing.T) {
 }
 
 func TestTransactionUnpin(t *testing.T) {
-	fm, tx := newTestTransaction(t)
+	fm, _, _, tx := newTestTransaction(t)
 	blk := appendBlock(t, fm)
 	if err := tx.Pin(blk); err != nil {
 		t.Fatalf("Pin() error = %v", err)
@@ -207,7 +249,7 @@ func TestTransactionUnpin(t *testing.T) {
 // A pin that failed must be reported rather than swallowed, and must leave
 // nothing recorded for the transaction to release later.
 func TestTransactionPinReportsAFailure(t *testing.T) {
-	_, tx := newTestTransaction(t)
+	_, _, _, tx := newTestTransaction(t)
 	// The data file has no blocks, so reading this one cannot succeed.
 	blk := filemanager.NewBlockId(testDataFile, 0)
 
@@ -218,5 +260,265 @@ func TestTransactionPinReportsAFailure(t *testing.T) {
 	}
 	if got := tx.buffers.Buffer(blk); got != nil {
 		t.Errorf("the transaction recorded %v, want nothing", got)
+	}
+}
+
+func TestTransactionSetAndGet(t *testing.T) {
+	tests := []struct {
+		name string
+		set  func(*Transaction, *filemanager.BlockId) error
+		get  func(*Transaction, *filemanager.BlockId) (any, error)
+		want any
+	}{
+		{
+			name: "round trips an int",
+			set: func(tx *Transaction, blk *filemanager.BlockId) error {
+				return tx.SetInt(blk, 0, 99)
+			},
+			get: func(tx *Transaction, blk *filemanager.BlockId) (any, error) {
+				return tx.GetInt(blk, 0)
+			},
+			want: int32(99),
+		},
+		{
+			name: "round trips a string",
+			set: func(tx *Transaction, blk *filemanager.BlockId) error {
+				return tx.SetString(blk, 0, "hello")
+			},
+			get: func(tx *Transaction, blk *filemanager.BlockId) (any, error) {
+				return tx.GetString(blk, 0)
+			},
+			want: "hello",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, _, _, tx := newTestTransaction(t)
+			blk := appendBlock(t, fm)
+			if err := tx.Pin(blk); err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+
+			if err := tt.set(tx, blk); err != nil {
+				t.Fatalf("setting the value: %v", err)
+			}
+			got, err := tt.get(tx, blk)
+			if err != nil {
+				t.Fatalf("reading the value: %v", err)
+			}
+
+			if got != tt.want {
+				t.Errorf("read back %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The record has to capture what the value was, which means logging it before
+// the write. Writing first would log the new value and make undo a no-op.
+func TestTransactionSetIntLogsThePreImage(t *testing.T) {
+	fm, lm, _, tx := newTestTransaction(t)
+	blk := appendBlock(t, fm)
+	if err := tx.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := tx.SetInt(blk, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	if err := tx.SetInt(blk, 0, 100); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	rec := lastLogRecord(t, lm)
+	if got := rec.Op(); got != recoverymanager.SetInt {
+		t.Fatalf("Op() = %d, want %d (SetInt)", got, recoverymanager.SetInt)
+	}
+	if got := undonePage(t, rec).GetInt(0); got != 99 {
+		t.Errorf("the logged value is %d, want 99 (the value before the write)", got)
+	}
+}
+
+func TestTransactionSetStringLogsThePreImage(t *testing.T) {
+	fm, lm, _, tx := newTestTransaction(t)
+	blk := appendBlock(t, fm)
+	if err := tx.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := tx.SetString(blk, 0, "old"); err != nil {
+		t.Fatalf("SetString() error = %v", err)
+	}
+
+	if err := tx.SetString(blk, 0, "new"); err != nil {
+		t.Fatalf("SetString() error = %v", err)
+	}
+
+	rec := lastLogRecord(t, lm)
+	if got := rec.Op(); got != recoverymanager.SetString {
+		t.Fatalf("Op() = %d, want %d (SetString)", got, recoverymanager.SetString)
+	}
+	if got := undonePage(t, rec).GetString(0); got != "old" {
+		t.Errorf("the logged value is %q, want %q (the value before the write)", got, "old")
+	}
+}
+
+// The buffer has to be stamped with this transaction's number, or the pool will
+// not write it out when the transaction commits and the change is lost.
+func TestTransactionSetIntMarksTheBufferModified(t *testing.T) {
+	fm, _, bm, tx := newTestTransaction(t)
+	blk := appendBlock(t, fm)
+	if err := tx.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := tx.SetInt(blk, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	if err := bm.FlushAll(tx.txNum); err != nil {
+		t.Fatalf("FlushAll() error = %v", err)
+	}
+
+	page := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := fm.Read(blk, page); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if got := page.GetInt(0); got != 99 {
+		t.Errorf("the block on disk holds %d, want 99", got)
+	}
+}
+
+// Reading or writing a block the transaction never pinned is a bug in the
+// caller. There is no buffer to work through, so it has to be reported rather
+// than reaching for whatever the pool happens to hold.
+func TestTransactionValueAccessWithoutPinning(t *testing.T) {
+	tests := []struct {
+		name string
+		use  func(*Transaction, *filemanager.BlockId) error
+	}{
+		{
+			name: "GetInt reports that the block is not pinned",
+			use: func(tx *Transaction, blk *filemanager.BlockId) error {
+				_, err := tx.GetInt(blk, 0)
+				return err
+			},
+		},
+		{
+			name: "SetInt reports that the block is not pinned",
+			use: func(tx *Transaction, blk *filemanager.BlockId) error {
+				return tx.SetInt(blk, 0, 99)
+			},
+		},
+		{
+			name: "GetString reports that the block is not pinned",
+			use: func(tx *Transaction, blk *filemanager.BlockId) error {
+				_, err := tx.GetString(blk, 0)
+				return err
+			},
+		},
+		{
+			name: "SetString reports that the block is not pinned",
+			use: func(tx *Transaction, blk *filemanager.BlockId) error {
+				return tx.SetString(blk, 0, "hello")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, _, _, tx := newTestTransaction(t)
+			blk := appendBlock(t, fm)
+
+			err := tt.use(tx, blk)
+
+			if !errors.Is(err, ErrBlockNotPinned) {
+				t.Errorf("error = %v, want %v", err, ErrBlockNotPinned)
+			}
+		})
+	}
+}
+
+// A write takes an exclusive lock, so nobody else may read the block until this
+// transaction releases it.
+func TestTransactionSetIntKeepsOtherTransactionsOut(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	writer, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	reader, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	blk := appendBlock(t, fm)
+	for _, tx := range []*Transaction{writer, reader} {
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+	}
+	if err := writer.SetInt(blk, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := reader.GetInt(blk, 0)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("GetInt() returned %v while the block was locked for writing, want it to wait", err)
+	case <-time.After(50 * time.Millisecond):
+		// Still waiting, which is the expected behaviour.
+	}
+
+	writer.concurrencyManager.Release()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("GetInt() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetInt() did not return after the writer released its locks")
+	}
+}
+
+// A read takes a shared lock, so several transactions may read the same block
+// at once. An exclusive lock here would serialise readers for no reason.
+func TestTransactionGetIntLetsAnotherTransactionRead(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	first, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	second, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	blk := appendBlock(t, fm)
+	for _, tx := range []*Transaction{first, second} {
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+	}
+	if _, err := first.GetInt(blk, 0); err != nil {
+		t.Fatalf("GetInt() error = %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := second.GetInt(blk, 0)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("GetInt() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetInt() blocked while another transaction was only reading")
 	}
 }
