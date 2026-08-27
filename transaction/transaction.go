@@ -169,3 +169,30 @@ func (tx *Transaction) SetString(blk *filemanager.BlockId, offset int, val strin
 
 	return nil
 }
+
+// endOfFile is the block number of the dummy block that stands for a file's
+// length. No block ever has this number, so locking it contends only with other
+// transactions asking about the same length, and never with the blocks in the
+// file: extending a file leaves whatever is already in it free to read.
+const endOfFile = -1
+
+// Size returns the number of blocks in fileName, taking a shared lock on its
+// length so that nobody may extend the file until this transaction ends.
+func (tx *Transaction) Size(fileName string) (int, error) {
+	if err := tx.concurrencyManager.SLock(filemanager.NewBlockId(fileName, endOfFile)); err != nil {
+		return 0, fmt.Errorf("lock the length of %s to read it: %w", fileName, err)
+	}
+
+	return tx.fileManager.Length(fileName)
+}
+
+// Append adds a block to the end of fileName and returns it. Extending the file
+// changes its length, so this takes an exclusive lock on the length and nobody
+// may read it until this transaction ends.
+func (tx *Transaction) Append(fileName string) (*filemanager.BlockId, error) {
+	if err := tx.concurrencyManager.XLock(filemanager.NewBlockId(fileName, endOfFile)); err != nil {
+		return nil, fmt.Errorf("lock the length of %s to extend it: %w", fileName, err)
+	}
+
+	return tx.fileManager.Append(fileName)
+}

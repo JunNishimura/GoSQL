@@ -213,6 +213,38 @@ func undonePage(t *testing.T, rec recoverymanager.LogRecord) *filemanager.Page {
 	return p
 }
 
+// runInBackground calls f in a goroutine and hands back a channel carrying its
+// error, so that a test can tell waiting for a lock apart from returning.
+func runInBackground(f func() error) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		done <- f()
+	}()
+	return done
+}
+
+func assertStillWaiting(t *testing.T, done <-chan error, what string) {
+	t.Helper()
+	select {
+	case err := <-done:
+		t.Fatalf("%s returned %v while the block was locked, want it to wait", what, err)
+	case <-time.After(50 * time.Millisecond):
+		// Still waiting, which is the expected behaviour.
+	}
+}
+
+func assertReturns(t *testing.T, done <-chan error, what string) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("%s error = %v", what, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not return", what)
+	}
+}
+
 // Pinning has to go through the transaction's own list rather than straight to
 // the pool, or the pin would not be released when the transaction ends.
 func TestTransactionPin(t *testing.T) {
@@ -460,29 +492,16 @@ func TestTransactionSetIntKeepsOtherTransactionsOut(t *testing.T) {
 		t.Fatalf("SetInt() error = %v", err)
 	}
 
-	done := make(chan error, 1)
-	go func() {
+	done := runInBackground(func() error {
 		_, err := reader.GetInt(blk, 0)
-		done <- err
-	}()
+		return err
+	})
 
-	select {
-	case err := <-done:
-		t.Fatalf("GetInt() returned %v while the block was locked for writing, want it to wait", err)
-	case <-time.After(50 * time.Millisecond):
-		// Still waiting, which is the expected behaviour.
-	}
+	assertStillWaiting(t, done, "GetInt()")
 
 	writer.concurrencyManager.Release()
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("GetInt() error = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("GetInt() did not return after the writer released its locks")
-	}
+	assertReturns(t, done, "GetInt()")
 }
 
 // A read takes a shared lock, so several transactions may read the same block
@@ -507,18 +526,156 @@ func TestTransactionGetIntLetsAnotherTransactionRead(t *testing.T) {
 		t.Fatalf("GetInt() error = %v", err)
 	}
 
-	done := make(chan error, 1)
-	go func() {
+	done := runInBackground(func() error {
 		_, err := second.GetInt(blk, 0)
-		done <- err
-	}()
+		return err
+	})
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("GetInt() error = %v", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("GetInt() blocked while another transaction was only reading")
+	assertReturns(t, done, "GetInt()")
+}
+
+func TestTransactionSize(t *testing.T) {
+	tests := []struct {
+		name   string
+		blocks int
+	}{
+		{
+			name:   "reports zero for a file with no blocks",
+			blocks: 0,
+		},
+		{
+			name:   "reports one block",
+			blocks: 1,
+		},
+		{
+			name:   "reports several blocks",
+			blocks: 3,
+		},
 	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, _, _, tx := newTestTransaction(t)
+			for range tt.blocks {
+				appendBlock(t, fm)
+			}
+
+			got, err := tx.Size(testDataFile)
+			if err != nil {
+				t.Fatalf("Size() error = %v", err)
+			}
+
+			if got != tt.blocks {
+				t.Errorf("Size(%q) = %d, want %d", testDataFile, got, tt.blocks)
+			}
+		})
+	}
+}
+
+func TestTransactionAppend(t *testing.T) {
+	fm, _, _, tx := newTestTransaction(t)
+
+	first, err := tx.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	second, err := tx.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	if got := first.Number(); got != 0 {
+		t.Errorf("the first appended block is %d, want 0", got)
+	}
+	if got := second.Number(); got != 1 {
+		t.Errorf("the second appended block is %d, want 1", got)
+	}
+	length, err := fm.Length(testDataFile)
+	if err != nil {
+		t.Fatalf("Length() error = %v", err)
+	}
+	if length != 2 {
+		t.Errorf("the file holds %d blocks, want 2", length)
+	}
+}
+
+// The length of a file is guarded by a lock on a block that does not exist, one
+// past the end. Appending changes the length, so it takes that lock
+// exclusively and nobody may read the length until the transaction ends.
+func TestTransactionAppendKeepsOtherTransactionsFromReadingTheSize(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	appender, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	reader, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	if _, err := appender.Append(testDataFile); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	done := runInBackground(func() error {
+		_, err := reader.Size(testDataFile)
+		return err
+	})
+
+	assertStillWaiting(t, done, "Size()")
+
+	appender.concurrencyManager.Release()
+
+	assertReturns(t, done, "Size()")
+}
+
+// Reading the length takes a shared lock, so several transactions may read it
+// at once.
+func TestTransactionSizeLetsAnotherTransactionReadTheSize(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	first, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	second, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	if _, err := first.Size(testDataFile); err != nil {
+		t.Fatalf("Size() error = %v", err)
+	}
+
+	done := runInBackground(func() error {
+		_, err := second.Size(testDataFile)
+		return err
+	})
+
+	assertReturns(t, done, "Size()")
+}
+
+// The block that guards the length is not one of the file's own, so extending
+// the file leaves the blocks already in it free to read.
+func TestTransactionAppendLeavesTheBlocksThemselvesUnlocked(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	appender, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	reader, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	blk := appendBlock(t, fm)
+	if err := reader.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if _, err := appender.Append(testDataFile); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	done := runInBackground(func() error {
+		_, err := reader.GetInt(blk, 0)
+		return err
+	})
+
+	assertReturns(t, done, "GetInt()")
 }
