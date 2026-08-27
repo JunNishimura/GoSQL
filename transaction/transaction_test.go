@@ -679,3 +679,172 @@ func TestTransactionAppendLeavesTheBlocksThemselvesUnlocked(t *testing.T) {
 
 	assertReturns(t, done, "GetInt()")
 }
+
+// writeInt puts a value straight into a block on disk, standing for what was
+// already there before a transaction touched it.
+func writeInt(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId, val int32) {
+	t.Helper()
+	page := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := page.SetInt(0, val); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	if err := fm.Write(blk, page); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+}
+
+func readInt(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId) int32 {
+	t.Helper()
+	page := filemanager.NewPageByBlockSize(testBlockSize)
+	if err := fm.Read(blk, page); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	return page.GetInt(0)
+}
+
+// Ending a transaction is what lets the next one in. Whichever way it ends, the
+// locks it held and the buffers it pinned have to go back, or the pool and the
+// lock table would leak for the rest of the run.
+func TestTransactionEndReleasesLocksAndPins(t *testing.T) {
+	tests := []struct {
+		name string
+		end  func(*Transaction) error
+	}{
+		{
+			name: "commit releases the locks and pins",
+			end:  (*Transaction).Commit,
+		},
+		{
+			name: "rollback releases the locks and pins",
+			end:  (*Transaction).Rollback,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm, lt := newTestDeps(t)
+			tx, err := NewTransaction(fm, lm, bm, lt, 1)
+			if err != nil {
+				t.Fatalf("NewTransaction() error = %v", err)
+			}
+			other, err := NewTransaction(fm, lm, bm, lt, 2)
+			if err != nil {
+				t.Fatalf("NewTransaction() error = %v", err)
+			}
+			blk := appendBlock(t, fm)
+			if err := tx.Pin(blk); err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+			if err := tx.SetInt(blk, 0, 99); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+
+			if err := tt.end(tx); err != nil {
+				t.Fatalf("ending the transaction: %v", err)
+			}
+
+			if got := tx.buffers.Buffer(blk); got != nil {
+				t.Errorf("the transaction still records %v, want its pins to be gone", got)
+			}
+			if err := other.Pin(blk); err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+			done := runInBackground(func() error {
+				_, err := other.GetInt(blk, 0)
+				return err
+			})
+			assertReturns(t, done, "GetInt()")
+		})
+	}
+}
+
+// The commit record is what tells recovery the transaction finished, so a
+// transaction that says it committed has to have put one on the log.
+func TestTransactionCommitWritesACommitRecord(t *testing.T) {
+	const txNum = 1
+
+	fm, lm, bm, lt := newTestDeps(t)
+	tx, err := NewTransaction(fm, lm, bm, lt, txNum)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	blk := appendBlock(t, fm)
+	if err := tx.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := tx.SetInt(blk, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	rec := lastLogRecord(t, lm)
+	if got := rec.Op(); got != recoverymanager.Commit {
+		t.Errorf("Op() = %d, want %d (Commit)", got, recoverymanager.Commit)
+	}
+	if got := rec.TxNumber(); got != txNum {
+		t.Errorf("TxNumber() = %d, want %d", got, txNum)
+	}
+}
+
+func TestTransactionRollbackUndoesItsChanges(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	tx, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	blk := appendBlock(t, fm)
+	writeInt(t, fm, blk, 42)
+	if err := tx.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := tx.SetInt(blk, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+
+	if got := readInt(t, fm, blk); got != 42 {
+		t.Errorf("the block on disk holds %d, want 42 (the value before the transaction)", got)
+	}
+}
+
+// Recovery runs under its own transaction and undoes the work of every
+// transaction the log shows as unfinished.
+func TestTransactionRecover(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+	blk := appendBlock(t, fm)
+	writeInt(t, fm, blk, 42)
+
+	crashed, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	if err := crashed.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := crashed.SetInt(blk, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	// The change reached disk before the crash, but the transaction never
+	// committed, so recovery has to take it back out.
+	if err := bm.FlushAll(1); err != nil {
+		t.Fatalf("FlushAll() error = %v", err)
+	}
+
+	recoverer, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	if err := recoverer.Recover(); err != nil {
+		t.Fatalf("Recover() error = %v", err)
+	}
+
+	if got := readInt(t, fm, blk); got != 42 {
+		t.Errorf("the block on disk holds %d, want 42 (the value before the unfinished transaction)", got)
+	}
+}

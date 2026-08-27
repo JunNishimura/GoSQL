@@ -196,3 +196,44 @@ func (tx *Transaction) Append(fileName string) (*filemanager.BlockId, error) {
 
 	return tx.fileManager.Append(fileName)
 }
+
+// Commit makes the transaction's changes permanent and ends it.
+//
+// Releasing the locks and the pins is what lets the next transaction in, and it
+// happens only once the commit is on the log. A failed commit keeps them: some
+// buffers may already have been written out, so letting another transaction in
+// would show it changes that are not committed. Holding the locks stalls other
+// transactions until they give up, which is the lesser harm.
+func (tx *Transaction) Commit() error {
+	if err := tx.recoveryManager.Commit(); err != nil {
+		return err
+	}
+
+	tx.concurrencyManager.Release()
+	tx.buffers.UnpinAll()
+
+	return nil
+}
+
+// Rollback takes back everything the transaction did and ends it. See Commit
+// for why the locks and the pins are released only once that has succeeded.
+func (tx *Transaction) Rollback() error {
+	if err := tx.recoveryManager.Rollback(); err != nil {
+		return err
+	}
+
+	tx.concurrencyManager.Release()
+	tx.buffers.UnpinAll()
+
+	return nil
+}
+
+// Recover undoes every transaction the log shows as unfinished, which is what
+// the database does on start up after a crash. It has to run before any other
+// transaction, since it does not lock what it repairs.
+//
+// There is nothing to release afterwards: recovery takes no locks, and the
+// buffers it pins to restore a block are unpinned as it goes.
+func (tx *Transaction) Recover() error {
+	return tx.recoveryManager.Recover()
+}
