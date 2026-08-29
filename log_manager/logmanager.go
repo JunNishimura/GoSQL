@@ -107,6 +107,44 @@ func (lm *LogManager) Append(logRecord []byte) (int, error) {
 	return lm.latestLSN, nil
 }
 
+// Archive moves the log to destPath and starts an empty one in its place. It is
+// meant for after recovery, when nothing in the log is needed any more except
+// to look back at.
+//
+// Whatever is still only in the page is written out first, so that the archived
+// file holds every record and can be read as a log on its own.
+//
+// The LSN carries on rather than starting over. Buffers still hold the numbers
+// they were given, and those records are on disk in the archived file, so
+// nothing is waiting to be written: starting over would make every one of them
+// look newer than the log and force a pointless flush.
+//
+// The manager itself is reused, which is what keeps the buffer pool working:
+// every buffer holds the manager it was built with, so a replacement would
+// leave them writing to the log that was archived.
+func (lm *LogManager) Archive(destPath string) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
+	if err := lm.flush(); err != nil {
+		return err
+	}
+
+	if err := lm.fileManager.Archive(lm.logFile, destPath); err != nil {
+		return err
+	}
+
+	lm.logPage = filemanager.NewPageByBlockSize(lm.fileManager.BlockSize())
+	blk, err := lm.appendNewBlock()
+	if err != nil {
+		return err
+	}
+	lm.currentBlock = blk
+	lm.lastSavedLSN = lm.latestLSN
+
+	return nil
+}
+
 func (lm *LogManager) Iterator() (*LogIterator, error) {
 	if err := lm.flush(); err != nil {
 		return nil, err
