@@ -27,6 +27,10 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) format:
 
 Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`. Scope is optional.
 
+Keep the body to five lines at most. Say why the change was made, not what the
+diff already shows. Longer reasoning belongs in a doc comment or a pull request
+description, where it stays next to the code or the discussion it came from.
+
 ## Unit Tests
 
 Use Table Driven Tests to group multiple cases for the same function. Each test struct element must be written across multiple lines for readability.
