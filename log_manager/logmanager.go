@@ -60,13 +60,21 @@ func (lm *LogManager) appendNewBlock() (*filemanager.BlockId, error) {
 	return blk, nil
 }
 
+// Flush writes the log out far enough that the record with the given LSN is on
+// disk. A buffer calls this before writing its block, so that the record
+// describing a change is durable before the change itself.
 func (lm *LogManager) Flush(lsn int) error {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
 	if lsn > lm.lastSavedLSN {
 		return lm.flush()
 	}
 	return nil
 }
 
+// flush writes the page out unconditionally. The caller must hold mu: it reads
+// and writes the page and the saved LSN, which Append changes as it goes.
 func (lm *LogManager) flush() error {
 	if err := lm.fileManager.Write(lm.currentBlock, lm.logPage); err != nil {
 		return err
@@ -145,7 +153,13 @@ func (lm *LogManager) Archive(destPath string) error {
 	return nil
 }
 
+// Iterator walks the log backwards, newest record first. The page is written out
+// first so that the iterator, which reads through the file manager, sees the
+// records that were still only in memory.
 func (lm *LogManager) Iterator() (*LogIterator, error) {
+	lm.mu.Lock()
+	defer lm.mu.Unlock()
+
 	if err := lm.flush(); err != nil {
 		return nil, err
 	}
