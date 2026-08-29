@@ -2,6 +2,7 @@ package filemanager
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -182,5 +183,100 @@ func TestLength(t *testing.T) {
 				t.Errorf("Length() = %d, want %d", length, tt.want)
 			}
 		})
+	}
+}
+
+// writeFirstBlock puts a value into block 0 of fileName, so that a test can tell
+// one file from another by its contents.
+func writeFirstBlock(t *testing.T, fm *FileManager, fileName string, value int32) {
+	t.Helper()
+	blk, err := fm.Append(fileName)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	page := NewPageByBlockSize(testBlockSize)
+	if err := page.SetInt(0, value); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	if err := fm.Write(blk, page); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+}
+
+func readFirstBlock(t *testing.T, fm *FileManager, fileName string) int32 {
+	t.Helper()
+	page := NewPageByBlockSize(testBlockSize)
+	if err := fm.Read(NewBlockId(fileName, 0), page); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	return page.GetInt(0)
+}
+
+func TestArchive(t *testing.T) {
+	fm, dir := newTestFileManager(t)
+	writeFirstBlock(t, fm, testFileName, 100)
+	destPath := filepath.Join(dir, "archive", "old.db")
+
+	if err := fm.Archive(testFileName, destPath); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	// The destination directory is created along the way, so the caller does
+	// not have to prepare it.
+	archived, err := NewFileManager(filepath.Dir(destPath), testBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	if got := readFirstBlock(t, archived, filepath.Base(destPath)); got != 100 {
+		t.Errorf("the archived file holds %d, want 100", got)
+	}
+}
+
+// The manager keeps every file it has opened, so archiving has to close and
+// forget the handle. Otherwise the next read of that name would follow the
+// handle to the file that was moved away, and the archive would keep growing
+// instead of a new file being started.
+func TestArchiveLeavesTheNameFree(t *testing.T) {
+	fm, dir := newTestFileManager(t)
+	writeFirstBlock(t, fm, testFileName, 100)
+
+	if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	got, err := fm.Length(testFileName)
+	if err != nil {
+		t.Fatalf("Length() error = %v", err)
+	}
+	if got != 0 {
+		t.Errorf("Length(%q) = %d, want 0 (the name should refer to a new, empty file)", testFileName, got)
+	}
+}
+
+// Archiving exists to keep the old file, so it must not quietly replace one
+// that is already there.
+func TestArchiveDoesNotReplaceAnExistingArchive(t *testing.T) {
+	fm, dir := newTestFileManager(t)
+	destPath := filepath.Join(dir, "archive", "old.db")
+	writeFirstBlock(t, fm, testFileName, 100)
+	if err := fm.Archive(testFileName, destPath); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+	writeFirstBlock(t, fm, testFileName, 200)
+
+	err := fm.Archive(testFileName, destPath)
+
+	if err == nil {
+		t.Fatal("Archive() error = nil, want an error")
+	}
+	archived, err := NewFileManager(filepath.Dir(destPath), testBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	if got := readFirstBlock(t, archived, filepath.Base(destPath)); got != 100 {
+		t.Errorf("the archived file holds %d, want 100 (the first archive must survive)", got)
+	}
+	if got := readFirstBlock(t, fm, testFileName); got != 200 {
+		t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
 	}
 }
