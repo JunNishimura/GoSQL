@@ -23,6 +23,13 @@ const (
 // the log manager and lock table it only needs to build its own managers.
 func newTestDeps(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager, *concurrencymanager.LockTable) {
 	t.Helper()
+	return newTestDepsWithPool(t, testNumBuffers)
+}
+
+// newTestDepsWithPool is newTestDeps for tests that need the pool to be a known
+// size, so that they can tell a transaction is holding a buffer.
+func newTestDepsWithPool(t *testing.T, numBuffers int) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager, *concurrencymanager.LockTable) {
+	t.Helper()
 	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
 	if err != nil {
 		t.Fatalf("NewFileManager() error = %v", err)
@@ -31,7 +38,7 @@ func newTestDeps(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager
 	if err != nil {
 		t.Fatalf("NewLogManager() error = %v", err)
 	}
-	bm, err := buffermanager.NewBufferManager(fm, lm, testNumBuffers)
+	bm, err := buffermanager.NewBufferManager(fm, lm, numBuffers)
 	if err != nil {
 		t.Fatalf("NewBufferManager() error = %v", err)
 	}
@@ -470,8 +477,9 @@ func TestTransactionValueAccessWithoutPinning(t *testing.T) {
 	}
 }
 
-// A write takes an exclusive lock, so nobody else may read the block until this
-// transaction releases it.
+// A write takes an exclusive lock, so nobody else may look at the block until
+// this transaction releases it. Pinning is what waits: a transaction that may
+// not read the block has no business holding a buffer for it either.
 func TestTransactionSetIntKeepsOtherTransactionsOut(t *testing.T) {
 	fm, lm, bm, lt := newTestDeps(t)
 	writer, err := NewTransaction(fm, lm, bm, lt, 1)
@@ -483,25 +491,22 @@ func TestTransactionSetIntKeepsOtherTransactionsOut(t *testing.T) {
 		t.Fatalf("NewTransaction() error = %v", err)
 	}
 	blk := appendBlock(t, fm)
-	for _, tx := range []*Transaction{writer, reader} {
-		if err := tx.Pin(blk); err != nil {
-			t.Fatalf("Pin() error = %v", err)
-		}
+	if err := writer.Pin(blk); err != nil {
+		t.Fatalf("Pin() error = %v", err)
 	}
 	if err := writer.SetInt(blk, 0, 99); err != nil {
 		t.Fatalf("SetInt() error = %v", err)
 	}
 
 	done := runInBackground(func() error {
-		_, err := reader.GetInt(blk, 0)
-		return err
+		return reader.Pin(blk)
 	})
 
-	assertStillWaiting(t, done, "GetInt()")
+	assertStillWaiting(t, done, "Pin()")
 
 	writer.concurrencyManager.Release()
 
-	assertReturns(t, done, "GetInt()")
+	assertReturns(t, done, "Pin()")
 }
 
 // A read takes a shared lock, so several transactions may read the same block
@@ -847,4 +852,56 @@ func TestTransactionRecover(t *testing.T) {
 	if got := readInt(t, fm, blk); got != 42 {
 		t.Errorf("the block on disk holds %d, want 42 (the value before the unfinished transaction)", got)
 	}
+}
+
+// Taking the lock before the buffer is the point of locking at pin time. A
+// transaction blocked on a lock holds no buffer, so contention over one block
+// cannot empty the pool for everybody else.
+//
+// The writer unpins but keeps its lock, which is the ordinary shape of a write:
+// the buffer goes back to the pool while the lock is held until the transaction
+// ends.
+func TestTransactionPinDoesNotHoldABufferWhileWaiting(t *testing.T) {
+	fm, lm, bm, lt := newTestDepsWithPool(t, 1)
+	writer, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	reader, err := NewTransaction(fm, lm, bm, lt, 2)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	other, err := NewTransaction(fm, lm, bm, lt, 3)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	locked := appendBlock(t, fm)
+	free := appendBlock(t, fm)
+
+	if err := writer.Pin(locked); err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	if err := writer.SetInt(locked, 0, 99); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	writer.Unpin(locked)
+
+	blocked := runInBackground(func() error {
+		return reader.Pin(locked)
+	})
+	assertStillWaiting(t, blocked, "Pin()")
+
+	// The pool holds one buffer and nobody is using it, so a transaction with
+	// no interest in the locked block must still be able to work.
+	done := runInBackground(func() error {
+		return other.Pin(free)
+	})
+	assertReturns(t, done, "Pin()")
+
+	// Give the buffer back before releasing the lock, or the waiting pin would
+	// only swap one thing to wait for with another.
+	other.Unpin(free)
+
+	writer.concurrencyManager.Release()
+	assertReturns(t, blocked, "Pin()")
 }
