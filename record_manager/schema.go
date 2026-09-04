@@ -9,6 +9,9 @@ import (
 // ErrFieldNotFound reports a lookup of a field the schema does not have.
 var ErrFieldNotFound = errors.New("field not found")
 
+// ErrDuplicateField reports an attempt to add a field the schema already has.
+var ErrDuplicateField = errors.New("duplicate field")
+
 // FieldType is the type of a field's values. A schema records it so that
 // callers know which of the transaction's typed accessors to reach for, and so
 // that a layout can work out how much room a value needs.
@@ -56,22 +59,32 @@ func NewSchema() *Schema {
 
 // AddField adds a field of the given type and length. length is the character
 // limit for a varchar and is ignored for an int.
-func (s *Schema) AddField(fieldName string, fieldType FieldType, length int) {
+//
+// A name the schema already has is refused rather than redefined. Redefining it
+// would leave the name in fields twice, and a layout walking those would give
+// the one field two offsets and count its bytes twice.
+func (s *Schema) AddField(fieldName string, fieldType FieldType, length int) error {
+	if _, ok := s.info[fieldName]; ok {
+		return fmt.Errorf("add field %q: %w", fieldName, ErrDuplicateField)
+	}
+
 	s.fields = append(s.fields, fieldName)
 	s.info[fieldName] = fieldInfo{
 		fieldType: fieldType,
 		length:    length,
 	}
+
+	return nil
 }
 
 // AddIntField adds an int field, which needs no length of its own.
-func (s *Schema) AddIntField(fieldName string) {
-	s.AddField(fieldName, FieldTypeInt, 0)
+func (s *Schema) AddIntField(fieldName string) error {
+	return s.AddField(fieldName, FieldTypeInt, 0)
 }
 
 // AddStringField adds a varchar field holding at most length characters.
-func (s *Schema) AddStringField(fieldName string, length int) {
-	s.AddField(fieldName, FieldTypeVarchar, length)
+func (s *Schema) AddStringField(fieldName string, length int) error {
+	return s.AddField(fieldName, FieldTypeVarchar, length)
 }
 
 // Add copies fieldName from other into this schema. It is how a query's output
@@ -83,17 +96,36 @@ func (s *Schema) Add(fieldName string, other *Schema) error {
 		return fmt.Errorf("copy field %q from the other schema: %w", fieldName, ErrFieldNotFound)
 	}
 
-	s.AddField(fieldName, info.fieldType, info.length)
-
-	return nil
+	return s.AddField(fieldName, info.fieldType, info.length)
 }
 
 // AddAll copies every field of other into this schema, keeping other's order.
-func (s *Schema) AddAll(other *Schema) {
+//
+// Nothing is copied unless all of it can be: a schema left holding half of
+// another one is neither of the two the caller meant to combine, and the caller
+// cannot tell from the error how far it got.
+// The clashing names are looked for before anything is copied. Leaving it to
+// AddField would report the clash just as well, but only after the fields ahead
+// of it had already been added.
+func (s *Schema) AddAll(other *Schema) error {
+	for _, fieldName := range other.fields {
+		if _, ok := s.info[fieldName]; ok {
+			return fmt.Errorf("copy every field of the other schema: add field %q: %w", fieldName, ErrDuplicateField)
+		}
+	}
+
+	// AddField cannot fail here: the loop above ruled out a clash with this
+	// schema, and other cannot hold a name twice for the same reason. The error
+	// is returned rather than dropped so that this stays true if AddField grows
+	// another way to refuse a field.
 	for _, fieldName := range other.fields {
 		info := other.info[fieldName]
-		s.AddField(fieldName, info.fieldType, info.length)
+		if err := s.AddField(fieldName, info.fieldType, info.length); err != nil {
+			return err
+		}
 	}
+
+	return nil
 }
 
 // Fields returns the field names in the order they were added.

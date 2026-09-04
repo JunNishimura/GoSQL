@@ -6,6 +6,27 @@ import (
 	"testing"
 )
 
+// mustAddIntField adds an int field as part of a test's setup. A schema that
+// refuses it means the test itself is broken, not that the assertion failed, so
+// it stops the test rather than reporting a difference.
+func mustAddIntField(t *testing.T, s *Schema, fieldName string) {
+	t.Helper()
+
+	if err := s.AddIntField(fieldName); err != nil {
+		t.Fatalf("AddIntField(%q) returned error: %v", fieldName, err)
+	}
+}
+
+// mustAddStringField adds a varchar field as part of a test's setup. See
+// mustAddIntField for why it stops the test.
+func mustAddStringField(t *testing.T, s *Schema, fieldName string, length int) {
+	t.Helper()
+
+	if err := s.AddStringField(fieldName, length); err != nil {
+		t.Fatalf("AddStringField(%q, %d) returned error: %v", fieldName, length, err)
+	}
+}
+
 func TestSchemaAddField(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -36,7 +57,9 @@ func TestSchemaAddField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddField(tt.fieldName, tt.fieldType, tt.length)
+			if err := s.AddField(tt.fieldName, tt.fieldType, tt.length); err != nil {
+				t.Fatalf("AddField(%q, %d, %d) returned error: %v", tt.fieldName, tt.fieldType, tt.length, err)
+			}
 
 			if !s.HasField(tt.fieldName) {
 				t.Fatalf("HasField(%q) = false, want true", tt.fieldName)
@@ -75,7 +98,7 @@ func TestSchemaAddIntField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddIntField(tt.fieldName)
+			mustAddIntField(t, s, tt.fieldName)
 
 			gotType, err := s.Type(tt.fieldName)
 			if err != nil {
@@ -117,7 +140,7 @@ func TestSchemaAddStringField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddStringField(tt.fieldName, tt.length)
+			mustAddStringField(t, s, tt.fieldName, tt.length)
 
 			gotType, err := s.Type(tt.fieldName)
 			if err != nil {
@@ -138,26 +161,85 @@ func TestSchemaAddStringField(t *testing.T) {
 	}
 }
 
+func TestSchemaAddDuplicateField(t *testing.T) {
+	tests := []struct {
+		name string
+		add  func(t *testing.T, s *Schema) error
+	}{
+		{
+			name: "AddField refuses a name the schema already has",
+			add: func(_ *testing.T, s *Schema) error {
+				return s.AddField("id", FieldTypeVarchar, 20)
+			},
+		},
+		{
+			name: "AddIntField refuses a name the schema already has",
+			add: func(_ *testing.T, s *Schema) error {
+				return s.AddIntField("id")
+			},
+		},
+		{
+			name: "AddStringField refuses a name the schema already has",
+			add: func(_ *testing.T, s *Schema) error {
+				return s.AddStringField("id", 20)
+			},
+		},
+		{
+			name: "Add refuses a name the schema already has",
+			add: func(t *testing.T, s *Schema) error {
+				other := NewSchema()
+				mustAddStringField(t, other, "id", 20)
+				return s.Add("id", other)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewSchema()
+			mustAddIntField(t, s, "id")
+			mustAddStringField(t, s, "name", 20)
+
+			if err := tt.add(t, s); !errors.Is(err, ErrDuplicateField) {
+				t.Fatalf("adding a duplicate field returned error %v, want %v", err, ErrDuplicateField)
+			}
+
+			want := []string{"id", "name"}
+			if got := s.Fields(); !slices.Equal(got, want) {
+				t.Errorf("Fields() = %v, want %v", got, want)
+			}
+
+			gotType, err := s.Type("id")
+			if err != nil {
+				t.Fatalf("Type(\"id\") returned error: %v", err)
+			}
+			if gotType != FieldTypeInt {
+				t.Errorf("Type(\"id\") = %d, want %d: the refused add redefined the field", gotType, FieldTypeInt)
+			}
+		})
+	}
+}
+
 func TestSchemaFields(t *testing.T) {
 	tests := []struct {
 		name  string
-		build func() *Schema
+		build func(t *testing.T) *Schema
 		want  []string
 	}{
 		{
 			name: "returns an empty slice for a schema with no fields",
-			build: func() *Schema {
+			build: func(_ *testing.T) *Schema {
 				return NewSchema()
 			},
 			want: []string{},
 		},
 		{
 			name: "returns the field names in the order they were added",
-			build: func() *Schema {
+			build: func(t *testing.T) *Schema {
 				s := NewSchema()
-				s.AddIntField("id")
-				s.AddStringField("name", 20)
-				s.AddIntField("age")
+				mustAddIntField(t, s, "id")
+				mustAddStringField(t, s, "name", 20)
+				mustAddIntField(t, s, "age")
 				return s
 			},
 			want: []string{"id", "name", "age"},
@@ -166,7 +248,7 @@ func TestSchemaFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.build().Fields(); !slices.Equal(got, tt.want) {
+			if got := tt.build(t).Fields(); !slices.Equal(got, tt.want) {
 				t.Errorf("Fields() = %v, want %v", got, tt.want)
 			}
 		})
@@ -198,9 +280,9 @@ func TestSchemaFieldsDoesNotAliasTheSchema(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddIntField("id")
-			s.AddStringField("name", 20)
-			s.AddIntField("age")
+			mustAddIntField(t, s, "id")
+			mustAddStringField(t, s, "name", 20)
+			mustAddIntField(t, s, "age")
 
 			tt.mutate(s.Fields())
 
@@ -232,8 +314,8 @@ func TestSchemaHasField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddIntField("id")
-			s.AddStringField("name", 20)
+			mustAddIntField(t, s, "id")
+			mustAddStringField(t, s, "name", 20)
 
 			if got := s.HasField(tt.fieldName); got != tt.want {
 				t.Errorf("HasField(%q) = %t, want %t", tt.fieldName, got, tt.want)
@@ -256,7 +338,7 @@ func TestSchemaTypeUnknownField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddIntField("id")
+			mustAddIntField(t, s, "id")
 
 			if _, err := s.Type(tt.fieldName); !errors.Is(err, ErrFieldNotFound) {
 				t.Errorf("Type(%q) error = %v, want %v", tt.fieldName, err, ErrFieldNotFound)
@@ -279,7 +361,7 @@ func TestSchemaLengthUnknownField(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
-			s.AddIntField("id")
+			mustAddIntField(t, s, "id")
 
 			if _, err := s.Length(tt.fieldName); !errors.Is(err, ErrFieldNotFound) {
 				t.Errorf("Length(%q) error = %v, want %v", tt.fieldName, err, ErrFieldNotFound)
@@ -322,8 +404,8 @@ func TestSchemaAdd(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			other := NewSchema()
-			other.AddIntField("id")
-			other.AddStringField("name", 20)
+			mustAddIntField(t, other, "id")
+			mustAddStringField(t, other, "name", 20)
 
 			s := NewSchema()
 			err := s.Add(tt.fieldName, other)
@@ -360,21 +442,21 @@ func TestSchemaAdd(t *testing.T) {
 func TestSchemaAddAll(t *testing.T) {
 	tests := []struct {
 		name  string
-		build func() *Schema
+		build func(t *testing.T) *Schema
 		want  []string
 	}{
 		{
 			name: "copies every field of the other schema in its order",
-			build: func() *Schema {
+			build: func(_ *testing.T) *Schema {
 				return NewSchema()
 			},
 			want: []string{"id", "name"},
 		},
 		{
 			name: "appends the other schema's fields after the existing ones",
-			build: func() *Schema {
+			build: func(t *testing.T) *Schema {
 				s := NewSchema()
-				s.AddIntField("age")
+				mustAddIntField(t, s, "age")
 				return s
 			},
 			want: []string{"age", "id", "name"},
@@ -384,11 +466,13 @@ func TestSchemaAddAll(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			other := NewSchema()
-			other.AddIntField("id")
-			other.AddStringField("name", 20)
+			mustAddIntField(t, other, "id")
+			mustAddStringField(t, other, "name", 20)
 
-			s := tt.build()
-			s.AddAll(other)
+			s := tt.build(t)
+			if err := s.AddAll(other); err != nil {
+				t.Fatalf("AddAll(other) returned error: %v", err)
+			}
 
 			if got := s.Fields(); !slices.Equal(got, tt.want) {
 				t.Fatalf("Fields() = %v, want %v", got, tt.want)
@@ -400,6 +484,50 @@ func TestSchemaAddAll(t *testing.T) {
 			}
 			if gotLength != 20 {
 				t.Errorf("Length(\"name\") = %d, want 20", gotLength)
+			}
+		})
+	}
+}
+
+func TestSchemaAddAllDuplicateField(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(t *testing.T) *Schema
+		want  []string
+	}{
+		{
+			name: "copies nothing when the other schema's first field is already present",
+			build: func(t *testing.T) *Schema {
+				s := NewSchema()
+				mustAddIntField(t, s, "id")
+				return s
+			},
+			want: []string{"id"},
+		},
+		{
+			name: "copies nothing when the clash is on a field after the first",
+			build: func(t *testing.T) *Schema {
+				s := NewSchema()
+				mustAddStringField(t, s, "name", 20)
+				return s
+			},
+			want: []string{"name"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			other := NewSchema()
+			mustAddIntField(t, other, "id")
+			mustAddStringField(t, other, "name", 20)
+
+			s := tt.build(t)
+			if err := s.AddAll(other); !errors.Is(err, ErrDuplicateField) {
+				t.Fatalf("AddAll(other) error = %v, want %v", err, ErrDuplicateField)
+			}
+
+			if got := s.Fields(); !slices.Equal(got, tt.want) {
+				t.Errorf("Fields() = %v, want %v: AddAll copied part of the other schema", got, tt.want)
 			}
 		})
 	}
