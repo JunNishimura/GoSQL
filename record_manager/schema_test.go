@@ -85,37 +85,23 @@ func TestSchemaAddField(t *testing.T) {
 }
 
 func TestSchemaAddIntField(t *testing.T) {
-	tests := []struct {
-		name      string
-		fieldName string
-	}{
-		{
-			name:      "adds an int field under the given name",
-			fieldName: "id",
-		},
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
+
+	gotType, err := s.Type("id")
+	if err != nil {
+		t.Fatalf("Type(\"id\") returned error: %v", err)
+	}
+	if gotType != FieldTypeInt {
+		t.Errorf("Type(\"id\") = %d, want %d", gotType, FieldTypeInt)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := NewSchema()
-			mustAddIntField(t, s, tt.fieldName)
-
-			gotType, err := s.Type(tt.fieldName)
-			if err != nil {
-				t.Fatalf("Type(%q) returned error: %v", tt.fieldName, err)
-			}
-			if gotType != FieldTypeInt {
-				t.Errorf("Type(%q) = %d, want %d", tt.fieldName, gotType, FieldTypeInt)
-			}
-
-			gotLength, err := s.Length(tt.fieldName)
-			if err != nil {
-				t.Fatalf("Length(%q) returned error: %v", tt.fieldName, err)
-			}
-			if gotLength != 0 {
-				t.Errorf("Length(%q) = %d, want 0", tt.fieldName, gotLength)
-			}
-		})
+	gotLength, err := s.Length("id")
+	if err != nil {
+		t.Fatalf("Length(\"id\") returned error: %v", err)
+	}
+	if gotLength != 0 {
+		t.Errorf("Length(\"id\") = %d, want 0", gotLength)
 	}
 }
 
@@ -324,49 +310,21 @@ func TestSchemaHasField(t *testing.T) {
 	}
 }
 
-func TestSchemaTypeUnknownField(t *testing.T) {
-	tests := []struct {
-		name      string
-		fieldName string
-	}{
-		{
-			name:      "reports ErrFieldNotFound for a field that was never added",
-			fieldName: "missing",
-		},
-	}
+func TestSchemaTypeRejectsAnUnknownField(t *testing.T) {
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := NewSchema()
-			mustAddIntField(t, s, "id")
-
-			if _, err := s.Type(tt.fieldName); !errors.Is(err, ErrFieldNotFound) {
-				t.Errorf("Type(%q) error = %v, want %v", tt.fieldName, err, ErrFieldNotFound)
-			}
-		})
+	if _, err := s.Type("missing"); !errors.Is(err, ErrFieldNotFound) {
+		t.Errorf("Type(\"missing\") error = %v, want %v", err, ErrFieldNotFound)
 	}
 }
 
-func TestSchemaLengthUnknownField(t *testing.T) {
-	tests := []struct {
-		name      string
-		fieldName string
-	}{
-		{
-			name:      "reports ErrFieldNotFound for a field that was never added",
-			fieldName: "missing",
-		},
-	}
+func TestSchemaLengthRejectsAnUnknownField(t *testing.T) {
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := NewSchema()
-			mustAddIntField(t, s, "id")
-
-			if _, err := s.Length(tt.fieldName); !errors.Is(err, ErrFieldNotFound) {
-				t.Errorf("Length(%q) error = %v, want %v", tt.fieldName, err, ErrFieldNotFound)
-			}
-		})
+	if _, err := s.Length("missing"); !errors.Is(err, ErrFieldNotFound) {
+		t.Errorf("Length(\"missing\") error = %v, want %v", err, ErrFieldNotFound)
 	}
 }
 
