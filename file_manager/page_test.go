@@ -539,7 +539,6 @@ func TestSetDateBoundsCheck(t *testing.T) {
 }
 
 func TestMaxLength(t *testing.T) {
-	p := NewPageByBlockSize(64)
 	tests := []struct {
 		name   string
 		strlen int
@@ -564,7 +563,7 @@ func TestMaxLength(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := p.MaxLength(tt.strlen); got != tt.want {
+			if got := MaxLength(tt.strlen); got != tt.want {
 				t.Errorf("MaxLength(%d) = %d, want %d", tt.strlen, got, tt.want)
 			}
 		})
