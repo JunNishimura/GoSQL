@@ -61,6 +61,35 @@ func lengthInBytes(info fieldInfo) int {
 	return filemanager.MaxLength(info.length)
 }
 
+// NewLayoutFromCatalog rebuilds the layout a table was created with, from the
+// offsets and slot size saved for it rather than by working them out again.
+//
+// Recomputing would be wrong even though NewLayout follows the same rules: the
+// records already on disk were written to the saved arrangement, and a version
+// of this code that laid fields out differently would read every one of them at
+// the wrong place.
+//
+// Only the offsets of the schema's own fields are kept, so the layout holds one
+// for each field and none for anything else. A field the offsets do not cover
+// is refused: it comes from a catalog that does not match the schema, and going
+// on would read that field from wherever the zero offset happens to point.
+func NewLayoutFromCatalog(schema *Schema, offsets map[string]int, slotSize int) (*Layout, error) {
+	own := make(map[string]int, len(schema.fields))
+	for _, fieldName := range schema.fields {
+		offset, ok := offsets[fieldName]
+		if !ok {
+			return nil, fmt.Errorf("restore the layout: no saved offset for field %q: %w", fieldName, ErrFieldNotFound)
+		}
+		own[fieldName] = offset
+	}
+
+	return &Layout{
+		schema:   schema,
+		offsets:  own,
+		slotSize: slotSize,
+	}, nil
+}
+
 // Schema returns the schema this layout was built from.
 func (l *Layout) Schema() *Schema {
 	return l.schema

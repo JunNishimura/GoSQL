@@ -137,6 +137,140 @@ func TestNewLayoutOffsets(t *testing.T) {
 	}
 }
 
+func TestNewLayoutFromCatalog(t *testing.T) {
+	tests := []struct {
+		name         string
+		build        func(t *testing.T) *Schema
+		offsets      map[string]int
+		slotSize     int
+		wantOffsets  map[string]int
+		wantSlotSize int
+	}{
+		{
+			name: "keeps the offsets and the slot size it is given",
+			build: func(t *testing.T) *Schema {
+				s := NewSchema()
+				mustAddIntField(t, s, "id")
+				mustAddStringField(t, s, "name", 20)
+				return s
+			},
+			offsets: map[string]int{
+				"id":   4,
+				"name": 8,
+			},
+			slotSize: 92,
+			wantOffsets: map[string]int{
+				"id":   4,
+				"name": 8,
+			},
+			wantSlotSize: 92,
+		},
+		{
+			name: "takes the saved arrangement rather than working one out again",
+			build: func(t *testing.T) *Schema {
+				s := NewSchema()
+				mustAddIntField(t, s, "id")
+				mustAddStringField(t, s, "name", 20)
+				return s
+			},
+			// NewLayout would put id at 4 and name at 8. This table was
+			// written the other way round, and the records on disk follow it.
+			offsets: map[string]int{
+				"name": 4,
+				"id":   88,
+			},
+			slotSize: 92,
+			wantOffsets: map[string]int{
+				"name": 4,
+				"id":   88,
+			},
+			wantSlotSize: 92,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l, err := NewLayoutFromCatalog(tt.build(t), tt.offsets, tt.slotSize)
+			if err != nil {
+				t.Fatalf("NewLayoutFromCatalog() returned error: %v", err)
+			}
+
+			got := map[string]int{}
+			for fieldName := range tt.wantOffsets {
+				offset, err := l.Offset(fieldName)
+				if err != nil {
+					t.Fatalf("Offset(%q) returned error: %v", fieldName, err)
+				}
+				got[fieldName] = offset
+			}
+
+			if !maps.Equal(got, tt.wantOffsets) {
+				t.Errorf("offsets = %v, want %v", got, tt.wantOffsets)
+			}
+			if l.SlotSize() != tt.wantSlotSize {
+				t.Errorf("SlotSize() = %d, want %d", l.SlotSize(), tt.wantSlotSize)
+			}
+		})
+	}
+}
+
+func TestNewLayoutFromCatalogRejectsAFieldWithNoOffset(t *testing.T) {
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
+	mustAddIntField(t, s, "age")
+
+	offsets := map[string]int{
+		"id": 4,
+	}
+
+	if _, err := NewLayoutFromCatalog(s, offsets, 12); !errors.Is(err, ErrFieldNotFound) {
+		t.Errorf("NewLayoutFromCatalog() error = %v, want %v", err, ErrFieldNotFound)
+	}
+}
+
+func TestNewLayoutFromCatalogIgnoresOffsetsOutsideTheSchema(t *testing.T) {
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
+
+	offsets := map[string]int{
+		"id":      4,
+		"dropped": 8,
+	}
+
+	l, err := NewLayoutFromCatalog(s, offsets, 12)
+	if err != nil {
+		t.Fatalf("NewLayoutFromCatalog() returned error: %v", err)
+	}
+
+	if _, err := l.Offset("dropped"); !errors.Is(err, ErrFieldNotFound) {
+		t.Errorf("Offset(\"dropped\") error = %v, want %v", err, ErrFieldNotFound)
+	}
+}
+
+func TestNewLayoutFromCatalogDoesNotAliasTheGivenOffsets(t *testing.T) {
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
+
+	offsets := map[string]int{
+		"id": 4,
+	}
+
+	l, err := NewLayoutFromCatalog(s, offsets, 8)
+	if err != nil {
+		t.Fatalf("NewLayoutFromCatalog() returned error: %v", err)
+	}
+
+	offsets["id"] = 100
+
+	got, err := l.Offset("id")
+	if err != nil {
+		t.Fatalf("Offset(\"id\") returned error: %v", err)
+	}
+	if got != 4 {
+		t.Errorf("Offset(\"id\") = %d, want 4", got)
+	}
+}
+
 func TestLayoutOffsetRejectsAnUnknownField(t *testing.T) {
 	s := NewSchema()
 	mustAddIntField(t, s, "id")
