@@ -110,6 +110,41 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 	return NewBlockId(fileName, newBlockNum), nil
 }
 
+// Archive moves fileName out of the database directory to destPath, creating
+// the directories leading up to it. The name is then free: reading or writing
+// it again starts an empty file.
+//
+// The handle is closed and forgotten first. The manager keeps every file it has
+// opened, and a handle follows the file it was opened on rather than the path,
+// so a forgotten one would keep pointing at the file that was moved away.
+//
+// An existing destPath is refused rather than replaced. Archiving is done to
+// keep the old file, so quietly writing over an earlier one would defeat it.
+func (f *FileManager) Archive(fileName, destPath string) error {
+	if file, ok := f.openFiles[fileName]; ok {
+		if err := file.Close(); err != nil {
+			return fmt.Errorf("close file %s: %w", fileName, err)
+		}
+		delete(f.openFiles, fileName)
+	}
+
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("archive %s: %s already exists", fileName, destPath)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", destPath, err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), os.ModePerm); err != nil {
+		return fmt.Errorf("create directory %s: %w", filepath.Dir(destPath), err)
+	}
+
+	if err := os.Rename(filepath.Join(f.dbDirectory, fileName), destPath); err != nil {
+		return fmt.Errorf("move %s to %s: %w", fileName, destPath, err)
+	}
+
+	return nil
+}
+
 func (f *FileManager) GetStats() Stats {
 	return f.stats
 }

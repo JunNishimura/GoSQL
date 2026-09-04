@@ -2,6 +2,7 @@ package logmanager
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
@@ -390,5 +391,118 @@ func TestIterator(t *testing.T) {
 
 	if it.HasNext() {
 		t.Error("HasNext() = true after reading all records, want false")
+	}
+}
+
+func TestArchive(t *testing.T) {
+	fm := newTestFileManager(t)
+	lm, err := NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+	for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
+		if _, err := lm.Append(rec); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+
+	if err := lm.Archive(filepath.Join(t.TempDir(), "old.log")); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	// What is left behind is a log with room in it and nothing written yet.
+	length, err := fm.Length(testLogFile)
+	if err != nil {
+		t.Fatalf("Length() error = %v", err)
+	}
+	if length != 1 {
+		t.Errorf("the new log holds %d blocks, want 1", length)
+	}
+	it, err := lm.Iterator()
+	if err != nil {
+		t.Fatalf("Iterator() error = %v", err)
+	}
+	if it.HasNext() {
+		t.Error("HasNext() = true, want false (the new log should hold no records)")
+	}
+}
+
+// Archiving exists to keep the log readable afterwards, so everything written
+// before it has to be in the file that was moved, including whatever was still
+// only in memory.
+func TestArchiveKeepsTheOldRecords(t *testing.T) {
+	fm := newTestFileManager(t)
+	lm, err := NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+	for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
+		if _, err := lm.Append(rec); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+	archiveDir := t.TempDir()
+
+	if err := lm.Archive(filepath.Join(archiveDir, "old.log")); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	archivedFm, err := filemanager.NewFileManager(archiveDir, testBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	archived, err := NewLogManager(archivedFm, "old.log")
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+	it, err := archived.Iterator()
+	if err != nil {
+		t.Fatalf("Iterator() error = %v", err)
+	}
+	for _, want := range [][]byte{[]byte("CD"), []byte("AB")} {
+		if !it.HasNext() {
+			t.Fatalf("HasNext() = false, want the archived record %q", want)
+		}
+		got, err := it.Next()
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		if string(got) != string(want) {
+			t.Errorf("Next() = %q, want %q", got, want)
+		}
+	}
+}
+
+// The LSN counter carries on rather than starting over. Buffers still hold the
+// numbers they were given before the archive, and those records are on disk in
+// the archived file, so nothing is waiting to be written: starting over would
+// make every one of them look newer than the log and force a pointless flush.
+func TestArchiveKeepsTheLSNGoing(t *testing.T) {
+	fm := newTestFileManager(t)
+	lm, err := NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+	var lastLSN int
+	for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
+		lastLSN, err = lm.Append(rec)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+
+	if err := lm.Archive(filepath.Join(t.TempDir(), "old.log")); err != nil {
+		t.Fatalf("Archive() error = %v", err)
+	}
+
+	if lm.lastSavedLSN != lastLSN {
+		t.Errorf("lastSavedLSN = %d, want %d (everything logged so far is in the archive)", lm.lastSavedLSN, lastLSN)
+	}
+	next, err := lm.Append([]byte("EF"))
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	if next != lastLSN+1 {
+		t.Errorf("Append() = %d, want %d", next, lastLSN+1)
 	}
 }

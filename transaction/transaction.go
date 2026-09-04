@@ -65,14 +65,30 @@ func NewTransaction(
 	}, nil
 }
 
-// Pin keeps blk in a buffer so that the transaction can read and write it.
-// Every pin has to be matched by an Unpin, or by the release that ends the
-// transaction.
+// Pin keeps blk in a buffer so that the transaction can read and write it,
+// taking a shared lock on the block first. Every pin has to be matched by an
+// Unpin, or by the release that ends the transaction.
+//
+// A transaction pins a block because it means to look at it, so the lock is
+// taken here rather than at each read. Taking it before the buffer is what
+// matters: a transaction waiting for the lock holds nothing, so contention over
+// one block cannot empty the pool for everybody else. Waiting with a buffer in
+// hand would turn a dispute between two transactions into a shortage for all of
+// them.
+//
+// The lock outlives the pin. Unpin gives the buffer back, but the lock is held
+// until the transaction ends, so a pin that failed after taking the lock leaves
+// it held. There is no way to give up one lock on its own, and holding a lock
+// on a block that was never read costs only concurrency.
 //
 // The pin goes through the transaction's own list rather than straight to the
-// pool, which is what makes that release possible: the pool records that a
-// buffer is in use, but not by whom.
+// pool, which is what makes the release at the end possible: the pool records
+// that a buffer is in use, but not by whom.
 func (tx *Transaction) Pin(blk *filemanager.BlockId) error {
+	if err := tx.concurrencyManager.SLock(blk); err != nil {
+		return fmt.Errorf("lock %s to pin it: %w", blk, err)
+	}
+
 	return tx.buffers.Pin(blk)
 }
 
@@ -82,14 +98,12 @@ func (tx *Transaction) Unpin(blk *filemanager.BlockId) {
 	tx.buffers.Unpin(blk)
 }
 
-// GetInt returns the int at offset in blk, taking a shared lock on the block so
-// that nobody may change it until this transaction ends. Other transactions may
-// read it at the same time.
+// GetInt returns the int at offset in blk.
+//
+// No lock is taken here: Pin already took the shared one, and reaching this
+// point means the block is pinned. Other transactions may read the block at the
+// same time, but none may change it until this transaction ends.
 func (tx *Transaction) GetInt(blk *filemanager.BlockId, offset int) (int32, error) {
-	if err := tx.concurrencyManager.SLock(blk); err != nil {
-		return 0, fmt.Errorf("lock %s to read an int: %w", blk, err)
-	}
-
 	buf := tx.buffers.Buffer(blk)
 	if buf == nil {
 		return 0, fmt.Errorf("read the int at offset %d of %s: %w", offset, blk, ErrBlockNotPinned)
@@ -98,13 +112,9 @@ func (tx *Transaction) GetInt(blk *filemanager.BlockId, offset int) (int32, erro
 	return buf.Contents().GetInt(offset), nil
 }
 
-// GetString returns the string at offset in blk. See GetInt for how the block
-// is locked.
+// GetString returns the string at offset in blk. See GetInt for why it takes no
+// lock of its own.
 func (tx *Transaction) GetString(blk *filemanager.BlockId, offset int) (string, error) {
-	if err := tx.concurrencyManager.SLock(blk); err != nil {
-		return "", fmt.Errorf("lock %s to read a string: %w", blk, err)
-	}
-
 	buf := tx.buffers.Buffer(blk)
 	if buf == nil {
 		return "", fmt.Errorf("read the string at offset %d of %s: %w", offset, blk, ErrBlockNotPinned)
@@ -113,8 +123,9 @@ func (tx *Transaction) GetString(blk *filemanager.BlockId, offset int) (string, 
 	return buf.Contents().GetString(offset), nil
 }
 
-// SetInt writes val at offset in blk, taking an exclusive lock so that nobody
-// may read or write the block until this transaction ends.
+// SetInt writes val at offset in blk, upgrading the shared lock Pin took to an
+// exclusive one so that nobody may even look at the block until this
+// transaction ends.
 //
 // The old value is logged before the new one is written. Writing first would
 // leave the log holding the new value, so undoing the record would put back what
