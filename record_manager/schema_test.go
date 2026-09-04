@@ -173,6 +173,44 @@ func TestSchemaFields(t *testing.T) {
 	}
 }
 
+func TestSchemaFieldsDoesNotAliasTheSchema(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(fields []string)
+		want   []string
+	}{
+		{
+			name: "keeps the field names when an element of the returned slice is overwritten",
+			mutate: func(fields []string) {
+				fields[0] = "overwritten"
+			},
+			want: []string{"id", "name", "age"},
+		},
+		{
+			name: "keeps the field order when the returned slice is sorted in place",
+			mutate: func(fields []string) {
+				slices.Sort(fields)
+			},
+			want: []string{"id", "name", "age"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewSchema()
+			s.AddIntField("id")
+			s.AddStringField("name", 20)
+			s.AddIntField("age")
+
+			tt.mutate(s.Fields())
+
+			if got := s.Fields(); !slices.Equal(got, tt.want) {
+				t.Errorf("Fields() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSchemaHasField(t *testing.T) {
 	tests := []struct {
 		name      string

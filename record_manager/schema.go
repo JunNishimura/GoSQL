@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // ErrFieldNotFound reports a lookup of a field the schema does not have.
@@ -96,8 +97,13 @@ func (s *Schema) AddAll(other *Schema) {
 }
 
 // Fields returns the field names in the order they were added.
+//
+// The slice is a copy. The order is what a layout walks to assign offsets, so a
+// caller that sorted or overwrote the schema's own slice would change the record
+// format out from under it, and silently: the field names and types would still
+// answer correctly, and only the offsets computed later would be wrong.
 func (s *Schema) Fields() []string {
-	return s.fields
+	return slices.Clone(s.fields)
 }
 
 // HasField reports whether the schema has a field of this name.
