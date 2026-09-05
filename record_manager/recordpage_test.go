@@ -907,3 +907,72 @@ func TestRecordPageClaimFreeSlotAfterReportsNoSuchSlot(t *testing.T) {
 		})
 	}
 }
+
+// A block that has just been appended is already all zeroes, so the block is
+// filled in first: an initialize that did nothing at all would pass otherwise.
+func TestRecordPageInitializeNewBlock(t *testing.T) {
+	rp := newTestRecordPage(t)
+
+	for slot := range testSlotsInBlock {
+		if err := rp.setSlotState(slot, slotInUse); err != nil {
+			t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+		}
+		if err := rp.SetInt(slot, "id", int32(slot)+1); err != nil {
+			t.Fatalf("SetInt(%d) error = %v", slot, err)
+		}
+		if err := rp.SetString(slot, "name", "written"); err != nil {
+			t.Fatalf("SetString(%d) error = %v", slot, err)
+		}
+	}
+
+	if err := rp.InitializeNewBlock(); err != nil {
+		t.Fatalf("InitializeNewBlock() error = %v", err)
+	}
+
+	for slot := range testSlotsInBlock {
+		if state := readSlotState(t, rp, slot); state != slotEmpty {
+			t.Errorf("slot %d flag = %d, want %d", slot, state, slotEmpty)
+		}
+
+		gotID, err := rp.GetInt(slot, "id")
+		if err != nil {
+			t.Fatalf("GetInt(%d) error = %v", slot, err)
+		}
+		if gotID != 0 {
+			t.Errorf("GetInt(%d) = %d, want 0", slot, gotID)
+		}
+
+		gotName, err := rp.GetString(slot, "name")
+		if err != nil {
+			t.Fatalf("GetString(%d) error = %v", slot, err)
+		}
+		if gotName != "" {
+			t.Errorf("GetString(%d) = %q, want \"\"", slot, gotName)
+		}
+	}
+}
+
+// The block holds four whole slots and 32 bytes over, which belong to no slot.
+// A marker is left in them to catch an initialize that runs past the last one.
+func TestRecordPageInitializeNewBlockLeavesTheBytesPastTheLastSlot(t *testing.T) {
+	const marker = 12345
+
+	rp := newTestRecordPage(t)
+
+	past := testSlotsInBlock * testSlotSize
+	if err := rp.tx.SetInt(rp.blk, past, marker); err != nil {
+		t.Fatalf("SetInt() past the last slot error = %v", err)
+	}
+
+	if err := rp.InitializeNewBlock(); err != nil {
+		t.Fatalf("InitializeNewBlock() error = %v", err)
+	}
+
+	got, err := rp.tx.GetInt(rp.blk, past)
+	if err != nil {
+		t.Fatalf("GetInt() past the last slot error = %v", err)
+	}
+	if got != marker {
+		t.Errorf("the bytes past the last slot = %d, want %d", got, marker)
+	}
+}

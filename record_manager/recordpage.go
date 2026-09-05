@@ -165,6 +165,46 @@ func (rp *RecordPage) setSlotState(slot int, state slotState) error {
 	return rp.tx.SetInt(rp.blk, offset, int32(state))
 }
 
+// InitializeNewBlock makes every slot of the block empty and every field of
+// every slot the zero value of its type.
+//
+// It is meant for a block just appended to a file, which is why it says "new":
+// called on a block that holds records, it would throw all of them away.
+//
+// The writes go through the transaction like any other, so they are logged.
+// SimpleDB skips the log here on the grounds that a block that did not exist
+// before has no earlier value worth restoring, but the saving is one block's
+// worth of records at the moment a file grows, and the exception would have to
+// be a way of writing without logging, which is worth more than it costs.
+func (rp *RecordPage) InitializeNewBlock() error {
+	schema := rp.layout.schema
+
+	for slot := 0; rp.isValidSlot(slot); slot++ {
+		if err := rp.setSlotState(slot, slotEmpty); err != nil {
+			return err
+		}
+
+		for _, fieldName := range schema.fields {
+			var err error
+
+			switch fieldType := schema.info[fieldName].fieldType; fieldType {
+			case FieldTypeInt:
+				err = rp.SetInt(slot, fieldName, 0)
+			case FieldTypeVarchar:
+				err = rp.SetString(slot, fieldName, "")
+			default:
+				err = fmt.Errorf("initialize field %q of slot %d: %s has no value to start from", fieldName, slot, fieldType)
+			}
+
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
 // NextUsedSlotAfter returns the first slot after slot that holds a record.
 // Slot -1 asks for the first record in the block.
 //
