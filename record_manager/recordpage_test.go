@@ -1,0 +1,413 @@
+package recordmanager
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
+	concurrencymanager "github.com/JunNishimura/GoSQL/concurrency_manager"
+	filemanager "github.com/JunNishimura/GoSQL/file_manager"
+	logmanager "github.com/JunNishimura/GoSQL/log_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
+)
+
+const (
+	testLogFile    = "test.log"
+	testDataFile   = "test.tbl"
+	testBlockSize  = 400
+	testNumBuffers = 3
+)
+
+// newTestTransaction builds a transaction over a database of its own, so that
+// one test cannot see what another wrote.
+func newTestTransaction(t *testing.T) *transaction.Transaction {
+	t.Helper()
+
+	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	lm, err := logmanager.NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+	bm, err := buffermanager.NewBufferManager(fm, lm, testNumBuffers)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	tx, err := transaction.NewTransaction(fm, lm, bm, concurrencymanager.NewLockTable(), 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+
+	return tx
+}
+
+// newTestLayout builds a layout over the schema the record page tests share:
+// "id" is an int and "name" a varchar of 20 characters. One field of each kind
+// is what lets a test reach for the wrong one on purpose.
+func newTestLayout(t *testing.T) *Layout {
+	t.Helper()
+
+	s := NewSchema()
+	mustAddIntField(t, s, "id")
+	mustAddStringField(t, s, "name", 20)
+
+	return NewLayout(s)
+}
+
+func TestNewRecordPage(t *testing.T) {
+	tx := newTestTransaction(t)
+	layout := newTestLayout(t)
+
+	blk, err := tx.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	rp, err := NewRecordPage(tx, blk, layout)
+	if err != nil {
+		t.Fatalf("NewRecordPage() error = %v", err)
+	}
+
+	if rp.tx != tx {
+		t.Errorf("tx = %p, want %p", rp.tx, tx)
+	}
+	if rp.blk != blk {
+		t.Errorf("blk = %v, want %v", rp.blk, blk)
+	}
+	if rp.layout != layout {
+		t.Errorf("layout = %p, want %p", rp.layout, layout)
+	}
+}
+
+func TestNewRecordPagePinsTheBlock(t *testing.T) {
+	tx := newTestTransaction(t)
+	layout := newTestLayout(t)
+
+	blk, err := tx.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	if _, err := tx.GetInt(blk, 0); !errors.Is(err, transaction.ErrBlockNotPinned) {
+		t.Fatalf("GetInt() before the record page error = %v, want %v", err, transaction.ErrBlockNotPinned)
+	}
+
+	if _, err := NewRecordPage(tx, blk, layout); err != nil {
+		t.Fatalf("NewRecordPage() error = %v", err)
+	}
+
+	if _, err := tx.GetInt(blk, 0); err != nil {
+		t.Errorf("GetInt() after the record page error = %v, want nil: the block was not pinned", err)
+	}
+}
+
+// The numbers the slot tests rely on, spelled out once:
+//
+//	a block         400 bytes
+//	a slot           92 bytes, the in-use flag (4) plus id (4) plus name (84)
+//	slots per block   4, so 0 through 3 fit and 4 does not
+const (
+	testSlotSize     = 92
+	testSlotsInBlock = testBlockSize / testSlotSize
+)
+
+// newTestRecordPage builds a record page over a freshly appended block, so that
+// every slot in it starts out zeroed.
+func newTestRecordPage(t *testing.T) *RecordPage {
+	t.Helper()
+
+	tx := newTestTransaction(t)
+
+	blk, err := tx.Append(testDataFile)
+	if err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+
+	rp, err := NewRecordPage(tx, blk, newTestLayout(t))
+	if err != nil {
+		t.Fatalf("NewRecordPage() error = %v", err)
+	}
+
+	return rp
+}
+
+func TestRecordPageSetIntAndGetInt(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+		val  int32
+	}{
+		{
+			name: "reads back the value written to the first slot",
+			slot: 0,
+			val:  42,
+		},
+		{
+			name: "reads back the value written to the last slot that fits",
+			slot: testSlotsInBlock - 1,
+			val:  7,
+		},
+		{
+			name: "reads back a negative value",
+			slot: 0,
+			val:  -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+
+			if err := rp.SetInt(tt.slot, "id", tt.val); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+
+			got, err := rp.GetInt(tt.slot, "id")
+			if err != nil {
+				t.Fatalf("GetInt() error = %v", err)
+			}
+			if got != tt.val {
+				t.Errorf("GetInt() = %d, want %d", got, tt.val)
+			}
+		})
+	}
+}
+
+func TestRecordPageSetStringAndGetString(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+		val  string
+	}{
+		{
+			name: "reads back the value written to the first slot",
+			slot: 0,
+			val:  "alice",
+		},
+		{
+			name: "reads back the value written to the last slot that fits",
+			slot: testSlotsInBlock - 1,
+			val:  "bob",
+		},
+		{
+			name: "reads back an empty string",
+			slot: 0,
+			val:  "",
+		},
+		{
+			name: "reads back a string of multi-byte characters",
+			slot: 0,
+			val:  "テスト",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+
+			if err := rp.SetString(tt.slot, "name", tt.val); err != nil {
+				t.Fatalf("SetString() error = %v", err)
+			}
+
+			got, err := rp.GetString(tt.slot, "name")
+			if err != nil {
+				t.Fatalf("GetString() error = %v", err)
+			}
+			if got != tt.val {
+				t.Errorf("GetString() = %q, want %q", got, tt.val)
+			}
+		})
+	}
+}
+
+func TestRecordPageSlotsDoNotOverlap(t *testing.T) {
+	rp := newTestRecordPage(t)
+
+	for slot := range testSlotsInBlock {
+		if err := rp.SetInt(slot, "id", int32(slot)); err != nil {
+			t.Fatalf("SetInt(%d) error = %v", slot, err)
+		}
+		if err := rp.SetString(slot, "name", fmt.Sprintf("name %d", slot)); err != nil {
+			t.Fatalf("SetString(%d) error = %v", slot, err)
+		}
+	}
+
+	for slot := range testSlotsInBlock {
+		gotID, err := rp.GetInt(slot, "id")
+		if err != nil {
+			t.Fatalf("GetInt(%d) error = %v", slot, err)
+		}
+		if gotID != int32(slot) {
+			t.Errorf("GetInt(%d) = %d, want %d: a later slot wrote over it", slot, gotID, slot)
+		}
+
+		wantName := fmt.Sprintf("name %d", slot)
+		gotName, err := rp.GetString(slot, "name")
+		if err != nil {
+			t.Fatalf("GetString(%d) error = %v", slot, err)
+		}
+		if gotName != wantName {
+			t.Errorf("GetString(%d) = %q, want %q: a later slot wrote over it", slot, gotName, wantName)
+		}
+	}
+}
+
+// Slot testSlotsInBlock is the first one whose bytes would run past the end of
+// the block, and -1 stands for any slot below the first.
+func TestRecordPageRejectsASlotOutsideTheBlock(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(rp *RecordPage) error
+	}{
+		{
+			name: "GetInt refuses the first slot that does not fit",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetInt(testSlotsInBlock, "id")
+				return err
+			},
+		},
+		{
+			name: "GetInt refuses a negative slot",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetInt(-1, "id")
+				return err
+			},
+		},
+		{
+			name: "SetInt refuses the first slot that does not fit",
+			call: func(rp *RecordPage) error {
+				return rp.SetInt(testSlotsInBlock, "id", 1)
+			},
+		},
+		{
+			name: "SetInt refuses a negative slot",
+			call: func(rp *RecordPage) error {
+				return rp.SetInt(-1, "id", 1)
+			},
+		},
+		{
+			name: "GetString refuses the first slot that does not fit",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetString(testSlotsInBlock, "name")
+				return err
+			},
+		},
+		{
+			name: "GetString refuses a negative slot",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetString(-1, "name")
+				return err
+			},
+		},
+		{
+			name: "SetString refuses the first slot that does not fit",
+			call: func(rp *RecordPage) error {
+				return rp.SetString(testSlotsInBlock, "name", "x")
+			},
+		},
+		{
+			name: "SetString refuses a negative slot",
+			call: func(rp *RecordPage) error {
+				return rp.SetString(-1, "name", "x")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(newTestRecordPage(t)); !errors.Is(err, ErrSlotOutOfRange) {
+				t.Errorf("error = %v, want %v", err, ErrSlotOutOfRange)
+			}
+		})
+	}
+}
+
+// The test schema has "id" as an int and "name" as a varchar, so each case
+// below reaches for the field of the type its method does not read or write.
+func TestRecordPageRejectsTheWrongFieldType(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(rp *RecordPage) error
+	}{
+		{
+			name: "GetInt refuses a varchar field",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetInt(0, "name")
+				return err
+			},
+		},
+		{
+			name: "SetInt refuses a varchar field",
+			call: func(rp *RecordPage) error {
+				return rp.SetInt(0, "name", 1)
+			},
+		},
+		{
+			name: "GetString refuses an int field",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetString(0, "id")
+				return err
+			},
+		},
+		{
+			name: "SetString refuses an int field",
+			call: func(rp *RecordPage) error {
+				return rp.SetString(0, "id", "x")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(newTestRecordPage(t)); !errors.Is(err, ErrFieldTypeMismatch) {
+				t.Errorf("error = %v, want %v", err, ErrFieldTypeMismatch)
+			}
+		})
+	}
+}
+
+func TestRecordPageRejectsAnUnknownField(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(rp *RecordPage) error
+	}{
+		{
+			name: "GetInt refuses a field the schema does not have",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetInt(0, "missing")
+				return err
+			},
+		},
+		{
+			name: "SetInt refuses a field the schema does not have",
+			call: func(rp *RecordPage) error {
+				return rp.SetInt(0, "missing", 1)
+			},
+		},
+		{
+			name: "GetString refuses a field the schema does not have",
+			call: func(rp *RecordPage) error {
+				_, err := rp.GetString(0, "missing")
+				return err
+			},
+		},
+		{
+			name: "SetString refuses a field the schema does not have",
+			call: func(rp *RecordPage) error {
+				return rp.SetString(0, "missing", "x")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(newTestRecordPage(t)); !errors.Is(err, ErrFieldNotFound) {
+				t.Errorf("error = %v, want %v", err, ErrFieldNotFound)
+			}
+		})
+	}
+}
