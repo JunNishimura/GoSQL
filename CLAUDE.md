@@ -33,7 +33,38 @@ description, where it stays next to the code or the discussion it came from.
 
 ## Unit Tests
 
-Use Table Driven Tests to group multiple cases for the same function. Each test struct element must be written across multiple lines for readability.
+### Where the intent goes
+
+Name the test function after the unit under test and nothing else:
+`TestSchemaAddField`, not `TestSchemaAddFieldKeepsTheCharacterLimit`. What a
+case checks belongs in the case name, so the function name has no work to do
+beyond saying which function is being tested.
+
+Run every case inside `t.Run`, including a test that has only one. The subtest
+name is where the intent lives, so a test with a single case still needs one
+rather than spelling the intent out in the function name.
+
+### Case names
+
+Write a case name as **given / when / then**: the condition it starts from, the
+call it makes, and what that has to produce. A reader should be able to tell
+what a failing case was checking without opening the body.
+
+```
+given a schema with an int field, when a varchar field of the same name is added, then it reports ErrDuplicateField
+```
+
+Drop `given` when there is no condition to state — a pure function of its
+arguments starts from nothing.
+
+```
+when a string of 10 characters is measured, then it takes 4 bytes plus 10 times UTFMax
+```
+
+### Table driven tests
+
+Use Table Driven Tests to group multiple cases for the same function. Each test
+struct element must be written across multiple lines for readability.
 
 ```go
 func TestFoo(t *testing.T) {
@@ -42,8 +73,16 @@ func TestFoo(t *testing.T) {
         input int
         want  int
     }{
-        {"returns 0 for zero input", 0, 0},
-        {"returns doubled value for positive input", 3, 6},
+        {
+            name:  "when zero is doubled, then the result is zero",
+            input: 0,
+            want:  0,
+        },
+        {
+            name:  "when a positive number is doubled, then the result is twice it",
+            input: 3,
+            want:  6,
+        },
     }
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
@@ -55,7 +94,25 @@ func TestFoo(t *testing.T) {
 }
 ```
 
-Test case names must describe what is being tested, so the intent is clear without reading the implementation.
+A single case needs no table, but still needs the wrapper:
+
+```go
+func TestLayoutSchema(t *testing.T) {
+    t.Run("given a layout built from a schema, when the schema is asked for, then it is the one it was built from", func(t *testing.T) {
+        ...
+    })
+}
+```
+
+```go
+// Bad
+{name: "case1", ...},
+{name: "test A", ...},
+{name: "returns false when blkNum differs", ...},   // no given, no when
+
+// Good
+{name: "given two block ids of the same file, when their block numbers differ, then they are not equal", ...},
+```
 
 ## Error Handling
 
@@ -77,13 +134,3 @@ Use `%w` (not `%v`) so callers can inspect the original error with `errors.Is` /
 **When NOT to wrap:**
 - Re-returning an error that has already been wrapped to avoid double-wrapping.
 - The function name and call site already make the context obvious.
-
-```go
-// Bad
-{"case1", ...},
-{"test A", ...},
-
-// Good
-{"returns true when filename and blkNum are equal", ...},
-{"returns false when blkNum differs", ...},
-```
