@@ -232,6 +232,40 @@ func (ts *TableScan) DeleteCurrentRecord() error {
 	return ts.rp.Delete(ts.currentSlot)
 }
 
+// CurrentRecordID names the record the scan is on, so that a caller can come
+// back to it later without keeping the scan where it is.
+func (ts *TableScan) CurrentRecordID() (*RecordID, error) {
+	if err := ts.requireCurrentRecord(); err != nil {
+		return nil, err
+	}
+
+	return NewRecordID(ts.rp.blk.Number(), ts.currentSlot), nil
+}
+
+// MoveToRecordID puts the scan straight onto the record rid names, without
+// reading the ones before it. That is what makes an index worth having: it
+// gives out record ids, and this is how a table is read from one.
+//
+// The scan lands on the record rather than before it, unlike the other moves,
+// because rid says which record is wanted rather than where to start.
+//
+// A slot that does not fit the block is refused here rather than at the first
+// read. A record id carries no file name, so one belonging to another table
+// cannot be told apart by its type, and a table whose records are a different
+// size is exactly where the number comes out wrong.
+func (ts *TableScan) MoveToRecordID(rid *RecordID) error {
+	if err := ts.moveToBlock(rid.blkNum); err != nil {
+		return err
+	}
+
+	if !ts.rp.isValidSlot(rid.slot) {
+		return fmt.Errorf("move to %s of %s: %w", rid, ts.fileName, ErrSlotOutOfRange)
+	}
+	ts.currentSlot = rid.slot
+
+	return nil
+}
+
 // isOnLastBlock reports whether the scan is on the final block of the table,
 // which is where a walk that finds no more records has to stop rather than move
 // on.

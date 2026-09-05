@@ -741,3 +741,136 @@ func TestTableScanFieldsAfterCloseReportNoCurrentRecord(t *testing.T) {
 		t.Errorf("GetInt() error = %v, want %v", err, ErrNoCurrentRecord)
 	}
 }
+
+func TestTableScanCurrentRecordIDNamesTheRecordTheScanIsOn(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	claimTestRecord(t, ts, 0, 10)
+	claimTestRecord(t, ts, 2, 30)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	for range 2 {
+		if _, err := ts.MoveToNextRecord(); err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+	}
+
+	got, err := ts.CurrentRecordID()
+	if err != nil {
+		t.Fatalf("CurrentRecordID() error = %v", err)
+	}
+
+	want := NewRecordID(0, 2)
+	if got == nil {
+		t.Fatalf("CurrentRecordID() = nil, want %s", want)
+	}
+	if !got.Equals(want) {
+		t.Errorf("CurrentRecordID() = %s, want %s", got, want)
+	}
+}
+
+func TestTableScanCurrentRecordIDRejectsAScanOnNoRecord(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	if _, err := ts.CurrentRecordID(); !errors.Is(err, ErrNoCurrentRecord) {
+		t.Errorf("CurrentRecordID() error = %v, want %v", err, ErrNoCurrentRecord)
+	}
+}
+
+// Noting a record, reading past it, and coming back is what a record id is for,
+// so the round trip is what has to hold rather than either half on its own.
+func TestTableScanMoveToRecordIDComesBackToTheSameRecord(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	claimTestRecord(t, ts, 0, 10)
+	claimTestRecord(t, ts, 2, 30)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	if _, err := ts.MoveToNextRecord(); err != nil {
+		t.Fatalf("MoveToNextRecord() error = %v", err)
+	}
+	noted, err := ts.CurrentRecordID()
+	if err != nil {
+		t.Fatalf("CurrentRecordID() error = %v", err)
+	}
+
+	// Read on past it, so that coming back has somewhere to come back from.
+	if _, err := ts.MoveToNextRecord(); err != nil {
+		t.Fatalf("MoveToNextRecord() error = %v", err)
+	}
+
+	if err := ts.MoveToRecordID(noted); err != nil {
+		t.Fatalf("MoveToRecordID(%s) error = %v", noted, err)
+	}
+
+	got, err := ts.GetInt("id")
+	if err != nil {
+		t.Fatalf("GetInt() error = %v", err)
+	}
+	if got != 10 {
+		t.Errorf("GetInt() = %d, want 10", got)
+	}
+}
+
+// The record is in a block the scan is not on, so getting to it means changing
+// blocks and not merely slots.
+func TestTableScanMoveToRecordIDReachesAnotherBlock(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	if err := ts.moveToNewBlock(); err != nil {
+		t.Fatalf("moveToNewBlock() error = %v", err)
+	}
+	claimTestRecord(t, ts, 1, 77)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	if got := ts.rp.blk.Number(); got != 0 {
+		t.Fatalf("the scan is on block %d, want 0 before the move", got)
+	}
+
+	if err := ts.MoveToRecordID(NewRecordID(1, 1)); err != nil {
+		t.Fatalf("MoveToRecordID() error = %v", err)
+	}
+
+	if got := ts.rp.blk.Number(); got != 1 {
+		t.Errorf("the scan is on block %d, want 1", got)
+	}
+	got, err := ts.GetInt("id")
+	if err != nil {
+		t.Fatalf("GetInt() error = %v", err)
+	}
+	if got != 77 {
+		t.Errorf("GetInt() = %d, want 77", got)
+	}
+}
+
+func TestTableScanMoveToRecordIDRejectsASlotOutsideTheBlock(t *testing.T) {
+	tests := []struct {
+		name string
+		rid  *RecordID
+	}{
+		{
+			name: "refuses a slot that does not fit in the block",
+			rid:  NewRecordID(0, testSlotsInBlock),
+		},
+		{
+			name: "refuses a negative slot",
+			rid:  NewRecordID(0, -1),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestTableScanAt(t, beforeFirstSlot)
+
+			if err := ts.MoveToRecordID(tt.rid); !errors.Is(err, ErrSlotOutOfRange) {
+				t.Errorf("MoveToRecordID(%s) error = %v, want %v", tt.rid, err, ErrSlotOutOfRange)
+			}
+		})
+	}
+}
