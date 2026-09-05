@@ -905,3 +905,16 @@ func TestTransactionPinDoesNotHoldABufferWhileWaiting(t *testing.T) {
 	writer.concurrencyManager.Release()
 	assertReturns(t, blocked, "Pin()")
 }
+
+func TestTransactionBlockSize(t *testing.T) {
+	fm, lm, bm, lt := newTestDeps(t)
+
+	tx, err := NewTransaction(fm, lm, bm, lt, 1)
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+
+	if got := tx.BlockSize(); got != testBlockSize {
+		t.Errorf("BlockSize() = %d, want %d", got, testBlockSize)
+	}
+}

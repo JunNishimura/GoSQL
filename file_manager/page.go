@@ -100,7 +100,11 @@ func (p *Page) SetString(offset int, value string) error {
 	return p.SetBytes(offset, []byte(value))
 }
 
-func (p *Page) MaxLength(strlen int) int {
+// MaxLength is the number of bytes SetString needs for a string of at most
+// strlen characters: the length prefix, plus the widest encoding of each
+// character. Callers that lay out records need it to size a varchar field,
+// which is why it takes no page, the same reason IntBytes is exported.
+func MaxLength(strlen int) int {
 	return IntBytes + strlen*utf8.UTFMax
 }
 

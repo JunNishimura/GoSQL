@@ -181,6 +181,14 @@ func (tx *Transaction) SetString(blk *filemanager.BlockId, offset int, val strin
 	return nil
 }
 
+// BlockSize returns the number of bytes in a block, which is fixed for the
+// whole database. Callers that lay records out in a block need it to tell how
+// many fit, and asking for it takes no lock: it is settled when the database is
+// created and no transaction can change it.
+func (tx *Transaction) BlockSize() int {
+	return tx.fileManager.BlockSize()
+}
+
 // endOfFile is the block number of the dummy block that stands for a file's
 // length. No block ever has this number, so locking it contends only with other
 // transactions asking about the same length, and never with the blocks in the
