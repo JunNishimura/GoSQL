@@ -165,6 +165,38 @@ func (rp *RecordPage) setSlotState(slot int, state slotState) error {
 	return rp.tx.SetInt(rp.blk, offset, int32(state))
 }
 
+// NextUsedSlotAfter returns the first slot after slot that holds a record.
+// Slot -1 asks for the first record in the block.
+//
+// ErrNoSuchSlot means there are no more records past that point, which is how a
+// scan over a table learns to move on to the next block.
+func (rp *RecordPage) NextUsedSlotAfter(slot int) (int, error) {
+	return rp.searchAfter(slot, slotInUse)
+}
+
+// ClaimFreeSlotAfter takes the first free slot after slot and returns it,
+// marking it as holding a record. The fields are left as they were; filling
+// them in is the caller's next step.
+//
+// The slot is marked before anything is written to it. Marking it afterwards
+// would leave a gap in which the slot still reads as free, and the exclusive
+// lock a write takes is on the whole block, not on the slot: another
+// transaction that had already read the block would find the same free slot.
+//
+// ErrNoSuchSlot means the block is full, which is when a table appends another.
+func (rp *RecordPage) ClaimFreeSlotAfter(slot int) (int, error) {
+	free, err := rp.searchAfter(slot, slotEmpty)
+	if err != nil {
+		return 0, err
+	}
+
+	if err := rp.setSlotState(free, slotInUse); err != nil {
+		return 0, err
+	}
+
+	return free, nil
+}
+
 // Delete marks slot as holding no record.
 //
 // The bytes of the record are left where they are. Nothing looks at a slot the

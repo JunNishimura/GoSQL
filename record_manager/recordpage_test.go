@@ -721,3 +721,189 @@ func TestRecordPageSearchAfterReportsNoSuchSlot(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordPageNextUsedSlotAfter(t *testing.T) {
+	tests := []struct {
+		name  string
+		inUse []int
+		start int
+		want  int
+	}{
+		{
+			name:  "finds the first record in the block",
+			inUse: []int{1, 3},
+			start: -1,
+			want:  1,
+		},
+		{
+			name:  "skips the slot it is given and finds the next record",
+			inUse: []int{1, 3},
+			start: 1,
+			want:  3,
+		},
+		{
+			name:  "finds a record in the last slot of the block",
+			inUse: []int{3},
+			start: -1,
+			want:  3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+			for _, slot := range tt.inUse {
+				if err := rp.setSlotState(slot, slotInUse); err != nil {
+					t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+				}
+			}
+
+			got, err := rp.NextUsedSlotAfter(tt.start)
+			if err != nil {
+				t.Fatalf("NextUsedSlotAfter(%d) error = %v", tt.start, err)
+			}
+			if got != tt.want {
+				t.Errorf("NextUsedSlotAfter(%d) = %d, want %d", tt.start, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordPageNextUsedSlotAfterReportsNoSuchSlot(t *testing.T) {
+	tests := []struct {
+		name  string
+		inUse []int
+		start int
+	}{
+		{
+			name:  "when the block holds no records at all",
+			inUse: nil,
+			start: -1,
+		},
+		{
+			name:  "when the last record is at the slot it starts from",
+			inUse: []int{2},
+			start: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+			for _, slot := range tt.inUse {
+				if err := rp.setSlotState(slot, slotInUse); err != nil {
+					t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+				}
+			}
+
+			if _, err := rp.NextUsedSlotAfter(tt.start); !errors.Is(err, ErrNoSuchSlot) {
+				t.Errorf("NextUsedSlotAfter(%d) error = %v, want %v", tt.start, err, ErrNoSuchSlot)
+			}
+		})
+	}
+}
+
+func TestRecordPageClaimFreeSlotAfter(t *testing.T) {
+	tests := []struct {
+		name  string
+		inUse []int
+		start int
+		want  int
+	}{
+		{
+			name:  "takes the first slot of an empty block",
+			inUse: nil,
+			start: -1,
+			want:  0,
+		},
+		{
+			name:  "takes the first free slot among slots already in use",
+			inUse: []int{0, 1, 3},
+			start: -1,
+			want:  2,
+		},
+		{
+			name:  "skips the slot it is given even when that slot is free",
+			inUse: nil,
+			start: 0,
+			want:  1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+			for _, slot := range tt.inUse {
+				if err := rp.setSlotState(slot, slotInUse); err != nil {
+					t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+				}
+			}
+
+			got, err := rp.ClaimFreeSlotAfter(tt.start)
+			if err != nil {
+				t.Fatalf("ClaimFreeSlotAfter(%d) error = %v", tt.start, err)
+			}
+			if got != tt.want {
+				t.Fatalf("ClaimFreeSlotAfter(%d) = %d, want %d", tt.start, got, tt.want)
+			}
+
+			if state := readSlotState(t, rp, got); state != slotInUse {
+				t.Errorf("slot %d flag = %d, want %d: the slot was returned but not marked", got, state, slotInUse)
+			}
+		})
+	}
+}
+
+// Claiming from the start of the block over and over is what an insert into a
+// table does, so each claim has to see the marks the ones before it left.
+func TestRecordPageClaimFreeSlotAfterTakesEachSlotOnce(t *testing.T) {
+	rp := newTestRecordPage(t)
+
+	for want := range testSlotsInBlock {
+		got, err := rp.ClaimFreeSlotAfter(-1)
+		if err != nil {
+			t.Fatalf("ClaimFreeSlotAfter(-1) error = %v on claim %d", err, want)
+		}
+		if got != want {
+			t.Fatalf("ClaimFreeSlotAfter(-1) = %d, want %d: an earlier claim did not stick", got, want)
+		}
+	}
+
+	if _, err := rp.ClaimFreeSlotAfter(-1); !errors.Is(err, ErrNoSuchSlot) {
+		t.Errorf("ClaimFreeSlotAfter(-1) error = %v, want %v once the block is full", err, ErrNoSuchSlot)
+	}
+}
+
+func TestRecordPageClaimFreeSlotAfterReportsNoSuchSlot(t *testing.T) {
+	tests := []struct {
+		name  string
+		inUse []int
+		start int
+	}{
+		{
+			name:  "when every slot in the block is in use",
+			inUse: []int{0, 1, 2, 3},
+			start: -1,
+		},
+		{
+			name:  "when the only free slots are at or before the one it starts from",
+			inUse: []int{2, 3},
+			start: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+			for _, slot := range tt.inUse {
+				if err := rp.setSlotState(slot, slotInUse); err != nil {
+					t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+				}
+			}
+
+			if _, err := rp.ClaimFreeSlotAfter(tt.start); !errors.Is(err, ErrNoSuchSlot) {
+				t.Errorf("ClaimFreeSlotAfter(%d) error = %v, want %v", tt.start, err, ErrNoSuchSlot)
+			}
+		})
+	}
+}
