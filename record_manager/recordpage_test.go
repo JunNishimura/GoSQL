@@ -411,3 +411,160 @@ func TestRecordPageRejectsAnUnknownField(t *testing.T) {
 		})
 	}
 }
+
+// readSlotState reads the flag at the front of slot. Nothing exposes it, so a
+// test that wants to see what Delete wrote has to go through the transaction
+// the record page writes with.
+func readSlotState(t *testing.T, rp *RecordPage, slot int) slotState {
+	t.Helper()
+
+	offset, err := rp.slotOffset(slot)
+	if err != nil {
+		t.Fatalf("slotOffset(%d) error = %v", slot, err)
+	}
+
+	flag, err := rp.tx.GetInt(rp.blk, offset)
+	if err != nil {
+		t.Fatalf("GetInt() at the flag of slot %d error = %v", slot, err)
+	}
+
+	return slotState(flag)
+}
+
+func TestRecordPageSetSlotState(t *testing.T) {
+	tests := []struct {
+		name string
+		// states are written to the same slot in turn, so that a case can
+		// check a slot goes back to a state it has already left.
+		states []slotState
+		want   slotState
+	}{
+		{
+			name:   "marks a slot as holding a record",
+			states: []slotState{slotInUse},
+			want:   slotInUse,
+		},
+		{
+			name:   "marks a slot that held a record as holding none",
+			states: []slotState{slotInUse, slotEmpty},
+			want:   slotEmpty,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+
+			for _, state := range tt.states {
+				if err := rp.setSlotState(0, state); err != nil {
+					t.Fatalf("setSlotState(0, %d) error = %v", state, err)
+				}
+			}
+
+			if got := readSlotState(t, rp, 0); got != tt.want {
+				t.Errorf("slot 0 flag = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// A block comes back from Append filled with zeroes, which is slotEmpty, so the
+// slot has to be marked in use before a delete can be seen to have done
+// anything.
+func TestRecordPageDelete(t *testing.T) {
+	rp := newTestRecordPage(t)
+
+	if err := rp.setSlotState(1, slotInUse); err != nil {
+		t.Fatalf("setSlotState(1, slotInUse) error = %v", err)
+	}
+	if got := readSlotState(t, rp, 1); got != slotInUse {
+		t.Fatalf("slot 1 flag = %d, want %d before the delete", got, slotInUse)
+	}
+
+	if err := rp.Delete(1); err != nil {
+		t.Fatalf("Delete(1) error = %v", err)
+	}
+
+	if got := readSlotState(t, rp, 1); got != slotEmpty {
+		t.Errorf("slot 1 flag = %d, want %d", got, slotEmpty)
+	}
+}
+
+func TestRecordPageDeleteLeavesTheOtherSlotsAlone(t *testing.T) {
+	const deleted = 1
+
+	rp := newTestRecordPage(t)
+
+	for slot := range testSlotsInBlock {
+		if err := rp.setSlotState(slot, slotInUse); err != nil {
+			t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+		}
+	}
+
+	if err := rp.Delete(deleted); err != nil {
+		t.Fatalf("Delete(%d) error = %v", deleted, err)
+	}
+
+	for slot := range testSlotsInBlock {
+		want := slotInUse
+		if slot == deleted {
+			want = slotEmpty
+		}
+
+		if got := readSlotState(t, rp, slot); got != want {
+			t.Errorf("slot %d flag = %d, want %d", slot, got, want)
+		}
+	}
+}
+
+func TestRecordPageDeleteKeepsTheFieldsOfTheOtherSlots(t *testing.T) {
+	const deleted = 1
+
+	rp := newTestRecordPage(t)
+
+	for slot := range testSlotsInBlock {
+		if err := rp.SetInt(slot, "id", int32(slot)); err != nil {
+			t.Fatalf("SetInt(%d) error = %v", slot, err)
+		}
+	}
+
+	if err := rp.Delete(deleted); err != nil {
+		t.Fatalf("Delete(%d) error = %v", deleted, err)
+	}
+
+	for slot := range testSlotsInBlock {
+		got, err := rp.GetInt(slot, "id")
+		if err != nil {
+			t.Fatalf("GetInt(%d) error = %v", slot, err)
+		}
+		if got != int32(slot) {
+			t.Errorf("GetInt(%d) = %d, want %d: the delete wrote outside the flag", slot, got, slot)
+		}
+	}
+}
+
+func TestRecordPageDeleteRejectsASlotOutsideTheBlock(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+	}{
+		{
+			name: "refuses the first slot that does not fit",
+			slot: testSlotsInBlock,
+		},
+		{
+			name: "refuses a negative slot",
+			slot: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+
+			if err := rp.Delete(tt.slot); !errors.Is(err, ErrSlotOutOfRange) {
+				t.Errorf("Delete(%d) error = %v, want %v", tt.slot, err, ErrSlotOutOfRange)
+			}
+		})
+	}
+}

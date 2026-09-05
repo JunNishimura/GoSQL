@@ -15,6 +15,20 @@ var ErrSlotOutOfRange = errors.New("slot out of range")
 // schema says it is another.
 var ErrFieldTypeMismatch = errors.New("field type mismatch")
 
+// slotState is the flag at the front of a slot, saying whether the slot holds a
+// record. It is stored as an int because that is one of the two widths a
+// transaction knows how to log.
+type slotState int32
+
+const (
+	// slotEmpty is the state of a slot that holds no record. It is zero so
+	// that an appended block, which comes back filled with zeroes, reads as a
+	// block of empty slots without having to be written over first.
+	slotEmpty slotState = iota
+	// slotInUse is the state of a slot that holds a record.
+	slotInUse
+)
+
 // RecordPage is one block seen as an array of slots, each slot holding one
 // record laid out the way its layout says.
 //
@@ -93,6 +107,29 @@ func (rp *RecordPage) fieldPos(slot int, fieldName string, fieldType FieldType) 
 	}
 
 	return slotOffset + fieldOffset, nil
+}
+
+// setSlotState writes state to the flag at the front of slot.
+//
+// The flag sits before the fields rather than after them so that it is at the
+// same place in every slot whatever the schema is, which is what lets a page be
+// searched for a free slot without a layout for the records in it.
+func (rp *RecordPage) setSlotState(slot int, state slotState) error {
+	offset, err := rp.slotOffset(slot)
+	if err != nil {
+		return err
+	}
+
+	return rp.tx.SetInt(rp.blk, offset, int32(state))
+}
+
+// Delete marks slot as holding no record.
+//
+// The bytes of the record are left where they are. Nothing looks at a slot the
+// flag calls empty, and the next record written there covers them, so clearing
+// them would be work no reader could tell had been done.
+func (rp *RecordPage) Delete(slot int) error {
+	return rp.setSlotState(slot, slotEmpty)
 }
 
 // GetInt returns the int field fieldName of slot.
