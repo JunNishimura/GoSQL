@@ -84,6 +84,20 @@ func NewTableScan(tx *transaction.Transaction, tableName string, layout *Layout)
 	return ts, nil
 }
 
+// MoveBeforeFirstRecord puts the scan back at the start of the table, before
+// its first record.
+//
+// It leaves the scan on no record rather than on the first one: reading a field
+// straight after this is ErrNoCurrentRecord, and it takes a move to the next
+// record to arrive at the first. That is what lets a walk over a table be one
+// loop, with the first record reached the same way as every other.
+//
+// The table is not changed. The first block is opened as it stands, records and
+// all, so this can be called as often as a query needs to read the table again.
+func (ts *TableScan) MoveBeforeFirstRecord() error {
+	return ts.moveToBlock(0)
+}
+
 // requireCurrentRecord reports why the scan has no record to read or write, and
 // nil when it has one. The four field methods all need the same thing of it, so
 // they ask here rather than each deciding what counts as being on a record.

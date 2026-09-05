@@ -342,3 +342,69 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 		})
 	}
 }
+
+// The scan is taken to a second block and put part way into it, so that going
+// back to the start has both a block and a slot to undo.
+func TestTableScanMoveBeforeFirstRecordReturnsToTheStart(t *testing.T) {
+	const id = 42
+
+	ts := newTestTableScanAt(t, 0)
+
+	if err := ts.SetInt("id", id); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+
+	if err := ts.moveToNewBlock(); err != nil {
+		t.Fatalf("moveToNewBlock() error = %v", err)
+	}
+	ts.currentSlot = 2
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	if got := ts.rp.blk.Number(); got != 0 {
+		t.Errorf("the scan is on block %d, want 0", got)
+	}
+	if ts.currentSlot != beforeFirstSlot {
+		t.Errorf("currentSlot = %d, want %d", ts.currentSlot, beforeFirstSlot)
+	}
+
+	size, err := ts.tx.Size(ts.fileName)
+	if err != nil {
+		t.Fatalf("Size() error = %v", err)
+	}
+	if size != 2 {
+		t.Errorf("the table has %d blocks, want 2: going back to the start appended one", size)
+	}
+
+	ts.currentSlot = 0
+	got, err := ts.GetInt("id")
+	if err != nil {
+		t.Fatalf("GetInt() error = %v", err)
+	}
+	if got != id {
+		t.Errorf("GetInt() = %d, want %d: going back to the start wiped the block", got, id)
+	}
+}
+
+// Going back to the start has to reset the slot even when the scan has not left
+// the first block, which an implementation that returns early would miss.
+func TestTableScanMoveBeforeFirstRecordFromWithinTheFirstBlock(t *testing.T) {
+	ts := newTestTableScanAt(t, 2)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	if got := ts.rp.blk.Number(); got != 0 {
+		t.Errorf("the scan is on block %d, want 0", got)
+	}
+	if ts.currentSlot != beforeFirstSlot {
+		t.Errorf("currentSlot = %d, want %d", ts.currentSlot, beforeFirstSlot)
+	}
+
+	if _, err := ts.GetInt("id"); !errors.Is(err, ErrNoCurrentRecord) {
+		t.Errorf("GetInt() error = %v, want %v: the scan is on a record it should not be on", err, ErrNoCurrentRecord)
+	}
+}
