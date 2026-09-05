@@ -27,6 +27,38 @@ func mustAddStringField(t *testing.T, s *Schema, fieldName string, length int) {
 	}
 }
 
+func TestFieldTypeString(t *testing.T) {
+	tests := []struct {
+		name      string
+		fieldType FieldType
+		want      string
+	}{
+		{
+			name:      "names an int field type",
+			fieldType: FieldTypeInt,
+			want:      "int",
+		},
+		{
+			name:      "names a varchar field type",
+			fieldType: FieldTypeVarchar,
+			want:      "varchar",
+		},
+		{
+			name:      "shows the number of a type it does not know",
+			fieldType: FieldType(7),
+			want:      "FieldType(7)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.fieldType.String(); got != tt.want {
+				t.Errorf("String() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSchemaAddField(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -26,6 +26,19 @@ const (
 	FieldTypeVarchar
 )
 
+// String names the type the way a reader of an error message would, so that
+// being told a field is a varchar rather than an int says something.
+func (ft FieldType) String() string {
+	switch ft {
+	case FieldTypeInt:
+		return "int"
+	case FieldTypeVarchar:
+		return "varchar"
+	default:
+		return fmt.Sprintf("FieldType(%d)", int(ft))
+	}
+}
+
 // fieldInfo is what a schema knows about one field. Length is the character
 // limit of a varchar field and is unused for an int, whose width is fixed.
 type fieldInfo struct {
