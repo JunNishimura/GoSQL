@@ -50,6 +50,15 @@ type TableScan struct {
 	fileName string
 	// currentSlot is the slot of rp the scan is on, or beforeFirstSlot.
 	currentSlot int
+	// blockCount is how many blocks the table's file had when this scan last
+	// looked. Asking the file is a call to stat, and a walk asks once per block
+	// it leaves, so the answer is kept between those.
+	//
+	// It can only be behind, never ahead: blocks are added and never taken
+	// away. No other transaction can add one, since opening the scan took a
+	// shared lock on the file's length, but this transaction can, through this
+	// scan or through another one over the same table.
+	blockCount int
 }
 
 // NewTableScan opens a scan over tableName, placed before the first record.
@@ -68,6 +77,7 @@ func NewTableScan(tx *transaction.Transaction, tableName string, layout *Layout)
 	if err != nil {
 		return nil, err
 	}
+	ts.blockCount = size
 
 	if size == 0 {
 		if err := ts.moveToNewBlock(); err != nil {
@@ -145,15 +155,26 @@ func (ts *TableScan) MoveToNextRecord() (bool, error) {
 // isOnLastBlock reports whether the scan is on the final block of the table,
 // which is where a walk that finds no more records has to stop rather than move
 // on.
+//
+// The count it keeps is enough to say no: a block it already knows comes after
+// this one is proof there is more to read. Saying yes is what the count cannot
+// be trusted for, since it may have been left behind by an append this
+// transaction made elsewhere, so that answer is settled against the file and
+// the count brought up to date.
 func (ts *TableScan) isOnLastBlock() (bool, error) {
 	if err := ts.requireCurrentBlock(); err != nil {
 		return false, err
+	}
+
+	if ts.rp.blk.Number() < ts.blockCount-1 {
+		return false, nil
 	}
 
 	size, err := ts.tx.Size(ts.fileName)
 	if err != nil {
 		return false, err
 	}
+	ts.blockCount = size
 
 	return ts.rp.blk.Number() == size-1, nil
 }
@@ -260,6 +281,7 @@ func (ts *TableScan) moveToNewBlock() error {
 
 	ts.rp = rp
 	ts.currentSlot = beforeFirstSlot
+	ts.blockCount = blk.Number() + 1
 
 	return nil
 }

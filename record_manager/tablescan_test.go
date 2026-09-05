@@ -541,3 +541,34 @@ func TestTableScanMoveToNextRecordStaysAtTheEnd(t *testing.T) {
 		t.Errorf("MoveToNextRecord() = true, want false once the walk has ended")
 	}
 }
+
+// Two scans over the same table in one transaction, one of which appends a
+// block. The other has to find the records in it, which is what stops a scan
+// from settling on a block count it read when it opened.
+func TestTableScanMoveToNextRecordSeesABlockAnotherScanAppended(t *testing.T) {
+	tx := newTestTransaction(t)
+	layout := newTestLayout(t)
+
+	reader, err := NewTableScan(tx, testTableName, layout)
+	if err != nil {
+		t.Fatalf("NewTableScan() for the reader error = %v", err)
+	}
+	writer, err := NewTableScan(tx, testTableName, layout)
+	if err != nil {
+		t.Fatalf("NewTableScan() for the writer error = %v", err)
+	}
+
+	if err := writer.moveToNewBlock(); err != nil {
+		t.Fatalf("moveToNewBlock() error = %v", err)
+	}
+	claimTestRecord(t, writer, 0, 77)
+
+	if err := reader.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	want := []int32{77}
+	if got := walkTestRecords(t, reader); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v: the scan stopped at the blocks it knew about", got, want)
+	}
+}
