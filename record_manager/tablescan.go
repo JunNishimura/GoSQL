@@ -98,13 +98,84 @@ func (ts *TableScan) MoveBeforeFirstRecord() error {
 	return ts.moveToBlock(0)
 }
 
+// MoveToNextRecord puts the scan on the record after the one it is on, and
+// reports whether there was one. False means the table has been read to the
+// end, not that anything went wrong.
+//
+// Empty slots are passed over, and so are whole blocks of them: a table that
+// has had records deleted reads as the records it still holds, with no gaps for
+// the caller to step around.
+//
+// Running off the end of a block goes on to the next rather than stopping,
+// which is what makes a table look like one run of records rather than a file
+// of blocks. Only the block being read is held, so a walk over a large table
+// takes one buffer however long it runs.
+func (ts *TableScan) MoveToNextRecord() (bool, error) {
+	if err := ts.requireCurrentBlock(); err != nil {
+		return false, err
+	}
+
+	for {
+		slot, err := ts.rp.NextUsedSlotAfter(ts.currentSlot)
+		if err == nil {
+			ts.currentSlot = slot
+			return true, nil
+		}
+		if !errors.Is(err, ErrNoSuchSlot) {
+			return false, err
+		}
+
+		// The block holds no more records. Whether that is the end of the
+		// table or only the end of a block is the one thing this cannot tell
+		// from the block itself.
+		onLastBlock, err := ts.isOnLastBlock()
+		if err != nil {
+			return false, err
+		}
+		if onLastBlock {
+			return false, nil
+		}
+
+		if err := ts.moveToBlock(ts.rp.blk.Number() + 1); err != nil {
+			return false, err
+		}
+	}
+}
+
+// isOnLastBlock reports whether the scan is on the final block of the table,
+// which is where a walk that finds no more records has to stop rather than move
+// on.
+func (ts *TableScan) isOnLastBlock() (bool, error) {
+	if err := ts.requireCurrentBlock(); err != nil {
+		return false, err
+	}
+
+	size, err := ts.tx.Size(ts.fileName)
+	if err != nil {
+		return false, err
+	}
+
+	return ts.rp.blk.Number() == size-1, nil
+}
+
+// requireCurrentBlock reports that the scan is on no block, which is the state
+// a failed move leaves it in.
+func (ts *TableScan) requireCurrentBlock() error {
+	if ts.rp == nil {
+		return fmt.Errorf("the scan of %s is on no block: %w", ts.fileName, ErrNoCurrentRecord)
+	}
+
+	return nil
+}
+
 // requireCurrentRecord reports why the scan has no record to read or write, and
 // nil when it has one. The four field methods all need the same thing of it, so
 // they ask here rather than each deciding what counts as being on a record.
 func (ts *TableScan) requireCurrentRecord() error {
-	if ts.rp == nil {
-		return fmt.Errorf("the scan of %s is on no block: %w", ts.fileName, ErrNoCurrentRecord)
+	if err := ts.requireCurrentBlock(); err != nil {
+		return err
 	}
+
 	if ts.currentSlot == beforeFirstSlot {
 		return fmt.Errorf("the scan of %s is before its first record: %w", ts.fileName, ErrNoCurrentRecord)
 	}

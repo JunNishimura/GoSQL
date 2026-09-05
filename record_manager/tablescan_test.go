@@ -2,6 +2,7 @@ package recordmanager
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -406,5 +407,137 @@ func TestTableScanMoveBeforeFirstRecordFromWithinTheFirstBlock(t *testing.T) {
 
 	if _, err := ts.GetInt("id"); !errors.Is(err, ErrNoCurrentRecord) {
 		t.Errorf("GetInt() error = %v, want %v: the scan is on a record it should not be on", err, ErrNoCurrentRecord)
+	}
+}
+
+// claimTestRecord marks slot of the block the scan is on as holding a record
+// and writes id into it. Insert does not exist yet, so a test that needs
+// records in particular slots puts them there itself.
+func claimTestRecord(t *testing.T, ts *TableScan, slot int, id int32) {
+	t.Helper()
+
+	if err := ts.rp.setSlotState(slot, slotInUse); err != nil {
+		t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+	}
+	if err := ts.rp.SetInt(slot, "id", id); err != nil {
+		t.Fatalf("SetInt(%d) error = %v", slot, err)
+	}
+}
+
+// walkTestRecords reads the id of every record from where the scan is to the
+// end of the table.
+func walkTestRecords(t *testing.T, ts *TableScan) []int32 {
+	t.Helper()
+
+	ids := []int32{}
+	for {
+		onRecord, err := ts.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !onRecord {
+			return ids
+		}
+
+		id, err := ts.GetInt("id")
+		if err != nil {
+			t.Fatalf("GetInt() error = %v", err)
+		}
+		ids = append(ids, id)
+	}
+}
+
+// Slot 1 is left free between the two records, so a walk that reported every
+// slot rather than every record would come back with three ids.
+func TestTableScanMoveToNextRecordWalksOneBlock(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	claimTestRecord(t, ts, 0, 10)
+	claimTestRecord(t, ts, 2, 30)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	want := []int32{10, 30}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v", got, want)
+	}
+}
+
+// The first record is in the last slot of block 0 and the second in block 1, so
+// the walk has to carry on past the end of a block to find both.
+func TestTableScanMoveToNextRecordCrossesIntoTheNextBlock(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	claimTestRecord(t, ts, testSlotsInBlock-1, 10)
+
+	if err := ts.moveToNewBlock(); err != nil {
+		t.Fatalf("moveToNewBlock() error = %v", err)
+	}
+	claimTestRecord(t, ts, 0, 20)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	want := []int32{10, 20}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v", got, want)
+	}
+}
+
+// Block 0 holds nothing at all, so the walk has to move on from a block it
+// found no records in rather than take that for the end of the table.
+func TestTableScanMoveToNextRecordPassesOverAnEmptyBlock(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	if err := ts.moveToNewBlock(); err != nil {
+		t.Fatalf("moveToNewBlock() error = %v", err)
+	}
+	claimTestRecord(t, ts, 1, 99)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	want := []int32{99}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v", got, want)
+	}
+}
+
+func TestTableScanMoveToNextRecordOnATableWithNoRecords(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	onRecord, err := ts.MoveToNextRecord()
+	if err != nil {
+		t.Fatalf("MoveToNextRecord() error = %v", err)
+	}
+	if onRecord {
+		t.Errorf("MoveToNextRecord() = true, want false on a table that holds no records")
+	}
+}
+
+// A walk that has ended stays ended: asking again must not wrap round to the
+// start or run off the end of the file.
+func TestTableScanMoveToNextRecordStaysAtTheEnd(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	claimTestRecord(t, ts, 0, 10)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, []int32{10}) {
+		t.Fatalf("the ids read = %v, want [10]", got)
+	}
+
+	onRecord, err := ts.MoveToNextRecord()
+	if err != nil {
+		t.Fatalf("MoveToNextRecord() error = %v", err)
+	}
+	if onRecord {
+		t.Errorf("MoveToNextRecord() = true, want false once the walk has ended")
 	}
 }
