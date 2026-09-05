@@ -1,9 +1,22 @@
 package recordmanager
 
 import (
+	"errors"
+	"fmt"
+
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
+
+// ErrNoCurrentRecord reports reading or writing a scan that is not on a record:
+// one that has not been moved to its first record yet, or one that has run past
+// the last.
+//
+// It is kept apart from ErrSlotOutOfRange, which the record page raises for the
+// same slot number, because the two say different things to whoever gets them.
+// Out of range means a slot that could not exist; this one means the scan has
+// not been asked to go anywhere.
+var ErrNoCurrentRecord = errors.New("no current record")
 
 // tableFileExtension is what a table's name is turned into a file name with.
 // One table is one file, so the name of the table is enough to find it.
@@ -69,6 +82,57 @@ func NewTableScan(tx *transaction.Transaction, tableName string, layout *Layout)
 	}
 
 	return ts, nil
+}
+
+// requireCurrentRecord reports why the scan has no record to read or write, and
+// nil when it has one. The four field methods all need the same thing of it, so
+// they ask here rather than each deciding what counts as being on a record.
+func (ts *TableScan) requireCurrentRecord() error {
+	if ts.rp == nil {
+		return fmt.Errorf("the scan of %s is on no block: %w", ts.fileName, ErrNoCurrentRecord)
+	}
+	if ts.currentSlot == beforeFirstSlot {
+		return fmt.Errorf("the scan of %s is before its first record: %w", ts.fileName, ErrNoCurrentRecord)
+	}
+
+	return nil
+}
+
+// GetInt returns the int field fieldName of the record the scan is on.
+func (ts *TableScan) GetInt(fieldName string) (int32, error) {
+	if err := ts.requireCurrentRecord(); err != nil {
+		return 0, err
+	}
+
+	return ts.rp.GetInt(ts.currentSlot, fieldName)
+}
+
+// SetInt writes val to the int field fieldName of the record the scan is on.
+func (ts *TableScan) SetInt(fieldName string, val int32) error {
+	if err := ts.requireCurrentRecord(); err != nil {
+		return err
+	}
+
+	return ts.rp.SetInt(ts.currentSlot, fieldName, val)
+}
+
+// GetString returns the varchar field fieldName of the record the scan is on.
+func (ts *TableScan) GetString(fieldName string) (string, error) {
+	if err := ts.requireCurrentRecord(); err != nil {
+		return "", err
+	}
+
+	return ts.rp.GetString(ts.currentSlot, fieldName)
+}
+
+// SetString writes val to the varchar field fieldName of the record the scan is
+// on.
+func (ts *TableScan) SetString(fieldName string, val string) error {
+	if err := ts.requireCurrentRecord(); err != nil {
+		return err
+	}
+
+	return ts.rp.SetString(ts.currentSlot, fieldName, val)
 }
 
 // moveToBlock puts the scan on a block the table already has, before its first

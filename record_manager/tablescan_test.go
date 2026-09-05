@@ -134,3 +134,211 @@ func TestTableScanMoveToBlockReleasesTheBlockItLeaves(t *testing.T) {
 		t.Errorf("GetInt() on the block the scan left error = %v, want %v", err, transaction.ErrBlockNotPinned)
 	}
 }
+
+// newTestTableScanAt opens a scan over a table with one empty block and puts it
+// on slot, which is what Next will do for it once that exists.
+func newTestTableScanAt(t *testing.T, slot int) *TableScan {
+	t.Helper()
+
+	ts, err := NewTableScan(newTestTransaction(t), testTableName, newTestLayout(t))
+	if err != nil {
+		t.Fatalf("NewTableScan() error = %v", err)
+	}
+	ts.currentSlot = slot
+
+	return ts
+}
+
+func TestTableScanSetIntAndGetInt(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+		val  int32
+	}{
+		{
+			name: "reads back the value written to the first slot",
+			slot: 0,
+			val:  42,
+		},
+		{
+			name: "reads back the value written to the last slot of the block",
+			slot: testSlotsInBlock - 1,
+			val:  7,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestTableScanAt(t, tt.slot)
+
+			if err := ts.SetInt("id", tt.val); err != nil {
+				t.Fatalf("SetInt() error = %v", err)
+			}
+
+			got, err := ts.GetInt("id")
+			if err != nil {
+				t.Fatalf("GetInt() error = %v", err)
+			}
+			if got != tt.val {
+				t.Errorf("GetInt() = %d, want %d", got, tt.val)
+			}
+		})
+	}
+}
+
+func TestTableScanSetStringAndGetString(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+		val  string
+	}{
+		{
+			name: "reads back the value written to the first slot",
+			slot: 0,
+			val:  "alice",
+		},
+		{
+			name: "reads back an empty string",
+			slot: 0,
+			val:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestTableScanAt(t, tt.slot)
+
+			if err := ts.SetString("name", tt.val); err != nil {
+				t.Fatalf("SetString() error = %v", err)
+			}
+
+			got, err := ts.GetString("name")
+			if err != nil {
+				t.Fatalf("GetString() error = %v", err)
+			}
+			if got != tt.val {
+				t.Errorf("GetString() = %q, want %q", got, tt.val)
+			}
+		})
+	}
+}
+
+// The four field methods take no slot, so what they read and write has to
+// follow the scan. Writing at two slots and coming back to the first is what
+// tells that apart from always working on the same one.
+func TestTableScanFieldsFollowTheSlotTheScanIsOn(t *testing.T) {
+	ts := newTestTableScanAt(t, 0)
+
+	if err := ts.SetInt("id", 10); err != nil {
+		t.Fatalf("SetInt() at slot 0 error = %v", err)
+	}
+
+	ts.currentSlot = 1
+	if err := ts.SetInt("id", 20); err != nil {
+		t.Fatalf("SetInt() at slot 1 error = %v", err)
+	}
+
+	ts.currentSlot = 0
+	got, err := ts.GetInt("id")
+	if err != nil {
+		t.Fatalf("GetInt() at slot 0 error = %v", err)
+	}
+	if got != 10 {
+		t.Errorf("GetInt() at slot 0 = %d, want 10: the write at slot 1 landed here", got)
+	}
+}
+
+func TestTableScanRejectsFieldsBeforeTheFirstRecord(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(ts *TableScan) error
+	}{
+		{
+			name: "GetInt refuses a scan that is on no record",
+			call: func(ts *TableScan) error {
+				_, err := ts.GetInt("id")
+				return err
+			},
+		},
+		{
+			name: "SetInt refuses a scan that is on no record",
+			call: func(ts *TableScan) error {
+				return ts.SetInt("id", 1)
+			},
+		},
+		{
+			name: "GetString refuses a scan that is on no record",
+			call: func(ts *TableScan) error {
+				_, err := ts.GetString("name")
+				return err
+			},
+		},
+		{
+			name: "SetString refuses a scan that is on no record",
+			call: func(ts *TableScan) error {
+				return ts.SetString("name", "x")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestTableScanAt(t, beforeFirstSlot)
+
+			if err := tt.call(ts); !errors.Is(err, ErrNoCurrentRecord) {
+				t.Errorf("error = %v, want %v", err, ErrNoCurrentRecord)
+			}
+		})
+	}
+}
+
+// The scan adds no checking of its own on the field, so what the record page
+// refuses has to reach the caller unchanged.
+func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		call    func(ts *TableScan) error
+		wantErr error
+	}{
+		{
+			name: "GetInt on a varchar field",
+			call: func(ts *TableScan) error {
+				_, err := ts.GetInt("name")
+				return err
+			},
+			wantErr: ErrFieldTypeMismatch,
+		},
+		{
+			name: "SetString on an int field",
+			call: func(ts *TableScan) error {
+				return ts.SetString("id", "x")
+			},
+			wantErr: ErrFieldTypeMismatch,
+		},
+		{
+			name: "GetString on a field the schema does not have",
+			call: func(ts *TableScan) error {
+				_, err := ts.GetString("missing")
+				return err
+			},
+			wantErr: ErrFieldNotFound,
+		},
+		{
+			name: "SetInt on a field the schema does not have",
+			call: func(ts *TableScan) error {
+				return ts.SetInt("missing", 1)
+			},
+			wantErr: ErrFieldNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestTableScanAt(t, 0)
+
+			if err := tt.call(ts); !errors.Is(err, tt.wantErr) {
+				t.Errorf("error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
