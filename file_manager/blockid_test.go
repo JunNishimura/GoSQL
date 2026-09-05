@@ -9,12 +9,12 @@ func TestNewBlockId(t *testing.T) {
 		blkNum   int
 	}{
 		{
-			name:     "creates BlockId with given filename and blkNum",
+			name:     "it carries the file name and the block number it was made from",
 			fileName: "test.db",
 			blkNum:   3,
 		},
 		{
-			name:     "creates BlockId with zero blkNum",
+			name:     "given block number zero, it keeps the zero rather than reading it as unset",
 			fileName: "test.db",
 			blkNum:   0,
 		},
@@ -41,13 +41,13 @@ func TestBlockIdString(t *testing.T) {
 		want     string
 	}{
 		{
-			name:     "formats filename and blkNum into string",
+			name:     "it formats as its file name and block number",
 			fileName: "test.db",
 			blkNum:   3,
 			want:     "[file test.db, block 3]",
 		},
 		{
-			name:     "formats zero blkNum into string",
+			name:     "given block number zero, it shows the zero rather than leaving it out",
 			fileName: "test.db",
 			blkNum:   0,
 			want:     "[file test.db, block 0]",
@@ -72,25 +72,25 @@ func TestBlockIdEquals(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "returns true when filename and blkNum are both equal",
+			name: "given two block ids of the same file, when their block numbers are the same, then they are equal",
 			a:    NewBlockId("test.db", 1),
 			b:    NewBlockId("test.db", 1),
 			want: true,
 		},
 		{
-			name: "returns false when blkNum differs",
+			name: "given two block ids of the same file, when their block numbers differ, then they are not equal",
 			a:    NewBlockId("test.db", 1),
 			b:    NewBlockId("test.db", 2),
 			want: false,
 		},
 		{
-			name: "returns false when filename differs",
+			name: "given two block ids of the same block number, when their file names differ, then they are not equal",
 			a:    NewBlockId("a.db", 1),
 			b:    NewBlockId("b.db", 1),
 			want: false,
 		},
 		{
-			name: "returns false when both filename and blkNum differ",
+			name: "given two block ids, when both the file name and the block number differ, then they are not equal",
 			a:    NewBlockId("a.db", 1),
 			b:    NewBlockId("b.db", 2),
 			want: false,
@@ -114,13 +114,13 @@ func TestBlockIdHashCode(t *testing.T) {
 		wantSame bool
 	}{
 		{
-			name:     "returns same hash when filename and blkNum are both equal",
+			name:     "given two block ids of the same file, when their block numbers are the same, then their hashes are the same",
 			a:        NewBlockId("test.db", 1),
 			b:        NewBlockId("test.db", 1),
 			wantSame: true,
 		},
 		{
-			name:     "returns different hash when blkNum differs",
+			name:     "given two block ids of the same file, when their block numbers differ, then their hashes differ",
 			a:        NewBlockId("test.db", 1),
 			b:        NewBlockId("test.db", 2),
 			wantSame: false,

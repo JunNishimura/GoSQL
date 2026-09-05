@@ -27,11 +27,11 @@ func TestNewFileManager(t *testing.T) {
 		dirFunc func(t *testing.T) string
 	}{
 		{
-			name:    "creates directory when it does not exist",
+			name:    "given a database directory that does not exist, it creates it",
 			dirFunc: func(t *testing.T) string { return t.TempDir() + "/newdir" },
 		},
 		{
-			name:    "succeeds when directory already exists",
+			name:    "given a database directory that already exists, it uses it rather than failing",
 			dirFunc: func(t *testing.T) string { return t.TempDir() },
 		},
 	}
@@ -59,14 +59,14 @@ func TestWriteAndRead(t *testing.T) {
 		wantBlocksRead    int
 	}{
 		{
-			name:              "reads back data written to block 0",
+			name:              "when block 0 is written and read back, then it holds what was written",
 			blk:               NewBlockId(testFileName, 0),
 			writeData:         "hello",
 			wantBlocksWritten: 1,
 			wantBlocksRead:    1,
 		},
 		{
-			name:              "reads back data written to block 1 at correct offset",
+			name:              "when a block past the first is written and read back, then its number picks the offset",
 			blk:               NewBlockId(testFileName, 1),
 			writeData:         "block one",
 			wantBlocksWritten: 1,
@@ -112,17 +112,17 @@ func TestAppend(t *testing.T) {
 		wantBlkNum  int
 	}{
 		{
-			name:        "returns blkNum 0 and correct filename on first append to empty file",
+			name:        "given a file with no blocks, the first append returns block 0 of that file",
 			appendCount: 1,
 			wantBlkNum:  0,
 		},
 		{
-			name:        "returns blkNum 1 on second append",
+			name:        "given a file of one block, the next append returns block 1",
 			appendCount: 2,
 			wantBlkNum:  1,
 		},
 		{
-			name:        "returns blkNum 2 on third append",
+			name:        "given a file of two blocks, the next append returns block 2",
 			appendCount: 3,
 			wantBlkNum:  2,
 		},
@@ -156,12 +156,12 @@ func TestLength(t *testing.T) {
 		want        int
 	}{
 		{
-			name:        "returns 0 for empty file",
+			name:        "given a file that has never been appended to, it reports no blocks",
 			appendCount: 0,
 			want:        0,
 		},
 		{
-			name:        "returns block count equal to number of appended blocks",
+			name:        "given a file appended to three times, it reports three blocks",
 			appendCount: 3,
 			want:        3,
 		},
@@ -213,70 +213,70 @@ func readFirstBlock(t *testing.T, fm *FileManager, fileName string) int32 {
 }
 
 func TestArchive(t *testing.T) {
-	fm, dir := newTestFileManager(t)
-	writeFirstBlock(t, fm, testFileName, 100)
-	destPath := filepath.Join(dir, "archive", "old.db")
+	t.Run("it moves the file to the destination, creating the directories leading up to it", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+		destPath := filepath.Join(dir, "archive", "old.db")
 
-	if err := fm.Archive(testFileName, destPath); err != nil {
-		t.Fatalf("Archive() error = %v", err)
-	}
+		if err := fm.Archive(testFileName, destPath); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
 
-	// The destination directory is created along the way, so the caller does
-	// not have to prepare it.
-	archived, err := NewFileManager(filepath.Dir(destPath), testBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	if got := readFirstBlock(t, archived, filepath.Base(destPath)); got != 100 {
-		t.Errorf("the archived file holds %d, want 100", got)
-	}
-}
+		archived, err := NewFileManager(filepath.Dir(destPath), testBlockSize)
+		if err != nil {
+			t.Fatalf("NewFileManager() error = %v", err)
+		}
+		if got := readFirstBlock(t, archived, filepath.Base(destPath)); got != 100 {
+			t.Errorf("the archived file holds %d, want 100", got)
+		}
+	})
 
-// The manager keeps every file it has opened, so archiving has to close and
-// forget the handle. Otherwise the next read of that name would follow the
-// handle to the file that was moved away, and the archive would keep growing
-// instead of a new file being started.
-func TestArchiveLeavesTheNameFree(t *testing.T) {
-	fm, dir := newTestFileManager(t)
-	writeFirstBlock(t, fm, testFileName, 100)
+	// The manager keeps every file it has opened, so archiving has to close and
+	// forget the handle. Otherwise the next read of that name would follow the
+	// handle to the file that was moved away, and the archive would keep growing
+	// instead of a new file being started.
+	t.Run("given a file that has been archived, when its name is used again, then it starts an empty file", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
 
-	if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
-		t.Fatalf("Archive() error = %v", err)
-	}
+		if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
 
-	got, err := fm.Length(testFileName)
-	if err != nil {
-		t.Fatalf("Length() error = %v", err)
-	}
-	if got != 0 {
-		t.Errorf("Length(%q) = %d, want 0 (the name should refer to a new, empty file)", testFileName, got)
-	}
-}
+		got, err := fm.Length(testFileName)
+		if err != nil {
+			t.Fatalf("Length() error = %v", err)
+		}
+		if got != 0 {
+			t.Errorf("Length(%q) = %d, want 0 (the name should refer to a new, empty file)", testFileName, got)
+		}
+	})
 
-// Archiving exists to keep the old file, so it must not quietly replace one
-// that is already there.
-func TestArchiveDoesNotReplaceAnExistingArchive(t *testing.T) {
-	fm, dir := newTestFileManager(t)
-	destPath := filepath.Join(dir, "archive", "old.db")
-	writeFirstBlock(t, fm, testFileName, 100)
-	if err := fm.Archive(testFileName, destPath); err != nil {
-		t.Fatalf("Archive() error = %v", err)
-	}
-	writeFirstBlock(t, fm, testFileName, 200)
+	// Archiving exists to keep the old file, so it must not quietly replace one
+	// that is already there.
+	t.Run("given an archive already at the destination, it refuses to replace it and leaves both files alone", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		destPath := filepath.Join(dir, "archive", "old.db")
+		writeFirstBlock(t, fm, testFileName, 100)
+		if err := fm.Archive(testFileName, destPath); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+		writeFirstBlock(t, fm, testFileName, 200)
 
-	err := fm.Archive(testFileName, destPath)
+		err := fm.Archive(testFileName, destPath)
 
-	if err == nil {
-		t.Fatal("Archive() error = nil, want an error")
-	}
-	archived, err := NewFileManager(filepath.Dir(destPath), testBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	if got := readFirstBlock(t, archived, filepath.Base(destPath)); got != 100 {
-		t.Errorf("the archived file holds %d, want 100 (the first archive must survive)", got)
-	}
-	if got := readFirstBlock(t, fm, testFileName); got != 200 {
-		t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
-	}
+		if err == nil {
+			t.Fatal("Archive() error = nil, want an error")
+		}
+		archived, err := NewFileManager(filepath.Dir(destPath), testBlockSize)
+		if err != nil {
+			t.Fatalf("NewFileManager() error = %v", err)
+		}
+		if got := readFirstBlock(t, archived, filepath.Base(destPath)); got != 100 {
+			t.Errorf("the archived file holds %d, want 100 (the first archive must survive)", got)
+		}
+		if got := readFirstBlock(t, fm, testFileName); got != 200 {
+			t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
+		}
+	})
 }

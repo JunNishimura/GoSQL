@@ -47,19 +47,39 @@ rather than spelling the intent out in the function name.
 ### Case names
 
 Write a case name as **given / when / then**: the condition it starts from, the
-call it makes, and what that has to produce. A reader should be able to tell
-what a failing case was checking without opening the body.
+call it makes, and what that has to produce.
 
 ```
 given a schema with an int field, when a varchar field of the same name is added, then it reports ErrDuplicateField
 ```
 
-Drop `given` when there is no condition to state — a pure function of its
+The three parts are the default, not a form to fill in. What has to hold is that
+a reader can tell what a failing case was checking without opening the body.
+Where a part says nothing, leave it out rather than writing it for the shape of
+it: a name padded out to three clauses is harder to read than the short one it
+was made from, and no clearer.
+
+Leave out `given` when there is no condition to state. A pure function of its
 arguments starts from nothing.
 
 ```
 when a string of 10 characters is measured, then it takes 4 bytes plus 10 times UTFMax
 ```
+
+Leave out `when` where it would only restate the `then`, which is usual for a
+constructor: there is one call, and the case is about what came out of it.
+
+```
+// Padded
+when a block id is made from a file name and a block number, then it carries both
+
+// Better
+it carries the file name and the block number it was made from
+```
+
+Repeat a `given` that every case in a table shares rather than stating it once
+elsewhere. A case name is read on its own, in a line of test output, away from
+whatever the table or a comment says around it.
 
 ### Table driven tests
 

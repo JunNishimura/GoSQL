@@ -13,11 +13,11 @@ func TestNewPageByBlockSize(t *testing.T) {
 		blockSize int
 	}{
 		{
-			name:      "allocates buffer with given block size",
+			name:      "it allocates a buffer of the block size it was given",
 			blockSize: 400,
 		},
 		{
-			name:      "allocates zero-initialized buffer",
+			name:      "it allocates a buffer of zeroes, so an unwritten page reads as zero",
 			blockSize: 8,
 		},
 	}
@@ -44,11 +44,11 @@ func TestNewPageByBytes(t *testing.T) {
 		src  []byte
 	}{
 		{
-			name: "wraps given byte slice",
+			name: "it wraps the bytes it was given rather than copying them",
 			src:  []byte{1, 2, 3},
 		},
 		{
-			name: "wraps empty byte slice",
+			name: "given no bytes, it wraps an empty buffer rather than failing",
 			src:  []byte{},
 		},
 	}
@@ -70,22 +70,22 @@ func TestSetGetInt(t *testing.T) {
 		value  int32
 	}{
 		{
-			name:   "stores and retrieves a positive int32 value",
+			name:   "when a positive int is written and read back, then it is unchanged",
 			offset: 0,
 			value:  42,
 		},
 		{
-			name:   "stores and retrieves zero",
+			name:   "when zero is written and read back, then it is unchanged",
 			offset: 0,
 			value:  0,
 		},
 		{
-			name:   "stores and retrieves a negative int32 value",
+			name:   "when a negative int is written and read back, then the sign survives",
 			offset: 0,
 			value:  -1,
 		},
 		{
-			name:   "stores and retrieves value at non-zero offset",
+			name:   "when an int is written past the start of the page, then it is read back from there",
 			offset: 4,
 			value:  100,
 		},
@@ -111,17 +111,17 @@ func TestSetGetBytes(t *testing.T) {
 		value  []byte
 	}{
 		{
-			name:   "stores and retrieves non-empty byte slice",
+			name:   "when bytes are written and read back, then they are unchanged",
 			offset: 0,
 			value:  []byte{1, 2, 3},
 		},
 		{
-			name:   "stores and retrieves empty byte slice",
+			name:   "when no bytes are written and read back, then the result is empty rather than nil",
 			offset: 0,
 			value:  []byte{},
 		},
 		{
-			name:   "stores and retrieves bytes at non-zero offset",
+			name:   "when bytes are written past the start of the page, then they are read back from there",
 			offset: 8,
 			value:  []byte{9, 8, 7},
 		},
@@ -140,18 +140,20 @@ func TestSetGetBytes(t *testing.T) {
 	}
 }
 
-func TestGetBytesReturnsIndependentCopy(t *testing.T) {
-	p := NewPageByBlockSize(64)
-	if err := p.SetBytes(0, []byte{1, 2, 3}); err != nil {
-		t.Fatalf("SetBytes() error = %v", err)
-	}
+func TestGetBytes(t *testing.T) {
+	t.Run("when the bytes it returned are written to, then the page is unchanged", func(t *testing.T) {
+		p := NewPageByBlockSize(64)
+		if err := p.SetBytes(0, []byte{1, 2, 3}); err != nil {
+			t.Fatalf("SetBytes() error = %v", err)
+		}
 
-	got := p.GetBytes(0)
-	got[0] = 99
+		got := p.GetBytes(0)
+		got[0] = 99
 
-	if p.GetBytes(0)[0] == 99 {
-		t.Error("GetBytes() returned a slice sharing the internal buffer")
-	}
+		if p.GetBytes(0)[0] == 99 {
+			t.Error("GetBytes() returned a slice sharing the internal buffer")
+		}
+	})
 }
 
 func TestSetGetString(t *testing.T) {
@@ -161,22 +163,22 @@ func TestSetGetString(t *testing.T) {
 		value  string
 	}{
 		{
-			name:   "stores and retrieves ASCII string",
+			name:   "when a string is written and read back, then it is unchanged",
 			offset: 0,
 			value:  "hello",
 		},
 		{
-			name:   "stores and retrieves empty string",
+			name:   "when an empty string is written and read back, then it is still empty",
 			offset: 0,
 			value:  "",
 		},
 		{
-			name:   "stores and retrieves multibyte UTF-8 string",
+			name:   "when a string of multi-byte characters is written and read back, then it is unchanged",
 			offset: 0,
 			value:  "日本語",
 		},
 		{
-			name:   "stores and retrieves string at non-zero offset",
+			name:   "when a string is written past the start of the page, then it is read back from there",
 			offset: 16,
 			value:  "world",
 		},
@@ -195,7 +197,7 @@ func TestSetGetString(t *testing.T) {
 	}
 }
 
-func TestSetIntBoundsCheck(t *testing.T) {
+func TestSetInt(t *testing.T) {
 	tests := []struct {
 		name    string
 		bufSize int
@@ -203,19 +205,19 @@ func TestSetIntBoundsCheck(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "returns no error when int fits exactly in buffer",
+			name:    "given a page with room for exactly one int, it accepts a write at the start",
 			bufSize: 4,
 			offset:  0,
 			wantErr: false,
 		},
 		{
-			name:    "returns error when offset plus 4 bytes exceeds buffer size",
+			name:    "when an int would run past the end of the page, then the write is refused",
 			bufSize: 4,
 			offset:  1,
 			wantErr: true,
 		},
 		{
-			name:    "returns error when offset is equal to buffer size",
+			name:    "when the offset is the end of the page, then the write is refused",
 			bufSize: 4,
 			offset:  4,
 			wantErr: true,
@@ -233,7 +235,7 @@ func TestSetIntBoundsCheck(t *testing.T) {
 	}
 }
 
-func TestSetBytesBoundsCheck(t *testing.T) {
+func TestSetBytes(t *testing.T) {
 	tests := []struct {
 		name    string
 		bufSize int
@@ -242,21 +244,21 @@ func TestSetBytesBoundsCheck(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "returns no error when bytes fit exactly in buffer",
+			name:    "given a page with room for exactly the length prefix and the bytes, it accepts the write",
 			bufSize: 7,
 			offset:  0,
 			value:   []byte{1, 2, 3},
 			wantErr: false,
 		},
 		{
-			name:    "returns error when data exceeds buffer size",
+			name:    "when the bytes and their length prefix do not fit the page, then the write is refused",
 			bufSize: 6,
 			offset:  0,
 			value:   []byte{1, 2, 3},
 			wantErr: true,
 		},
 		{
-			name:    "returns error when offset plus data exceeds buffer size",
+			name:    "when the bytes fit the page but not from the offset given, then the write is refused",
 			bufSize: 8,
 			offset:  2,
 			value:   []byte{1, 2, 3},
@@ -275,7 +277,7 @@ func TestSetBytesBoundsCheck(t *testing.T) {
 	}
 }
 
-func TestSetStringBoundsCheck(t *testing.T) {
+func TestSetString(t *testing.T) {
 	tests := []struct {
 		name    string
 		bufSize int
@@ -284,21 +286,21 @@ func TestSetStringBoundsCheck(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "returns no error when string fits exactly in buffer",
+			name:    "given a page with room for exactly the length prefix and the string, it accepts the write",
 			bufSize: 9,
 			offset:  0,
 			value:   "hello",
 			wantErr: false,
 		},
 		{
-			name:    "returns error when string exceeds buffer size",
+			name:    "when the string and its length prefix do not fit the page, then the write is refused",
 			bufSize: 8,
 			offset:  0,
 			value:   "hello",
 			wantErr: true,
 		},
 		{
-			name:    "returns error when offset plus string exceeds buffer size",
+			name:    "when the string fits the page but not from the offset given, then the write is refused",
 			bufSize: 10,
 			offset:  2,
 			value:   "hello",
@@ -324,22 +326,22 @@ func TestSetGetShort(t *testing.T) {
 		value  int16
 	}{
 		{
-			name:   "stores and retrieves a positive int16 value",
+			name:   "when a positive short is written and read back, then it is unchanged",
 			offset: 0,
 			value:  100,
 		},
 		{
-			name:   "stores and retrieves zero",
+			name:   "when zero is written and read back, then it is unchanged",
 			offset: 0,
 			value:  0,
 		},
 		{
-			name:   "stores and retrieves a negative int16 value",
+			name:   "when a negative short is written and read back, then the sign survives",
 			offset: 0,
 			value:  -1,
 		},
 		{
-			name:   "stores and retrieves value at non-zero offset",
+			name:   "when an int is written past the start of the page, then it is read back from there",
 			offset: 2,
 			value:  42,
 		},
@@ -358,7 +360,7 @@ func TestSetGetShort(t *testing.T) {
 	}
 }
 
-func TestSetShortBoundsCheck(t *testing.T) {
+func TestSetShort(t *testing.T) {
 	tests := []struct {
 		name    string
 		bufSize int
@@ -366,19 +368,19 @@ func TestSetShortBoundsCheck(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "returns no error when short fits exactly in buffer",
+			name:    "given a page with room for exactly one short, it accepts a write at the start",
 			bufSize: 2,
 			offset:  0,
 			wantErr: false,
 		},
 		{
-			name:    "returns error when offset plus 2 bytes exceeds buffer size",
+			name:    "when a short would run past the end of the page, then the write is refused",
 			bufSize: 2,
 			offset:  1,
 			wantErr: true,
 		},
 		{
-			name:    "returns error when offset is equal to buffer size",
+			name:    "when the offset is the end of the page, then the write is refused",
 			bufSize: 2,
 			offset:  2,
 			wantErr: true,
@@ -403,17 +405,17 @@ func TestSetGetBool(t *testing.T) {
 		value  bool
 	}{
 		{
-			name:   "stores and retrieves true",
+			name:   "when true is written and read back, then it is still true",
 			offset: 0,
 			value:  true,
 		},
 		{
-			name:   "stores and retrieves false",
+			name:   "when false is written and read back, then it is still false",
 			offset: 0,
 			value:  false,
 		},
 		{
-			name:   "stores and retrieves bool at non-zero offset",
+			name:   "when a bool is written past the start of the page, then it is read back from there",
 			offset: 1,
 			value:  true,
 		},
@@ -432,7 +434,7 @@ func TestSetGetBool(t *testing.T) {
 	}
 }
 
-func TestSetBoolBoundsCheck(t *testing.T) {
+func TestSetBool(t *testing.T) {
 	tests := []struct {
 		name    string
 		bufSize int
@@ -440,13 +442,13 @@ func TestSetBoolBoundsCheck(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "returns no error when bool fits exactly in buffer",
+			name:    "given a page of one byte, it accepts a bool at the start",
 			bufSize: 1,
 			offset:  0,
 			wantErr: false,
 		},
 		{
-			name:    "returns error when offset is equal to buffer size",
+			name:    "when the offset is the end of the page, then the write is refused",
 			bufSize: 1,
 			offset:  1,
 			wantErr: true,
@@ -471,17 +473,17 @@ func TestSetGetDate(t *testing.T) {
 		value  time.Time
 	}{
 		{
-			name:   "stores and retrieves a date",
+			name:   "when a date is written and read back, then it names the same instant",
 			offset: 0,
 			value:  time.Unix(1000000, 0),
 		},
 		{
-			name:   "stores and retrieves Unix epoch",
+			name:   "when the Unix epoch is written and read back, then it is kept rather than read as unset",
 			offset: 0,
 			value:  time.Unix(0, 0),
 		},
 		{
-			name:   "stores and retrieves date at non-zero offset",
+			name:   "when a date is written past the start of the page, then it is read back from there",
 			offset: 8,
 			value:  time.Unix(1700000000, 0),
 		},
@@ -500,7 +502,7 @@ func TestSetGetDate(t *testing.T) {
 	}
 }
 
-func TestSetDateBoundsCheck(t *testing.T) {
+func TestSetDate(t *testing.T) {
 	tests := []struct {
 		name    string
 		bufSize int
@@ -508,19 +510,19 @@ func TestSetDateBoundsCheck(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "returns no error when date fits exactly in buffer",
+			name:    "given a page with room for exactly one date, it accepts a write at the start",
 			bufSize: 8,
 			offset:  0,
 			wantErr: false,
 		},
 		{
-			name:    "returns error when offset plus 8 bytes exceeds buffer size",
+			name:    "when a date would run past the end of the page, then the write is refused",
 			bufSize: 8,
 			offset:  1,
 			wantErr: true,
 		},
 		{
-			name:    "returns error when offset is equal to buffer size",
+			name:    "when the offset is the end of the page, then the write is refused",
 			bufSize: 8,
 			offset:  8,
 			wantErr: true,
@@ -545,17 +547,17 @@ func TestMaxLength(t *testing.T) {
 		want   int
 	}{
 		{
-			name:   "returns 4 bytes for empty string (length prefix only)",
+			name:   "given a limit of no characters, it is the length prefix alone",
 			strlen: 0,
 			want:   4,
 		},
 		{
-			name:   "returns 4 plus UTFMax for single character string",
+			name:   "given a limit of one character, it is the length prefix plus the widest encoding of one",
 			strlen: 1,
 			want:   4 + utf8.UTFMax,
 		},
 		{
-			name:   "returns 4 plus UTFMax times strlen for multi-character string",
+			name:   "given a limit of ten characters, it is the length prefix plus ten times the widest encoding",
 			strlen: 10,
 			want:   4 + 10*utf8.UTFMax,
 		},
