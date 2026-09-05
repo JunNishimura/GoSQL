@@ -703,3 +703,41 @@ func TestTableScanDeleteCurrentRecordRejectsAScanOnNoRecord(t *testing.T) {
 		t.Errorf("DeleteCurrentRecord() error = %v, want %v", err, ErrNoCurrentRecord)
 	}
 }
+
+func TestTableScanCloseGivesBackTheBlock(t *testing.T) {
+	tx := newTestTransaction(t)
+
+	ts, err := NewTableScan(tx, testTableName, newTestLayout(t))
+	if err != nil {
+		t.Fatalf("NewTableScan() error = %v", err)
+	}
+	if ts.rp == nil {
+		t.Fatal("the scan is on no block after it was opened")
+	}
+	held := ts.rp.blk
+
+	ts.Close()
+
+	if _, err := tx.GetInt(held, 0); !errors.Is(err, transaction.ErrBlockNotPinned) {
+		t.Errorf("GetInt() on the block the scan held error = %v, want %v", err, transaction.ErrBlockNotPinned)
+	}
+}
+
+// Closing twice is what a caller that defers Close and also closes early on
+// some path ends up doing, so the second one has to be harmless.
+func TestTableScanCloseTwice(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	ts.Close()
+	ts.Close()
+}
+
+func TestTableScanFieldsAfterCloseReportNoCurrentRecord(t *testing.T) {
+	ts := newTestTableScanAt(t, 0)
+
+	ts.Close()
+
+	if _, err := ts.GetInt("id"); !errors.Is(err, ErrNoCurrentRecord) {
+		t.Errorf("GetInt() error = %v, want %v", err, ErrNoCurrentRecord)
+	}
+}

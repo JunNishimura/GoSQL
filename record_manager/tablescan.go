@@ -94,6 +94,29 @@ func NewTableScan(tx *transaction.Transaction, tableName string, layout *Layout)
 	return ts, nil
 }
 
+// Close gives back the block the scan is holding. Every scan has to be closed,
+// or the buffer it is on stays taken until the transaction ends, however long
+// ago the scan was finished with.
+//
+// It returns nothing because nothing here can fail: giving a pin back is a
+// count going down. It can be called on a scan that is already closed, so a
+// caller may defer it and close early on the paths where it wants the buffer
+// back sooner.
+//
+// A closed scan is on no block, so reading or writing one is ErrNoCurrentRecord
+// rather than a use of whatever the buffer went on to hold.
+//
+// Moving to another block closes the scan as its first step, for the same
+// reason a caller does: the block being left is one nothing is going to read.
+func (ts *TableScan) Close() {
+	if ts.rp == nil {
+		return
+	}
+
+	ts.tx.Unpin(ts.rp.blk)
+	ts.rp = nil
+}
+
 // MoveBeforeFirstRecord puts the scan back at the start of the table, before
 // its first record.
 //
@@ -301,7 +324,7 @@ func (ts *TableScan) SetString(fieldName string, val string) error {
 // moveToBlock puts the scan on a block the table already has, before its first
 // slot.
 func (ts *TableScan) moveToBlock(blkNum int) error {
-	ts.releaseCurrentBlock()
+	ts.Close()
 
 	rp, err := NewRecordPage(ts.tx, ts.blockID(blkNum), ts.layout)
 	if err != nil {
@@ -321,7 +344,7 @@ func (ts *TableScan) moveToBlock(blkNum int) error {
 // block that has just been appended has never been read as slots, so nothing
 // has yet written the flags that say which of them are free.
 func (ts *TableScan) moveToNewBlock() error {
-	ts.releaseCurrentBlock()
+	ts.Close()
 
 	blk, err := ts.tx.Append(ts.fileName)
 	if err != nil {
@@ -341,18 +364,6 @@ func (ts *TableScan) moveToNewBlock() error {
 	ts.blockCount = blk.Number() + 1
 
 	return nil
-}
-
-// releaseCurrentBlock gives back the pin on the block the scan is on, if it is
-// on one. A scan that has moved off a block has no further use for it, and
-// holding the pin would keep a buffer for a block nothing is reading.
-func (ts *TableScan) releaseCurrentBlock() {
-	if ts.rp == nil {
-		return
-	}
-
-	ts.tx.Unpin(ts.rp.blk)
-	ts.rp = nil
 }
 
 // blockID is the block the scan is on. It is here rather than inline so that
