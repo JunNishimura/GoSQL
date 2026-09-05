@@ -572,3 +572,134 @@ func TestTableScanMoveToNextRecordSeesABlockAnotherScanAppended(t *testing.T) {
 		t.Errorf("the ids read = %v, want %v: the scan stopped at the blocks it knew about", got, want)
 	}
 }
+
+func TestTableScanMoveToNewRecordTakesTheFirstFreeSlot(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	if err := ts.MoveToNewRecord(); err != nil {
+		t.Fatalf("MoveToNewRecord() error = %v", err)
+	}
+
+	if ts.currentSlot != 0 {
+		t.Errorf("currentSlot = %d, want 0", ts.currentSlot)
+	}
+	if got := ts.rp.blk.Number(); got != 0 {
+		t.Errorf("the scan is on block %d, want 0", got)
+	}
+
+	// The slot has to hold a record now, not merely be where the scan sits,
+	// which is only visible from a walk that starts over.
+	if err := ts.SetInt("id", 5); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	want := []int32{5}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v", got, want)
+	}
+}
+
+// One more record than a block holds, so the last one has nowhere to go until
+// the table grows.
+func TestTableScanMoveToNewRecordAppendsABlockWhenTheTableIsFull(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	want := []int32{}
+	for i := range testSlotsInBlock + 1 {
+		if err := ts.MoveToNewRecord(); err != nil {
+			t.Fatalf("MoveToNewRecord() error = %v on record %d", err, i)
+		}
+		if err := ts.SetInt("id", int32(i)); err != nil {
+			t.Fatalf("SetInt() error = %v on record %d", err, i)
+		}
+		want = append(want, int32(i))
+	}
+
+	size, err := ts.tx.Size(ts.fileName)
+	if err != nil {
+		t.Fatalf("Size() error = %v", err)
+	}
+	if size != 2 {
+		t.Errorf("the table has %d blocks, want 2", size)
+	}
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v", got, want)
+	}
+}
+
+// The block is filled, one record in the middle is deleted, and the scan is put
+// back to the start. The space that record held has to be used again rather
+// than the table growing.
+func TestTableScanMoveToNewRecordReusesTheSlotOfADeletedRecord(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	for slot := range testSlotsInBlock {
+		claimTestRecord(t, ts, slot, int32(slot))
+	}
+	ts.currentSlot = 1
+	if err := ts.DeleteCurrentRecord(); err != nil {
+		t.Fatalf("DeleteCurrentRecord() error = %v", err)
+	}
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	if err := ts.MoveToNewRecord(); err != nil {
+		t.Fatalf("MoveToNewRecord() error = %v", err)
+	}
+
+	if ts.currentSlot != 1 {
+		t.Errorf("currentSlot = %d, want 1", ts.currentSlot)
+	}
+	size, err := ts.tx.Size(ts.fileName)
+	if err != nil {
+		t.Fatalf("Size() error = %v", err)
+	}
+	if size != 1 {
+		t.Errorf("the table has %d blocks, want 1: the freed slot was passed over", size)
+	}
+}
+
+func TestTableScanDeleteCurrentRecordTakesItOutOfTheWalk(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	claimTestRecord(t, ts, 0, 10)
+	claimTestRecord(t, ts, 1, 20)
+	claimTestRecord(t, ts, 2, 30)
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	for range 2 {
+		if _, err := ts.MoveToNextRecord(); err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+	}
+
+	if err := ts.DeleteCurrentRecord(); err != nil {
+		t.Fatalf("DeleteCurrentRecord() error = %v", err)
+	}
+
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+	want := []int32{10, 30}
+	if got := walkTestRecords(t, ts); !slices.Equal(got, want) {
+		t.Errorf("the ids read = %v, want %v", got, want)
+	}
+}
+
+func TestTableScanDeleteCurrentRecordRejectsAScanOnNoRecord(t *testing.T) {
+	ts := newTestTableScanAt(t, beforeFirstSlot)
+
+	if err := ts.DeleteCurrentRecord(); !errors.Is(err, ErrNoCurrentRecord) {
+		t.Errorf("DeleteCurrentRecord() error = %v, want %v", err, ErrNoCurrentRecord)
+	}
+}

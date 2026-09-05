@@ -152,6 +152,63 @@ func (ts *TableScan) MoveToNextRecord() (bool, error) {
 	}
 }
 
+// MoveToNewRecord puts the scan on a record of its own, taken from the first
+// free slot at or after where it is, and leaves the fields at the values an
+// empty slot holds. Filling them in is the caller's next step.
+//
+// It searches from where the scan is rather than from the start of the table,
+// so a caller inserting a run of records does not read past the ones it has
+// just written for each of them. A caller that wants the earliest free slot,
+// and so wants the space of deleted records back, asks to be moved before the
+// first record first.
+//
+// Where MoveToNextRecord stops at the end of the table, this adds a block: a
+// record has to go somewhere, and having run out of slots is what a table
+// growing looks like.
+func (ts *TableScan) MoveToNewRecord() error {
+	if err := ts.requireCurrentBlock(); err != nil {
+		return err
+	}
+
+	for {
+		slot, err := ts.rp.ClaimFreeSlotAfter(ts.currentSlot)
+		if err == nil {
+			ts.currentSlot = slot
+			return nil
+		}
+		if !errors.Is(err, ErrNoSuchSlot) {
+			return err
+		}
+
+		onLastBlock, err := ts.isOnLastBlock()
+		if err != nil {
+			return err
+		}
+		if onLastBlock {
+			if err := ts.moveToNewBlock(); err != nil {
+				return err
+			}
+
+			continue
+		}
+
+		if err := ts.moveToBlock(ts.rp.blk.Number() + 1); err != nil {
+			return err
+		}
+	}
+}
+
+// DeleteCurrentRecord takes the record the scan is on out of the table. The
+// scan stays where it is, on a slot that now holds no record, so a walk carries
+// on from there and never returns the record again.
+func (ts *TableScan) DeleteCurrentRecord() error {
+	if err := ts.requireCurrentRecord(); err != nil {
+		return err
+	}
+
+	return ts.rp.Delete(ts.currentSlot)
+}
+
 // isOnLastBlock reports whether the scan is on the final block of the table,
 // which is where a walk that finds no more records has to stop rather than move
 // on.
