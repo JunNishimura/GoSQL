@@ -15,6 +15,12 @@ var ErrSlotOutOfRange = errors.New("slot out of range")
 // schema says it is another.
 var ErrFieldTypeMismatch = errors.New("field type mismatch")
 
+// ErrNoSuchSlot reports that a search reached the end of the block without
+// finding a slot in the state it was looking for. It is the ordinary way a walk
+// over a block ends, not a fault, which is why a caller is expected to test for
+// it rather than pass it on.
+var ErrNoSuchSlot = errors.New("no such slot")
+
 // slotState is the flag at the front of a slot, saying whether the slot holds a
 // record. It is stored as an int because that is one of the two widths a
 // transaction knows how to log.
@@ -68,16 +74,11 @@ func NewRecordPage(tx *transaction.Transaction, blk *filemanager.BlockId, layout
 // bounds of a write, but a read indexes the buffer directly, so without this an
 // out of range slot would be a panic rather than an error.
 func (rp *RecordPage) slotOffset(slot int) (int, error) {
-	if slot < 0 {
-		return 0, fmt.Errorf("slot %d of %s is negative: %w", slot, rp.blk, ErrSlotOutOfRange)
+	if !rp.isValidSlot(slot) {
+		return 0, fmt.Errorf("slot %d is not a slot of %s: %w", slot, rp.blk, ErrSlotOutOfRange)
 	}
 
-	offset := slot * rp.layout.SlotSize()
-	if offset+rp.layout.SlotSize() > rp.tx.BlockSize() {
-		return 0, fmt.Errorf("slot %d runs past the end of %s: %w", slot, rp.blk, ErrSlotOutOfRange)
-	}
-
-	return offset, nil
+	return slot * rp.layout.SlotSize(), nil
 }
 
 // fieldPos is where fieldName of slot sits within the block, once the slot has
@@ -107,6 +108,47 @@ func (rp *RecordPage) fieldPos(slot int, fieldName string, fieldType FieldType) 
 	}
 
 	return slotOffset + fieldOffset, nil
+}
+
+// isValidSlot reports whether slot is one of the slots this block holds: not
+// before the first, and with its last byte still inside the block.
+//
+// The last byte is what settles it. A slot whose start is inside the block but
+// whose end is not would be read and written across the boundary, so the block
+// holds as many whole slots as fit and no part of another.
+func (rp *RecordPage) isValidSlot(slot int) bool {
+	return slot >= 0 && (slot+1)*rp.layout.SlotSize() <= rp.tx.BlockSize()
+}
+
+// searchAfter returns the first slot after slot whose flag is state.
+//
+// The search starts past slot rather than at it, so that a caller walking a
+// block can hand back the slot it has just finished with and get the next one.
+// Slot -1 asks for the first slot of the block.
+//
+// Reaching the end of the block without a match is ErrNoSuchSlot, which is how
+// a walk finds out it is over.
+func (rp *RecordPage) searchAfter(slot int, state slotState) (int, error) {
+	for next := slot + 1; rp.isValidSlot(next); next++ {
+		// slotOffset cannot fail here: the loop only runs on a slot
+		// isValidSlot has accepted, which is the one thing it refuses. The
+		// error is returned rather than dropped so that this stays true if it
+		// grows another reason to.
+		offset, err := rp.slotOffset(next)
+		if err != nil {
+			return 0, err
+		}
+
+		flag, err := rp.tx.GetInt(rp.blk, offset)
+		if err != nil {
+			return 0, err
+		}
+		if slotState(flag) == state {
+			return next, nil
+		}
+	}
+
+	return 0, fmt.Errorf("search %s after slot %d: %w", rp.blk, slot, ErrNoSuchSlot)
 }
 
 // setSlotState writes state to the flag at the front of slot.

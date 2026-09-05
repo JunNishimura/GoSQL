@@ -568,3 +568,156 @@ func TestRecordPageDeleteRejectsASlotOutsideTheBlock(t *testing.T) {
 		})
 	}
 }
+
+func TestRecordPageIsValidSlot(t *testing.T) {
+	tests := []struct {
+		name string
+		slot int
+		want bool
+	}{
+		{
+			name: "accepts the first slot",
+			slot: 0,
+			want: true,
+		},
+		{
+			name: "accepts the last slot whose bytes all fit in the block",
+			slot: testSlotsInBlock - 1,
+			want: true,
+		},
+		{
+			name: "refuses the slot whose bytes would run past the end of the block",
+			slot: testSlotsInBlock,
+			want: false,
+		},
+		{
+			name: "refuses a negative slot",
+			slot: -1,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := newTestRecordPage(t).isValidSlot(tt.slot); got != tt.want {
+				t.Errorf("isValidSlot(%d) = %t, want %t", tt.slot, got, tt.want)
+			}
+		})
+	}
+}
+
+// A block starts out as four empty slots, so a case marks the ones it wants in
+// use and leaves the rest. Slot -1 is how a search asks to start at slot 0.
+func TestRecordPageSearchAfter(t *testing.T) {
+	tests := []struct {
+		name  string
+		inUse []int
+		start int
+		state slotState
+		want  int
+	}{
+		{
+			name:  "finds the first slot in use when asked to start at the beginning",
+			inUse: []int{1, 3},
+			start: -1,
+			state: slotInUse,
+			want:  1,
+		},
+		{
+			name:  "skips the slot it is given and finds the next one in use",
+			inUse: []int{1, 3},
+			start: 1,
+			state: slotInUse,
+			want:  3,
+		},
+		{
+			name:  "finds the last slot of the block",
+			inUse: []int{3},
+			start: -1,
+			state: slotInUse,
+			want:  3,
+		},
+		{
+			name:  "finds an empty slot among slots in use",
+			inUse: []int{0, 1, 3},
+			start: -1,
+			state: slotEmpty,
+			want:  2,
+		},
+		{
+			name:  "finds the first slot when every slot matches",
+			inUse: []int{0, 1, 2, 3},
+			start: -1,
+			state: slotInUse,
+			want:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+			for _, slot := range tt.inUse {
+				if err := rp.setSlotState(slot, slotInUse); err != nil {
+					t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+				}
+			}
+
+			got, err := rp.searchAfter(tt.start, tt.state)
+			if err != nil {
+				t.Fatalf("searchAfter(%d) error = %v", tt.start, err)
+			}
+			if got != tt.want {
+				t.Errorf("searchAfter(%d) = %d, want %d", tt.start, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordPageSearchAfterReportsNoSuchSlot(t *testing.T) {
+	tests := []struct {
+		name  string
+		inUse []int
+		start int
+		state slotState
+	}{
+		{
+			name:  "when no slot in the block is in use",
+			inUse: nil,
+			start: -1,
+			state: slotInUse,
+		},
+		{
+			name:  "when the only slot in use is at or before the one it starts from",
+			inUse: []int{1},
+			start: 1,
+			state: slotInUse,
+		},
+		{
+			name:  "when it starts from the last slot of the block",
+			inUse: nil,
+			start: testSlotsInBlock - 1,
+			state: slotEmpty,
+		},
+		{
+			name:  "when it starts from beyond the end of the block",
+			inUse: []int{0},
+			start: testSlotsInBlock,
+			state: slotInUse,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+			for _, slot := range tt.inUse {
+				if err := rp.setSlotState(slot, slotInUse); err != nil {
+					t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+				}
+			}
+
+			if _, err := rp.searchAfter(tt.start, tt.state); !errors.Is(err, ErrNoSuchSlot) {
+				t.Errorf("searchAfter(%d) error = %v, want %v", tt.start, err, ErrNoSuchSlot)
+			}
+		})
+	}
+}
