@@ -23,21 +23,23 @@ func newSetIntRecordBytes(t *testing.T, txNum int, blk *filemanager.BlockId, off
 // to the offsets the encoder itself computes. A mistake made symmetrically in
 // the encoder and the parser would otherwise go unnoticed.
 func TestSetIntRecordLayout(t *testing.T) {
-	record := newSetIntRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, 99)
+	t.Run("the bytes on the log read as the op, the transaction, the file name, the block, the offset and the old value, in that order", func(t *testing.T) {
+		record := newSetIntRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, 99)
 
-	want := []byte{
-		0, 0, 0, 4, // op: SetInt
-		0, 0, 0, 1, // txNum
-		0, 0, 0, 8, // length of the file name
-		't', 'e', 's', 't', '.', 't', 'b', 'l',
-		0, 0, 0, 2, // block number
-		0, 0, 0, 80, // offset of the value within the block
-		0, 0, 0, 99, // the value that was overwritten
-	}
+		want := []byte{
+			0, 0, 0, 4, // op: SetInt
+			0, 0, 0, 1, // txNum
+			0, 0, 0, 8, // length of the file name
+			't', 'e', 's', 't', '.', 't', 'b', 'l',
+			0, 0, 0, 2, // block number
+			0, 0, 0, 80, // offset of the value within the block
+			0, 0, 0, 99, // the value that was overwritten
+		}
 
-	if !bytes.Equal(record, want) {
-		t.Errorf("record = %v, want %v", record, want)
-	}
+		if !bytes.Equal(record, want) {
+			t.Errorf("record = %v, want %v", record, want)
+		}
+	})
 }
 
 func TestNewSetIntRecord(t *testing.T) {
@@ -48,19 +50,19 @@ func TestNewSetIntRecord(t *testing.T) {
 		blkNum   int
 	}{
 		{
-			name:     "reads a record written by transaction 1",
+			name:     "it reads back the transaction and the block the record was written for",
 			txNum:    1,
 			fileName: "test.tbl",
 			blkNum:   2,
 		},
 		{
-			name:     "reads a record naming a file whose name is a different length",
+			name:     "given a file name of another length, the fields after it are still read from the right place",
 			txNum:    42,
 			fileName: "a.tbl",
 			blkNum:   0,
 		},
 		{
-			name:     "reads a record naming a multi-byte file name",
+			name:     "given a file name of multi-byte characters, it is read by its bytes rather than its characters",
 			txNum:    7,
 			fileName: "テーブル.tbl",
 			blkNum:   13,
@@ -87,6 +89,50 @@ func TestNewSetIntRecord(t *testing.T) {
 			}
 		})
 	}
+
+	// The file name is stored inline, so how much of the record has to be
+	// present depends on the record itself. Every prefix short of the whole
+	// thing must be rejected rather than read past the end of the slice.
+	full := newSetIntRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, 99)
+
+	shortRecordTests := []struct {
+		name string
+		size int
+	}{
+		{
+			name: "given no bytes at all, it refuses the record",
+			size: 0,
+		},
+		{
+			name: "given a record that stops before the file name length, it refuses it",
+			size: 2 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record whose file name length claims more bytes than are there, it refuses it",
+			size: 3 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record that stops after the file name, it refuses it",
+			size: 5 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record missing the last byte of the old value, it refuses it",
+			size: len(full) - 1,
+		},
+	}
+
+	for _, tt := range shortRecordTests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, err := NewSetIntRecord(full[:tt.size])
+
+			if rec != nil {
+				t.Errorf("NewSetIntRecord() = %v, want nil", rec)
+			}
+			if err == nil {
+				t.Fatal("error = nil, want an error")
+			}
+		})
+	}
 }
 
 // Undo writes the pre-image into the page it is handed. The offset and the old
@@ -100,13 +146,13 @@ func TestSetIntRecordUndo(t *testing.T) {
 		overwith int32
 	}{
 		{
-			name:     "restores a value at the start of the block",
+			name:     "given a record for the start of the block, the old value is put back there",
 			offset:   0,
 			oldVal:   99,
 			overwith: 1234,
 		},
 		{
-			name:     "restores a value further into the block",
+			name:     "given a record for an offset further into the block, the old value is put back there",
 			offset:   80,
 			oldVal:   -5,
 			overwith: 1234,
@@ -148,14 +194,14 @@ func TestSetIntRecordString(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "formats the transaction, block, offset and old value",
+			name:   "it reads as SETINT alongside the transaction, block, offset and old value",
 			txNum:  1,
 			offset: 80,
 			oldVal: 99,
 			want:   "<SETINT 1 [file test.tbl, block 2] 80 99>",
 		},
 		{
-			name:   "formats a negative old value",
+			name:   "given a negative old value, the sign is shown rather than lost",
 			txNum:  42,
 			offset: 0,
 			oldVal: -5,
@@ -178,52 +224,6 @@ func TestSetIntRecordString(t *testing.T) {
 	}
 }
 
-// The file name is stored inline, so how much of the record has to be present
-// depends on the record itself. Every prefix short of the whole thing must be
-// rejected rather than read past the end of the slice.
-func TestNewSetIntRecordRejectsShortRecords(t *testing.T) {
-	full := newSetIntRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, 99)
-
-	tests := []struct {
-		name string
-		size int
-	}{
-		{
-			name: "rejects an empty record",
-			size: 0,
-		},
-		{
-			name: "rejects a record that stops before the file name length",
-			size: 2 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record whose file name length exceeds what is present",
-			size: 3 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record that stops after the file name",
-			size: 5 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record missing the last byte of the old value",
-			size: len(full) - 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec, err := NewSetIntRecord(full[:tt.size])
-
-			if rec != nil {
-				t.Errorf("NewSetIntRecord() = %v, want nil", rec)
-			}
-			if err == nil {
-				t.Fatal("error = nil, want an error")
-			}
-		})
-	}
-}
-
 func TestWriteSetIntRecordToLog(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -231,12 +231,12 @@ func TestWriteSetIntRecordToLog(t *testing.T) {
 		wantLSN int
 	}{
 		{
-			name:    "returns LSN 1 for the first record appended to an empty log",
+			name:    "given a log with nothing on it, the record it writes gets lsn 1",
 			txNums:  []int{1},
 			wantLSN: 1,
 		},
 		{
-			name:    "returns an increasing LSN for each appended record",
+			name:    "given records already on the log, each one it writes gets the next lsn",
 			txNums:  []int{1, 2, 3},
 			wantLSN: 3,
 		},

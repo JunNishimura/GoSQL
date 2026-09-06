@@ -34,13 +34,13 @@ func TestNewLogManager(t *testing.T) {
 		wantLength     int
 	}{
 		{
-			name:           "appends a new block when log file is empty",
+			name:           "given a log file with no blocks, it appends one to write into",
 			existingBlocks: 0,
 			wantBlkNum:     0,
 			wantLength:     1,
 		},
 		{
-			name:           "reuses the last block when log file already has blocks",
+			name:           "given a log file that already has blocks, it carries on writing into the last one",
 			existingBlocks: 3,
 			wantBlkNum:     2,
 			wantLength:     3,
@@ -89,36 +89,36 @@ func TestNewLogManager(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestNewLogManagerLoadsLastBlockContent(t *testing.T) {
-	fm := newTestFileManager(t)
+	t.Run("given a log file whose last block holds records, it carries on from what is in it", func(t *testing.T) {
+		fm := newTestFileManager(t)
 
-	var lastBlk *filemanager.BlockId
-	for i := 0; i < 2; i++ {
-		blk, err := fm.Append(testLogFile)
-		if err != nil {
-			t.Fatalf("Append() error = %v", err)
+		var lastBlk *filemanager.BlockId
+		for i := 0; i < 2; i++ {
+			blk, err := fm.Append(testLogFile)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+			lastBlk = blk
 		}
-		lastBlk = blk
-	}
 
-	wantPage := filemanager.NewPageByBlockSize(testBlockSize)
-	if err := wantPage.SetInt(0, 123); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-	if err := fm.Write(lastBlk, wantPage); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
+		wantPage := filemanager.NewPageByBlockSize(testBlockSize)
+		if err := wantPage.SetInt(0, 123); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		if err := fm.Write(lastBlk, wantPage); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
 
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
+		lm, err := NewLogManager(fm, testLogFile)
+		if err != nil {
+			t.Fatalf("NewLogManager() error = %v", err)
+		}
 
-	if got := lm.logPage.GetInt(0); got != 123 {
-		t.Errorf("logPage.GetInt(0) = %d, want 123", got)
-	}
+		if got := lm.logPage.GetInt(0); got != 123 {
+			t.Errorf("logPage.GetInt(0) = %d, want 123", got)
+		}
+	})
 }
 
 func TestAppendNewBlock(t *testing.T) {
@@ -128,12 +128,12 @@ func TestAppendNewBlock(t *testing.T) {
 		wantBlkNum       int
 	}{
 		{
-			name:             "returns blkNum 1 after the initial block created by NewLogManager",
+			name:             "given the block the log manager started with, it returns block 1",
 			additionalAppend: 1,
 			wantBlkNum:       1,
 		},
 		{
-			name:             "returns blkNum 2 after two additional appends",
+			name:             "given two blocks already appended, it returns block 2",
 			additionalAppend: 2,
 			wantBlkNum:       2,
 		},
@@ -183,7 +183,7 @@ func TestFlush(t *testing.T) {
 		wantLastSavedLSN int
 	}{
 		{
-			name:             "flushes when lsn is greater than lastSavedLSN",
+			name:             "given an lsn newer than what is on disk, it writes the page out",
 			lastSavedLSN:     0,
 			latestLSN:        5,
 			lsn:              3,
@@ -191,7 +191,7 @@ func TestFlush(t *testing.T) {
 			wantLastSavedLSN: 5,
 		},
 		{
-			name:             "does not flush when lsn equals lastSavedLSN",
+			name:             "given an lsn already on disk, it writes nothing",
 			lastSavedLSN:     3,
 			latestLSN:        5,
 			lsn:              3,
@@ -199,7 +199,7 @@ func TestFlush(t *testing.T) {
 			wantLastSavedLSN: 3,
 		},
 		{
-			name:             "does not flush when lsn is less than lastSavedLSN",
+			name:             "given an lsn older than what is on disk, it writes nothing",
 			lastSavedLSN:     5,
 			latestLSN:        7,
 			lsn:              3,
@@ -250,19 +250,19 @@ func TestAppend(t *testing.T) {
 		wantBlkNum int
 	}{
 		{
-			name:       "first record fits in the initial block",
+			name:       "given an empty block, the first record goes into it",
 			records:    [][]byte{[]byte("AB")},
 			wantLSN:    1,
 			wantBlkNum: 0,
 		},
 		{
-			name:       "second record still fits in the initial block",
+			name:       "given a block with room left, the next record goes into the same one",
 			records:    [][]byte{[]byte("AB"), []byte("CD")},
 			wantLSN:    2,
 			wantBlkNum: 0,
 		},
 		{
-			name:       "third record overflows into a new block",
+			name:       "given a block without room for it, the next record starts a new block",
 			records:    [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")},
 			wantLSN:    3,
 			wantBlkNum: 1,
@@ -305,204 +305,208 @@ func TestAppend(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestAppendConcurrent(t *testing.T) {
-	const goroutineCount = 100
+	t.Run("when many goroutines append at once, then every record gets its own lsn and none is skipped", func(t *testing.T) {
+		const goroutineCount = 100
 
-	fm, err := filemanager.NewFileManager(t.TempDir(), smallTestBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	lsns := make([]int, 0, goroutineCount)
-
-	for i := 0; i < goroutineCount; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			record := []byte(fmt.Sprintf("record-%03d", i))
-			lsn, err := lm.Append(record)
-			if err != nil {
-				t.Errorf("Append() error = %v", err)
-				return
-			}
-			mu.Lock()
-			lsns = append(lsns, lsn)
-			mu.Unlock()
-		}(i)
-	}
-	wg.Wait()
-
-	if len(lsns) != goroutineCount {
-		t.Fatalf("got %d LSNs, want %d", len(lsns), goroutineCount)
-	}
-
-	sort.Ints(lsns)
-	for i, lsn := range lsns {
-		if lsn != i+1 {
-			t.Errorf("lsns[%d] = %d, want %d (LSNs must be unique and sequential)", i, lsn, i+1)
+		fm, err := filemanager.NewFileManager(t.TempDir(), smallTestBlockSize)
+		if err != nil {
+			t.Fatalf("NewFileManager() error = %v", err)
 		}
-	}
+		lm, err := NewLogManager(fm, testLogFile)
+		if err != nil {
+			t.Fatalf("NewLogManager() error = %v", err)
+		}
+
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		lsns := make([]int, 0, goroutineCount)
+
+		for i := 0; i < goroutineCount; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				record := []byte(fmt.Sprintf("record-%03d", i))
+				lsn, err := lm.Append(record)
+				if err != nil {
+					t.Errorf("Append() error = %v", err)
+					return
+				}
+				mu.Lock()
+				lsns = append(lsns, lsn)
+				mu.Unlock()
+			}(i)
+		}
+		wg.Wait()
+
+		if len(lsns) != goroutineCount {
+			t.Fatalf("got %d LSNs, want %d", len(lsns), goroutineCount)
+		}
+
+		sort.Ints(lsns)
+		for i, lsn := range lsns {
+			if lsn != i+1 {
+				t.Errorf("lsns[%d] = %d, want %d (LSNs must be unique and sequential)", i, lsn, i+1)
+			}
+		}
+	})
 }
 
 func TestIterator(t *testing.T) {
-	dir := t.TempDir()
-	fm, err := filemanager.NewFileManager(dir, smallTestBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-
-	records := [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")}
-	for _, rec := range records {
-		if _, err := lm.Append(rec); err != nil {
-			t.Fatalf("Append() error = %v", err)
-		}
-	}
-
-	it, err := lm.Iterator()
-	if err != nil {
-		t.Fatalf("Iterator() error = %v", err)
-	}
-
-	wantOrder := [][]byte{[]byte("EF"), []byte("CD"), []byte("AB")}
-	for i, want := range wantOrder {
-		if !it.HasNext() {
-			t.Fatalf("HasNext() = false before reading record %d, want true", i)
-		}
-		got, err := it.Next()
+	t.Run("given records that were still only in memory, it writes them out so the walk sees every one", func(t *testing.T) {
+		dir := t.TempDir()
+		fm, err := filemanager.NewFileManager(dir, smallTestBlockSize)
 		if err != nil {
-			t.Fatalf("Next() error = %v", err)
+			t.Fatalf("NewFileManager() error = %v", err)
 		}
-		if string(got) != string(want) {
-			t.Errorf("Next()[%d] = %q, want %q", i, got, want)
+		lm, err := NewLogManager(fm, testLogFile)
+		if err != nil {
+			t.Fatalf("NewLogManager() error = %v", err)
 		}
-	}
 
-	if it.HasNext() {
-		t.Error("HasNext() = true after reading all records, want false")
-	}
+		records := [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")}
+		for _, rec := range records {
+			if _, err := lm.Append(rec); err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+		}
+
+		it, err := lm.Iterator()
+		if err != nil {
+			t.Fatalf("Iterator() error = %v", err)
+		}
+
+		wantOrder := [][]byte{[]byte("EF"), []byte("CD"), []byte("AB")}
+		for i, want := range wantOrder {
+			if !it.HasNext() {
+				t.Fatalf("HasNext() = false before reading record %d, want true", i)
+			}
+			got, err := it.Next()
+			if err != nil {
+				t.Fatalf("Next() error = %v", err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("Next()[%d] = %q, want %q", i, got, want)
+			}
+		}
+
+		if it.HasNext() {
+			t.Error("HasNext() = true after reading all records, want false")
+		}
+	})
 }
 
 func TestArchive(t *testing.T) {
-	fm := newTestFileManager(t)
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-	for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
-		if _, err := lm.Append(rec); err != nil {
-			t.Fatalf("Append() error = %v", err)
-		}
-	}
-
-	if err := lm.Archive(filepath.Join(t.TempDir(), "old.log")); err != nil {
-		t.Fatalf("Archive() error = %v", err)
-	}
-
-	// What is left behind is a log with room in it and nothing written yet.
-	length, err := fm.Length(testLogFile)
-	if err != nil {
-		t.Fatalf("Length() error = %v", err)
-	}
-	if length != 1 {
-		t.Errorf("the new log holds %d blocks, want 1", length)
-	}
-	it, err := lm.Iterator()
-	if err != nil {
-		t.Fatalf("Iterator() error = %v", err)
-	}
-	if it.HasNext() {
-		t.Error("HasNext() = true, want false (the new log should hold no records)")
-	}
-}
-
-// Archiving exists to keep the log readable afterwards, so everything written
-// before it has to be in the file that was moved, including whatever was still
-// only in memory.
-func TestArchiveKeepsTheOldRecords(t *testing.T) {
-	fm := newTestFileManager(t)
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-	for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
-		if _, err := lm.Append(rec); err != nil {
-			t.Fatalf("Append() error = %v", err)
-		}
-	}
-	archiveDir := t.TempDir()
-
-	if err := lm.Archive(filepath.Join(archiveDir, "old.log")); err != nil {
-		t.Fatalf("Archive() error = %v", err)
-	}
-
-	archivedFm, err := filemanager.NewFileManager(archiveDir, testBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	archived, err := NewLogManager(archivedFm, "old.log")
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-	it, err := archived.Iterator()
-	if err != nil {
-		t.Fatalf("Iterator() error = %v", err)
-	}
-	for _, want := range [][]byte{[]byte("CD"), []byte("AB")} {
-		if !it.HasNext() {
-			t.Fatalf("HasNext() = false, want the archived record %q", want)
-		}
-		got, err := it.Next()
+	t.Run("it leaves an empty log in place of the one it moved away", func(t *testing.T) {
+		fm := newTestFileManager(t)
+		lm, err := NewLogManager(fm, testLogFile)
 		if err != nil {
-			t.Fatalf("Next() error = %v", err)
+			t.Fatalf("NewLogManager() error = %v", err)
 		}
-		if string(got) != string(want) {
-			t.Errorf("Next() = %q, want %q", got, want)
+		for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
+			if _, err := lm.Append(rec); err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
 		}
-	}
-}
 
-// The LSN counter carries on rather than starting over. Buffers still hold the
-// numbers they were given before the archive, and those records are on disk in
-// the archived file, so nothing is waiting to be written: starting over would
-// make every one of them look newer than the log and force a pointless flush.
-func TestArchiveKeepsTheLSNGoing(t *testing.T) {
-	fm := newTestFileManager(t)
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-	var lastLSN int
-	for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
-		lastLSN, err = lm.Append(rec)
+		if err := lm.Archive(filepath.Join(t.TempDir(), "old.log")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		// What is left behind is a log with room in it and nothing written yet.
+		length, err := fm.Length(testLogFile)
+		if err != nil {
+			t.Fatalf("Length() error = %v", err)
+		}
+		if length != 1 {
+			t.Errorf("the new log holds %d blocks, want 1", length)
+		}
+		it, err := lm.Iterator()
+		if err != nil {
+			t.Fatalf("Iterator() error = %v", err)
+		}
+		if it.HasNext() {
+			t.Error("HasNext() = true, want false (the new log should hold no records)")
+		}
+	})
+
+	// Archiving exists to keep the log readable afterwards, so everything written
+	// before it has to be in the file that was moved, including whatever was still
+	// only in memory.
+	t.Run("given records that were still only in memory, it writes them out so the archived file holds every one", func(t *testing.T) {
+		fm := newTestFileManager(t)
+		lm, err := NewLogManager(fm, testLogFile)
+		if err != nil {
+			t.Fatalf("NewLogManager() error = %v", err)
+		}
+		for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
+			if _, err := lm.Append(rec); err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+		}
+		archiveDir := t.TempDir()
+
+		if err := lm.Archive(filepath.Join(archiveDir, "old.log")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		archivedFm, err := filemanager.NewFileManager(archiveDir, testBlockSize)
+		if err != nil {
+			t.Fatalf("NewFileManager() error = %v", err)
+		}
+		archived, err := NewLogManager(archivedFm, "old.log")
+		if err != nil {
+			t.Fatalf("NewLogManager() error = %v", err)
+		}
+		it, err := archived.Iterator()
+		if err != nil {
+			t.Fatalf("Iterator() error = %v", err)
+		}
+		for _, want := range [][]byte{[]byte("CD"), []byte("AB")} {
+			if !it.HasNext() {
+				t.Fatalf("HasNext() = false, want the archived record %q", want)
+			}
+			got, err := it.Next()
+			if err != nil {
+				t.Fatalf("Next() error = %v", err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("Next() = %q, want %q", got, want)
+			}
+		}
+	})
+
+	// The LSN counter carries on rather than starting over. Buffers still hold the
+	// numbers they were given before the archive, and those records are on disk in
+	// the archived file, so nothing is waiting to be written: starting over would
+	// make every one of them look newer than the log and force a pointless flush.
+	t.Run("it carries the lsn on rather than starting over, so buffers do not look newer than the log", func(t *testing.T) {
+		fm := newTestFileManager(t)
+		lm, err := NewLogManager(fm, testLogFile)
+		if err != nil {
+			t.Fatalf("NewLogManager() error = %v", err)
+		}
+		var lastLSN int
+		for _, rec := range [][]byte{[]byte("AB"), []byte("CD")} {
+			lastLSN, err = lm.Append(rec)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+		}
+
+		if err := lm.Archive(filepath.Join(t.TempDir(), "old.log")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		if lm.lastSavedLSN != lastLSN {
+			t.Errorf("lastSavedLSN = %d, want %d (everything logged so far is in the archive)", lm.lastSavedLSN, lastLSN)
+		}
+		next, err := lm.Append([]byte("EF"))
 		if err != nil {
 			t.Fatalf("Append() error = %v", err)
 		}
-	}
-
-	if err := lm.Archive(filepath.Join(t.TempDir(), "old.log")); err != nil {
-		t.Fatalf("Archive() error = %v", err)
-	}
-
-	if lm.lastSavedLSN != lastLSN {
-		t.Errorf("lastSavedLSN = %d, want %d (everything logged so far is in the archive)", lm.lastSavedLSN, lastLSN)
-	}
-	next, err := lm.Append([]byte("EF"))
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
-	if next != lastLSN+1 {
-		t.Errorf("Append() = %d, want %d", next, lastLSN+1)
-	}
+		if next != lastLSN+1 {
+			t.Errorf("Append() = %d, want %d", next, lastLSN+1)
+		}
+	})
 }

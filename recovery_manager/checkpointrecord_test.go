@@ -9,25 +9,29 @@ import (
 var _ LogRecord = (*CheckpointRecord)(nil)
 
 func TestNewCheckpointRecord(t *testing.T) {
-	rec := NewCheckpointRecord()
+	t.Run("it is of the checkpoint op and belongs to no transaction", func(t *testing.T) {
+		rec := NewCheckpointRecord()
 
-	if got := rec.Op(); got != Checkpoint {
-		t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
-	}
-	// A checkpoint belongs to no transaction, so it reports the same "no
-	// transaction" marker that Buffer uses for an unassigned buffer.
-	if got := rec.TxNumber(); got != noTxNum {
-		t.Errorf("TxNumber() = %d, want %d", got, noTxNum)
-	}
+		if got := rec.Op(); got != Checkpoint {
+			t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
+		}
+		// A checkpoint belongs to no transaction, so it reports the same "no
+		// transaction" marker that Buffer uses for an unassigned buffer.
+		if got := rec.TxNumber(); got != noTxNum {
+			t.Errorf("TxNumber() = %d, want %d", got, noTxNum)
+		}
+	})
 }
 
 func TestCheckpointRecordString(t *testing.T) {
-	rec := NewCheckpointRecord()
+	t.Run("it reads as CHECKPOINT, with no transaction number to show", func(t *testing.T) {
+		rec := NewCheckpointRecord()
 
-	const want = "<CHECKPOINT>"
-	if got := rec.String(); got != want {
-		t.Errorf("String() = %q, want %q", got, want)
-	}
+		const want = "<CHECKPOINT>"
+		if got := rec.String(); got != want {
+			t.Errorf("String() = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestWriteCheckpointRecordToLog(t *testing.T) {
@@ -37,12 +41,12 @@ func TestWriteCheckpointRecordToLog(t *testing.T) {
 		wantLSN int
 	}{
 		{
-			name:    "returns LSN 1 for the first record appended to an empty log",
+			name:    "given a log with nothing on it, the record it writes gets lsn 1",
 			writes:  1,
 			wantLSN: 1,
 		},
 		{
-			name:    "returns an increasing LSN for each appended record",
+			name:    "given records already on the log, each one it writes gets the next lsn",
 			writes:  3,
 			wantLSN: 3,
 		},

@@ -9,12 +9,12 @@ func TestNewRecordID(t *testing.T) {
 		slot   int
 	}{
 		{
-			name:   "keeps the block number and the slot it is given",
+			name:   "it carries the block number and the slot it was made from",
 			blkNum: 3,
 			slot:   2,
 		},
 		{
-			name:   "keeps the first slot of the first block",
+			name:   "given block zero and slot zero, it keeps them rather than reading them as unset",
 			blkNum: 0,
 			slot:   0,
 		},
@@ -41,22 +41,22 @@ func TestRecordIDEquals(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "returns true for the same block and slot",
+			name:  "given two record ids of the same block, when their slots are the same, then they are equal",
 			other: NewRecordID(3, 2),
 			want:  true,
 		},
 		{
-			name:  "returns false when the block number differs",
+			name:  "given two record ids of the same slot, when their block numbers differ, then they are not equal",
 			other: NewRecordID(4, 2),
 			want:  false,
 		},
 		{
-			name:  "returns false when the slot differs",
+			name:  "given two record ids of the same block, when their slots differ, then they are not equal",
 			other: NewRecordID(3, 1),
 			want:  false,
 		},
 		{
-			name:  "returns false when the block number and the slot are swapped",
+			name:  "given a record id whose block number and slot are the other's the other way round, then they are not equal",
 			other: NewRecordID(2, 3),
 			want:  false,
 		},
@@ -81,13 +81,13 @@ func TestRecordIDString(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "formats the block number and the slot",
+			name:   "it formats as its block number and slot",
 			blkNum: 3,
 			slot:   2,
 			want:   "[block 3, slot 2]",
 		},
 		{
-			name:   "formats the first slot of the first block",
+			name:   "given block zero and slot zero, it shows the zeroes rather than leaving them out",
 			blkNum: 0,
 			slot:   0,
 			want:   "[block 0, slot 0]",

@@ -34,17 +34,17 @@ func TestFieldTypeString(t *testing.T) {
 		want      string
 	}{
 		{
-			name:      "names an int field type",
+			name:      "given the int field type, it reads as int",
 			fieldType: FieldTypeInt,
 			want:      "int",
 		},
 		{
-			name:      "names a varchar field type",
+			name:      "given the varchar field type, it reads as varchar",
 			fieldType: FieldTypeVarchar,
 			want:      "varchar",
 		},
 		{
-			name:      "shows the number of a type it does not know",
+			name:      "given a type it does not know, it shows the number rather than nothing",
 			fieldType: FieldType(7),
 			want:      "FieldType(7)",
 		},
@@ -69,7 +69,7 @@ func TestSchemaAddField(t *testing.T) {
 		wantLength int
 	}{
 		{
-			name:       "adds an int field whose length is zero",
+			name:       "when an int field is added, then it is kept with a length of zero",
 			fieldName:  "id",
 			fieldType:  FieldTypeInt,
 			length:     0,
@@ -77,7 +77,7 @@ func TestSchemaAddField(t *testing.T) {
 			wantLength: 0,
 		},
 		{
-			name:       "adds a varchar field keeping its character limit",
+			name:       "when a varchar field is added, then its character limit is kept",
 			fieldName:  "name",
 			fieldType:  FieldTypeVarchar,
 			length:     20,
@@ -117,24 +117,26 @@ func TestSchemaAddField(t *testing.T) {
 }
 
 func TestSchemaAddIntField(t *testing.T) {
-	s := NewSchema()
-	mustAddIntField(t, s, "id")
+	t.Run("it adds a field of the int type, with no character limit of its own", func(t *testing.T) {
+		s := NewSchema()
+		mustAddIntField(t, s, "id")
 
-	gotType, err := s.Type("id")
-	if err != nil {
-		t.Fatalf("Type(\"id\") returned error: %v", err)
-	}
-	if gotType != FieldTypeInt {
-		t.Errorf("Type(\"id\") = %d, want %d", gotType, FieldTypeInt)
-	}
+		gotType, err := s.Type("id")
+		if err != nil {
+			t.Fatalf("Type(\"id\") returned error: %v", err)
+		}
+		if gotType != FieldTypeInt {
+			t.Errorf("Type(\"id\") = %d, want %d", gotType, FieldTypeInt)
+		}
 
-	gotLength, err := s.Length("id")
-	if err != nil {
-		t.Fatalf("Length(\"id\") returned error: %v", err)
-	}
-	if gotLength != 0 {
-		t.Errorf("Length(\"id\") = %d, want 0", gotLength)
-	}
+		gotLength, err := s.Length("id")
+		if err != nil {
+			t.Fatalf("Length(\"id\") returned error: %v", err)
+		}
+		if gotLength != 0 {
+			t.Errorf("Length(\"id\") = %d, want 0", gotLength)
+		}
+	})
 }
 
 func TestSchemaAddStringField(t *testing.T) {
@@ -144,12 +146,12 @@ func TestSchemaAddStringField(t *testing.T) {
 		length    int
 	}{
 		{
-			name:      "adds a varchar field with the given character limit",
+			name:      "when a varchar field is added, then it is a varchar of the character limit given",
 			fieldName: "name",
 			length:    20,
 		},
 		{
-			name:      "adds a varchar field whose character limit is zero",
+			name:      "given a character limit of zero, it keeps the zero rather than reading it as unset",
 			fieldName: "empty",
 			length:    0,
 		},
@@ -185,25 +187,25 @@ func TestSchemaAddDuplicateField(t *testing.T) {
 		add  func(t *testing.T, s *Schema) error
 	}{
 		{
-			name: "AddField refuses a name the schema already has",
+			name: "given a schema that already has the name, when AddField is called with it, then it reports ErrDuplicateField",
 			add: func(_ *testing.T, s *Schema) error {
 				return s.AddField("id", FieldTypeVarchar, 20)
 			},
 		},
 		{
-			name: "AddIntField refuses a name the schema already has",
+			name: "given a schema that already has the name, when AddIntField is called with it, then it reports ErrDuplicateField",
 			add: func(_ *testing.T, s *Schema) error {
 				return s.AddIntField("id")
 			},
 		},
 		{
-			name: "AddStringField refuses a name the schema already has",
+			name: "given a schema that already has the name, when AddStringField is called with it, then it reports ErrDuplicateField",
 			add: func(_ *testing.T, s *Schema) error {
 				return s.AddStringField("id", 20)
 			},
 		},
 		{
-			name: "Add refuses a name the schema already has",
+			name: "given a schema that already has the name, when Add copies it from another schema, then it reports ErrDuplicateField",
 			add: func(t *testing.T, s *Schema) error {
 				other := NewSchema()
 				mustAddStringField(t, other, "id", 20)
@@ -245,14 +247,14 @@ func TestSchemaFields(t *testing.T) {
 		want  []string
 	}{
 		{
-			name: "returns an empty slice for a schema with no fields",
+			name: "given a schema with no fields, it returns an empty slice rather than nothing",
 			build: func(_ *testing.T) *Schema {
 				return NewSchema()
 			},
 			want: []string{},
 		},
 		{
-			name: "returns the field names in the order they were added",
+			name: "it returns the field names in the order they were added, not in the order of the names",
 			build: func(t *testing.T) *Schema {
 				s := NewSchema()
 				mustAddIntField(t, s, "id")
@@ -271,23 +273,22 @@ func TestSchemaFields(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestSchemaFieldsDoesNotAliasTheSchema(t *testing.T) {
-	tests := []struct {
+	// The slice is a copy, so writing to it has to leave the schema alone.
+	aliasTests := []struct {
 		name   string
 		mutate func(fields []string)
 		want   []string
 	}{
 		{
-			name: "keeps the field names when an element of the returned slice is overwritten",
+			name: "when an element of the slice it returned is overwritten, then the schema keeps its field names",
 			mutate: func(fields []string) {
 				fields[0] = "overwritten"
 			},
 			want: []string{"id", "name", "age"},
 		},
 		{
-			name: "keeps the field order when the returned slice is sorted in place",
+			name: "when the slice it returned is sorted in place, then the schema keeps the order fields were added in",
 			mutate: func(fields []string) {
 				slices.Sort(fields)
 			},
@@ -295,7 +296,7 @@ func TestSchemaFieldsDoesNotAliasTheSchema(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range aliasTests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := NewSchema()
 			mustAddIntField(t, s, "id")
@@ -318,12 +319,12 @@ func TestSchemaHasField(t *testing.T) {
 		want      bool
 	}{
 		{
-			name:      "returns true for a field that was added",
+			name:      "given a field that was added, it reports the schema has it",
 			fieldName: "id",
 			want:      true,
 		},
 		{
-			name:      "returns false for a field that was never added",
+			name:      "given a field that was never added, it reports the schema does not have it",
 			fieldName: "missing",
 			want:      false,
 		},
@@ -342,22 +343,26 @@ func TestSchemaHasField(t *testing.T) {
 	}
 }
 
-func TestSchemaTypeRejectsAnUnknownField(t *testing.T) {
-	s := NewSchema()
-	mustAddIntField(t, s, "id")
+func TestSchemaType(t *testing.T) {
+	t.Run("given a field the schema does not have, it reports ErrFieldNotFound", func(t *testing.T) {
+		s := NewSchema()
+		mustAddIntField(t, s, "id")
 
-	if _, err := s.Type("missing"); !errors.Is(err, ErrFieldNotFound) {
-		t.Errorf("Type(\"missing\") error = %v, want %v", err, ErrFieldNotFound)
-	}
+		if _, err := s.Type("missing"); !errors.Is(err, ErrFieldNotFound) {
+			t.Errorf("Type(\"missing\") error = %v, want %v", err, ErrFieldNotFound)
+		}
+	})
 }
 
-func TestSchemaLengthRejectsAnUnknownField(t *testing.T) {
-	s := NewSchema()
-	mustAddIntField(t, s, "id")
+func TestSchemaLength(t *testing.T) {
+	t.Run("given a field the schema does not have, it reports ErrFieldNotFound", func(t *testing.T) {
+		s := NewSchema()
+		mustAddIntField(t, s, "id")
 
-	if _, err := s.Length("missing"); !errors.Is(err, ErrFieldNotFound) {
-		t.Errorf("Length(\"missing\") error = %v, want %v", err, ErrFieldNotFound)
-	}
+		if _, err := s.Length("missing"); !errors.Is(err, ErrFieldNotFound) {
+			t.Errorf("Length(\"missing\") error = %v, want %v", err, ErrFieldNotFound)
+		}
+	})
 }
 
 func TestSchemaAdd(t *testing.T) {
@@ -370,21 +375,21 @@ func TestSchemaAdd(t *testing.T) {
 		wantLength int
 	}{
 		{
-			name:       "copies an int field from the other schema",
+			name:       "when an int field is copied from another schema, then its type comes from there",
 			fieldName:  "id",
 			wantFields: []string{"id"},
 			wantType:   FieldTypeInt,
 			wantLength: 0,
 		},
 		{
-			name:       "copies a varchar field with its character limit",
+			name:       "when a varchar field is copied from another schema, then its character limit comes from there too",
 			fieldName:  "name",
 			wantFields: []string{"name"},
 			wantType:   FieldTypeVarchar,
 			wantLength: 20,
 		},
 		{
-			name:       "reports ErrFieldNotFound when the other schema lacks the field",
+			name:       "given another schema that lacks the field, it reports ErrFieldNotFound and copies nothing",
 			fieldName:  "missing",
 			wantErr:    ErrFieldNotFound,
 			wantFields: []string{},
@@ -436,14 +441,14 @@ func TestSchemaAddAll(t *testing.T) {
 		want  []string
 	}{
 		{
-			name: "copies every field of the other schema in its order",
+			name: "given a schema with no fields, it copies every field of the other one, keeping that one's order",
 			build: func(_ *testing.T) *Schema {
 				return NewSchema()
 			},
 			want: []string{"id", "name"},
 		},
 		{
-			name: "appends the other schema's fields after the existing ones",
+			name: "given a schema that already has fields, the copied ones go after them",
 			build: func(t *testing.T) *Schema {
 				s := NewSchema()
 				mustAddIntField(t, s, "age")
@@ -477,16 +482,16 @@ func TestSchemaAddAll(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestSchemaAddAllDuplicateField(t *testing.T) {
-	tests := []struct {
+	// Nothing is copied unless all of it can be, so a clash has to leave the
+	// schema as it was rather than half combined.
+	duplicateTests := []struct {
 		name  string
 		build func(t *testing.T) *Schema
 		want  []string
 	}{
 		{
-			name: "copies nothing when the other schema's first field is already present",
+			name: "given a schema that already has the other's first field, it reports ErrDuplicateField and copies nothing",
 			build: func(t *testing.T) *Schema {
 				s := NewSchema()
 				mustAddIntField(t, s, "id")
@@ -495,7 +500,7 @@ func TestSchemaAddAllDuplicateField(t *testing.T) {
 			want: []string{"id"},
 		},
 		{
-			name: "copies nothing when the clash is on a field after the first",
+			name: "given a schema that clashes on a field after the first, it still copies nothing, not even the ones before it",
 			build: func(t *testing.T) *Schema {
 				s := NewSchema()
 				mustAddStringField(t, s, "name", 20)
@@ -505,7 +510,7 @@ func TestSchemaAddAllDuplicateField(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range duplicateTests {
 		t.Run(tt.name, func(t *testing.T) {
 			other := NewSchema()
 			mustAddIntField(t, other, "id")

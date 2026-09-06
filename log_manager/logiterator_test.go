@@ -12,11 +12,11 @@ func TestNewLogIterator(t *testing.T) {
 		wantBoundary int32
 	}{
 		{
-			name:         "creates iterator for a freshly appended block",
+			name:         "given a block with nothing written to it, it starts at the end of the page",
 			wantBoundary: 0,
 		},
 		{
-			name:         "creates iterator and loads existing boundary from block",
+			name:         "given a block that already holds records, it starts at the boundary written in it",
 			wantBoundary: 42,
 		},
 	}
@@ -68,42 +68,44 @@ func TestNewLogIterator(t *testing.T) {
 }
 
 func TestMoveToBlock(t *testing.T) {
-	fm := newTestFileManager(t)
-	blk, err := fm.Append(testLogFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+	t.Run("given a block that holds records, when the iterator is moved onto it, then it reads from the boundary written in it", func(t *testing.T) {
+		fm := newTestFileManager(t)
+		blk, err := fm.Append(testLogFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-	const wantBoundary = 42
-	writePage := filemanager.NewPageByBlockSize(testBlockSize)
-	if err := writePage.SetInt(0, wantBoundary); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-	if err := fm.Write(blk, writePage); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
+		const wantBoundary = 42
+		writePage := filemanager.NewPageByBlockSize(testBlockSize)
+		if err := writePage.SetInt(0, wantBoundary); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		if err := fm.Write(blk, writePage); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
 
-	it, err := NewLogIterator(fm, blk)
-	if err != nil {
-		t.Fatalf("NewLogIterator() error = %v", err)
-	}
+		it, err := NewLogIterator(fm, blk)
+		if err != nil {
+			t.Fatalf("NewLogIterator() error = %v", err)
+		}
 
-	if err := it.moveToBlock(blk); err != nil {
-		t.Fatalf("moveToBlock() error = %v", err)
-	}
+		if err := it.moveToBlock(blk); err != nil {
+			t.Fatalf("moveToBlock() error = %v", err)
+		}
 
-	if it.blockId != blk {
-		t.Errorf("blockId = %v, want %v", it.blockId, blk)
-	}
-	if it.boundary != wantBoundary {
-		t.Errorf("boundary = %d, want %d", it.boundary, wantBoundary)
-	}
-	if it.currentPos != wantBoundary {
-		t.Errorf("currentPos = %d, want %d", it.currentPos, wantBoundary)
-	}
-	if got := it.page.GetInt(0); got != wantBoundary {
-		t.Errorf("page.GetInt(0) = %d, want %d", got, wantBoundary)
-	}
+		if it.blockId != blk {
+			t.Errorf("blockId = %v, want %v", it.blockId, blk)
+		}
+		if it.boundary != wantBoundary {
+			t.Errorf("boundary = %d, want %d", it.boundary, wantBoundary)
+		}
+		if it.currentPos != wantBoundary {
+			t.Errorf("currentPos = %d, want %d", it.currentPos, wantBoundary)
+		}
+		if got := it.page.GetInt(0); got != wantBoundary {
+			t.Errorf("page.GetInt(0) = %d, want %d", got, wantBoundary)
+		}
+	})
 }
 
 func TestHasNext(t *testing.T) {
@@ -114,25 +116,25 @@ func TestHasNext(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "true when currentPos is less than block size",
+			name:       "given records left in the current block, it reports there is more to read",
 			currentPos: 10,
 			blkNum:     0,
 			want:       true,
 		},
 		{
-			name:       "false when currentPos equals block size and block number is 0",
+			name:       "given the first block read to its end, it reports there is nothing more",
 			currentPos: testBlockSize,
 			blkNum:     0,
 			want:       false,
 		},
 		{
-			name:       "true when currentPos equals block size but block number is greater than 0",
+			name:       "given a later block read to its end, it reports there is more, since earlier blocks remain",
 			currentPos: testBlockSize,
 			blkNum:     2,
 			want:       true,
 		},
 		{
-			name:       "true when both conditions hold",
+			name:       "given a later block with records still in it, it reports there is more to read",
 			currentPos: 10,
 			blkNum:     2,
 			want:       true,
@@ -162,48 +164,50 @@ func TestHasNext(t *testing.T) {
 }
 
 func TestNext(t *testing.T) {
-	dir := t.TempDir()
-	fm, err := filemanager.NewFileManager(dir, smallTestBlockSize)
-	if err != nil {
-		t.Fatalf("NewFileManager() error = %v", err)
-	}
-	lm, err := NewLogManager(fm, testLogFile)
-	if err != nil {
-		t.Fatalf("NewLogManager() error = %v", err)
-	}
-
-	records := [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")}
-	var lsn int
-	for _, rec := range records {
-		lsn, err = lm.Append(rec)
+	t.Run("given a log of three records, it returns them newest first and then reports there is no more", func(t *testing.T) {
+		dir := t.TempDir()
+		fm, err := filemanager.NewFileManager(dir, smallTestBlockSize)
 		if err != nil {
-			t.Fatalf("Append() error = %v", err)
+			t.Fatalf("NewFileManager() error = %v", err)
 		}
-	}
-	if err := lm.Flush(lsn); err != nil {
-		t.Fatalf("Flush() error = %v", err)
-	}
-
-	it, err := NewLogIterator(fm, lm.currentBlock)
-	if err != nil {
-		t.Fatalf("NewLogIterator() error = %v", err)
-	}
-
-	wantOrder := [][]byte{[]byte("EF"), []byte("CD"), []byte("AB")}
-	for i, want := range wantOrder {
-		if !it.HasNext() {
-			t.Fatalf("HasNext() = false before reading record %d, want true", i)
-		}
-		got, err := it.Next()
+		lm, err := NewLogManager(fm, testLogFile)
 		if err != nil {
-			t.Fatalf("Next() error = %v", err)
+			t.Fatalf("NewLogManager() error = %v", err)
 		}
-		if string(got) != string(want) {
-			t.Errorf("Next()[%d] = %q, want %q", i, got, want)
-		}
-	}
 
-	if it.HasNext() {
-		t.Error("HasNext() = true after reading all records, want false")
-	}
+		records := [][]byte{[]byte("AB"), []byte("CD"), []byte("EF")}
+		var lsn int
+		for _, rec := range records {
+			lsn, err = lm.Append(rec)
+			if err != nil {
+				t.Fatalf("Append() error = %v", err)
+			}
+		}
+		if err := lm.Flush(lsn); err != nil {
+			t.Fatalf("Flush() error = %v", err)
+		}
+
+		it, err := NewLogIterator(fm, lm.currentBlock)
+		if err != nil {
+			t.Fatalf("NewLogIterator() error = %v", err)
+		}
+
+		wantOrder := [][]byte{[]byte("EF"), []byte("CD"), []byte("AB")}
+		for i, want := range wantOrder {
+			if !it.HasNext() {
+				t.Fatalf("HasNext() = false before reading record %d, want true", i)
+			}
+			got, err := it.Next()
+			if err != nil {
+				t.Fatalf("Next() error = %v", err)
+			}
+			if string(got) != string(want) {
+				t.Errorf("Next()[%d] = %q, want %q", i, got, want)
+			}
+		}
+
+		if it.HasNext() {
+			t.Error("HasNext() = true after reading all records, want false")
+		}
+	})
 }

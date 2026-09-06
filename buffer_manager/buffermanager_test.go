@@ -27,22 +27,22 @@ func TestNewBufferManager(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name:       "creates a pool of 1 buffer when numBuffers is 1",
+			name:       "given a pool of one buffer, it builds that buffer and counts it free",
 			numBuffers: 1,
 			wantErr:    false,
 		},
 		{
-			name:       "creates a pool of 3 buffers when numBuffers is 3",
+			name:       "given a pool of several buffers, each is a distinct buffer rather than one shared",
 			numBuffers: 3,
 			wantErr:    false,
 		},
 		{
-			name:       "returns an error when numBuffers is 0",
+			name:       "given a pool of no buffers, it refuses to build a manager that could never pin anything",
 			numBuffers: 0,
 			wantErr:    true,
 		},
 		{
-			name:       "returns an error when numBuffers is negative",
+			name:       "given a negative pool size, it refuses rather than treating it as empty",
 			numBuffers: -1,
 			wantErr:    true,
 		},
@@ -110,35 +110,35 @@ func TestFindExistingBuffer(t *testing.T) {
 		wantIndex    int
 	}{
 		{
-			name:         "returns nil when no buffer has been assigned a block yet",
+			name:         "given a pool where no buffer holds a block yet, it finds none",
 			assigned:     []int{unassigned, unassigned, unassigned},
 			targetFile:   testDataFile,
 			targetBlkNum: 0,
 			wantIndex:    -1,
 		},
 		{
-			name:         "returns nil when no buffer holds the requested block",
+			name:         "given a pool holding other blocks, it finds none for the one asked about",
 			assigned:     []int{0, 1, 2},
 			targetFile:   testDataFile,
 			targetBlkNum: 3,
 			wantIndex:    -1,
 		},
 		{
-			name:         "returns the buffer holding the requested block",
+			name:         "given a buffer holding the block asked about, that buffer is found",
 			assigned:     []int{0, 1, 2},
 			targetFile:   testDataFile,
 			targetBlkNum: 1,
 			wantIndex:    1,
 		},
 		{
-			name:         "skips unassigned buffers and returns the one holding the requested block",
+			name:         "given buffers holding no block either side of it, the one that holds it is still found",
 			assigned:     []int{unassigned, 1, unassigned},
 			targetFile:   testDataFile,
 			targetBlkNum: 1,
 			wantIndex:    1,
 		},
 		{
-			name:         "returns nil when the block number matches but the file name differs",
+			name:         "given the same block number in another file, it finds none, so the file name counts too",
 			assigned:     []int{0, 1, 2},
 			targetFile:   testLogFile,
 			targetBlkNum: 1,
@@ -175,6 +175,60 @@ func TestFindExistingBuffer(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("given a buffer that was reassigned to another block, the block it used to hold is no longer found", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, []int32{100, 101})
+
+		bm, err := NewBufferManager(fm, lm, 1)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
+
+		buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
+		if err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		bm.Unpin(buf)
+		if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+
+		if got := bm.findExistingBuffer(filemanager.NewBlockId(testDataFile, 0)); got != nil {
+			t.Errorf("findExistingBuffer(block 0) = %v after its buffer was reassigned, want nil", got)
+		}
+		if got := bm.findExistingBuffer(filemanager.NewBlockId(testDataFile, 1)); got != buf {
+			t.Errorf("findExistingBuffer(block 1) = %v, want the reassigned buffer", got)
+		}
+	})
+
+	// A failed assignment can leave a buffer naming a block it does not hold.
+	// Replacing that buffer must not disturb the buffer that really holds it.
+	t.Run("given another buffer that names a block it does not hold, replacing it leaves the real holder findable", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, []int32{100, 101})
+
+		bm, err := NewBufferManager(fm, lm, 2)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
+
+		block0 := filemanager.NewBlockId(testDataFile, 0)
+		held, err := bm.Pin(block0)
+		if err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+
+		bm.bufferPool[1].blk = block0
+
+		if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+
+		if got := bm.findExistingBuffer(block0); got != held {
+			t.Errorf("findExistingBuffer(block 0) = %v, want the buffer that holds it", got)
+		}
+	})
 }
 
 // prepareDataFile appends one block to the data file per given value and writes
@@ -210,7 +264,7 @@ func TestTryToPin(t *testing.T) {
 		wantNumAvailable int
 	}{
 		{
-			name:             "assigns the block to an unpinned buffer when no buffer holds it",
+			name:             "given no buffer holds the block, a free one is given it and the block read in",
 			pins:             []int{0, 0, 0},
 			assigned:         []int{unassigned, unassigned, unassigned},
 			targetBlkNum:     1,
@@ -220,7 +274,7 @@ func TestTryToPin(t *testing.T) {
 			wantNumAvailable: 2,
 		},
 		{
-			name:             "reuses the buffer already holding the block without reloading it from disk",
+			name:             "given a buffer already holding the block, it is reused rather than the block read again",
 			pins:             []int{0, 0, 0},
 			assigned:         []int{unassigned, 1, unassigned},
 			targetBlkNum:     1,
@@ -230,7 +284,7 @@ func TestTryToPin(t *testing.T) {
 			wantNumAvailable: 2,
 		},
 		{
-			name:             "keeps numAvailable unchanged when the buffer holding the block is already pinned",
+			name:             "given the buffer holding the block is already pinned, the free count does not fall again",
 			pins:             []int{0, 1, 0},
 			assigned:         []int{unassigned, 1, unassigned},
 			targetBlkNum:     1,
@@ -240,7 +294,7 @@ func TestTryToPin(t *testing.T) {
 			wantNumAvailable: 2,
 		},
 		{
-			name:             "returns nil when every buffer is pinned and none holds the block",
+			name:             "given every buffer pinned and none holding the block, it takes none",
 			pins:             []int{1, 1, 1},
 			assigned:         []int{0, 2, 3},
 			targetBlkNum:     1,
@@ -302,36 +356,34 @@ func TestTryToPin(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestTryToPinRecordsReadTime(t *testing.T) {
-	tests := []struct {
+	readTimeTests := []struct {
 		name          string
 		assigned      []int
 		pinBlkNums    []int
 		wantReadTimes []int
 	}{
 		{
-			name:          "stamps an increasing readTime every time a block is newly assigned",
+			name:          "when blocks are read in one after another, then each buffer gets a later read time",
 			assigned:      []int{unassigned, unassigned, unassigned},
 			pinBlkNums:    []int{1, 2, 3},
 			wantReadTimes: []int{1, 2, 3},
 		},
 		{
-			name:          "leaves readTime untouched when the buffer already holds the block",
+			name:          "given a buffer already holding the block, its read time is left as it was",
 			assigned:      []int{unassigned, 1, unassigned},
 			pinBlkNums:    []int{1},
 			wantReadTimes: []int{0, 0, 0},
 		},
 		{
-			name:          "stamps only the buffer that receives a newly assigned block",
+			name:          "when one buffer is given a block, then the read times of the others are left alone",
 			assigned:      []int{unassigned, 1, unassigned},
 			pinBlkNums:    []int{1, 2},
 			wantReadTimes: []int{1, 0, 0},
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range readTimeTests {
 		t.Run(tt.name, func(t *testing.T) {
 			fm, lm := newTestManagers(t, testBlockSize)
 			prepareDataFile(t, fm, []int32{100, 101, 102, 103})
@@ -373,7 +425,7 @@ func TestBufferManagerPin(t *testing.T) {
 		wantNumAvailable int
 	}{
 		{
-			name:             "loads the requested block into a free buffer",
+			name:             "given a free buffer, the block is read into it and the buffer counted as taken",
 			targets:          []int{1},
 			wantIndex:        0,
 			wantPins:         1,
@@ -381,7 +433,7 @@ func TestBufferManagerPin(t *testing.T) {
 			wantNumAvailable: poolSize - 1,
 		},
 		{
-			name:             "reuses the buffer already holding the block without consuming another one",
+			name:             "given the block is already in the pool, that buffer is reused rather than another taken",
 			targets:          []int{1, 1},
 			wantIndex:        0,
 			wantPins:         2,
@@ -389,7 +441,7 @@ func TestBufferManagerPin(t *testing.T) {
 			wantNumAvailable: poolSize - 1,
 		},
 		{
-			name:             "takes a second buffer when a different block is requested",
+			name:             "given another block is asked for, a second buffer is taken for it",
 			targets:          []int{0, 1},
 			wantIndex:        1,
 			wantPins:         1,
@@ -430,92 +482,92 @@ func TestBufferManagerPin(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestBufferManagerPinWaitsUntilABufferIsUnpinned(t *testing.T) {
-	fm, lm := newTestManagers(t, testBlockSize)
-	prepareDataFile(t, fm, []int32{100, 101})
+	t.Run("given a pool with no buffer free, it waits, and takes one once another caller unpins", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, []int32{100, 101})
 
-	bm, err := NewBufferManager(fm, lm, 1)
-	if err != nil {
-		t.Fatalf("NewBufferManager() error = %v", err)
-	}
-
-	held, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
-	if err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-
-	type pinResult struct {
-		buf *Buffer
-		err error
-	}
-	done := make(chan pinResult, 1)
-	go func() {
-		buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
-		done <- pinResult{buf: buf, err: err}
-	}()
-
-	select {
-	case got := <-done:
-		t.Fatalf("Pin() returned (%v, %v) while the pool was full, want it to keep waiting", got.buf, got.err)
-	case <-time.After(50 * time.Millisecond):
-		// Still waiting, which is the expected behaviour.
-	}
-
-	bm.Unpin(held)
-
-	select {
-	case got := <-done:
-		if got.err != nil {
-			t.Fatalf("Pin() error = %v", got.err)
+		bm, err := NewBufferManager(fm, lm, 1)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
 		}
-		if got.buf != bm.bufferPool[0] {
-			t.Fatalf("Pin() = %v, want bufferPool[0]", got.buf)
+
+		held, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
+		if err != nil {
+			t.Fatalf("Pin() error = %v", err)
 		}
-		if contents := got.buf.contents.GetInt(0); contents != 101 {
-			t.Errorf("contents.GetInt(0) = %d, want 101", contents)
+
+		type pinResult struct {
+			buf *Buffer
+			err error
+		}
+		done := make(chan pinResult, 1)
+		go func() {
+			buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+			done <- pinResult{buf: buf, err: err}
+		}()
+
+		select {
+		case got := <-done:
+			t.Fatalf("Pin() returned (%v, %v) while the pool was full, want it to keep waiting", got.buf, got.err)
+		case <-time.After(50 * time.Millisecond):
+			// Still waiting, which is the expected behaviour.
+		}
+
+		bm.Unpin(held)
+
+		select {
+		case got := <-done:
+			if got.err != nil {
+				t.Fatalf("Pin() error = %v", got.err)
+			}
+			if got.buf != bm.bufferPool[0] {
+				t.Fatalf("Pin() = %v, want bufferPool[0]", got.buf)
+			}
+			if contents := got.buf.contents.GetInt(0); contents != 101 {
+				t.Errorf("contents.GetInt(0) = %d, want 101", contents)
+			}
+			if bm.numAvailable != 0 {
+				t.Errorf("numAvailable = %d, want 0", bm.numAvailable)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Pin() did not return after the buffer was unpinned")
+		}
+	})
+
+	t.Run("given a pool whose buffers are never freed, it waits out the limit and reports ErrBufferAbort", func(t *testing.T) {
+		const maxWaitTime = 50 * time.Millisecond
+
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, []int32{100, 101})
+
+		bm, err := NewBufferManager(fm, lm, 1)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
+		bm.maxWaitTime = maxWaitTime
+
+		if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0)); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+
+		start := time.Now()
+		got, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+		elapsed := time.Since(start)
+
+		if !errors.Is(err, ErrBufferAbort) {
+			t.Errorf("Pin() error = %v, want %v", err, ErrBufferAbort)
+		}
+		if got != nil {
+			t.Errorf("Pin() = %v, want nil", got)
+		}
+		if elapsed < maxWaitTime {
+			t.Errorf("Pin() gave up after %v, want it to wait at least %v", elapsed, maxWaitTime)
 		}
 		if bm.numAvailable != 0 {
 			t.Errorf("numAvailable = %d, want 0", bm.numAvailable)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("Pin() did not return after the buffer was unpinned")
-	}
-}
-
-func TestBufferManagerPinTimesOutWhenNoBufferBecomesAvailable(t *testing.T) {
-	const maxWaitTime = 50 * time.Millisecond
-
-	fm, lm := newTestManagers(t, testBlockSize)
-	prepareDataFile(t, fm, []int32{100, 101})
-
-	bm, err := NewBufferManager(fm, lm, 1)
-	if err != nil {
-		t.Fatalf("NewBufferManager() error = %v", err)
-	}
-	bm.maxWaitTime = maxWaitTime
-
-	if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0)); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-
-	start := time.Now()
-	got, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
-	elapsed := time.Since(start)
-
-	if !errors.Is(err, ErrBufferAbort) {
-		t.Errorf("Pin() error = %v, want %v", err, ErrBufferAbort)
-	}
-	if got != nil {
-		t.Errorf("Pin() = %v, want nil", got)
-	}
-	if elapsed < maxWaitTime {
-		t.Errorf("Pin() gave up after %v, want it to wait at least %v", elapsed, maxWaitTime)
-	}
-	if bm.numAvailable != 0 {
-		t.Errorf("numAvailable = %d, want 0", bm.numAvailable)
-	}
+	})
 }
 
 func TestBufferManagerUnpin(t *testing.T) {
@@ -529,21 +581,21 @@ func TestBufferManagerUnpin(t *testing.T) {
 		wantNumAvailable int
 	}{
 		{
-			name:             "returns the buffer to the pool when its only pin is released",
+			name:             "given a buffer pinned once, releasing it counts the buffer free again",
 			pinCalls:         1,
 			unpinCalls:       1,
 			wantPins:         0,
 			wantNumAvailable: poolSize,
 		},
 		{
-			name:             "keeps the buffer unavailable while another pin remains",
+			name:             "given a buffer pinned twice, releasing one leaves it taken",
 			pinCalls:         2,
 			unpinCalls:       1,
 			wantPins:         1,
 			wantNumAvailable: poolSize - 1,
 		},
 		{
-			name:             "returns the buffer to the pool once every pin is released",
+			name:             "given a buffer pinned twice, releasing both counts it free again",
 			pinCalls:         2,
 			unpinCalls:       2,
 			wantPins:         0,
@@ -590,19 +642,19 @@ func TestFlushAll(t *testing.T) {
 		wantFlushed []bool
 	}{
 		{
-			name:        "flushes only the buffers modified by the given transaction",
+			name:        "given buffers of two transactions, only the one named has its buffers written out",
 			txNums:      []int{1, 2, 1},
 			flushTxNum:  1,
 			wantFlushed: []bool{true, false, true},
 		},
 		{
-			name:        "flushes nothing when no buffer belongs to the given transaction",
+			name:        "given no buffer belongs to the transaction named, nothing is written out",
 			txNums:      []int{1, 2, 3},
 			flushTxNum:  4,
 			wantFlushed: []bool{false, false, false},
 		},
 		{
-			name:        "flushes nothing when every buffer is unmodified",
+			name:        "given every buffer unmodified, nothing is written out",
 			txNums:      []int{-1, -1, -1},
 			flushTxNum:  -1,
 			wantFlushed: []bool{false, false, false},
@@ -667,37 +719,37 @@ func TestNewBufferManagerWithPolicy(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:         "builds a manager that replaces buffers naively",
+			name:         "given the naive policy, the manager replaces buffers naively",
 			policy:       NaivePolicy,
 			wantStrategy: &naiveStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces buffers in FIFO order",
+			name:         "given the FIFO policy, the manager replaces buffers in the order they were read in",
 			policy:       FIFOPolicy,
 			wantStrategy: &fifoStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces the least recently used buffer",
+			name:         "given the LRU policy, the manager replaces the buffer used longest ago",
 			policy:       LRUPolicy,
 			wantStrategy: &lruStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces buffers in clock order",
+			name:         "given the clock policy, the manager replaces buffers in clock order",
 			policy:       ClockPolicy,
 			wantStrategy: &clockStrategy{},
 		},
 		{
-			name:         "builds a manager that prefers to replace unmodified buffers",
+			name:         "given the unmodified-first policy, the manager prefers buffers that need no write",
 			policy:       UnmodifiedFirstPolicy,
 			wantStrategy: &unmodifiedFirstStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces the modified buffer with the lowest LSN",
+			name:         "given the least-recently-modified policy, the manager replaces the buffer logged earliest",
 			policy:       LeastRecentlyModifiedPolicy,
 			wantStrategy: &leastRecentlyModifiedStrategy{},
 		},
 		{
-			name:    "returns an error when the policy is unknown",
+			name:    "given a policy it does not know, it refuses rather than falling back to one",
 			policy:  ReplacementPolicy(99),
 			wantErr: true,
 		},
@@ -726,19 +778,19 @@ func TestNewBufferManagerWithPolicy(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestNewBufferManagerDefaultsToNaivePolicy(t *testing.T) {
-	fm, lm := newTestManagers(t, testBlockSize)
+	t.Run("given a manager built without a policy, it replaces buffers naively", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
 
-	bm, err := NewBufferManager(fm, lm, 3)
-	if err != nil {
-		t.Fatalf("NewBufferManager() error = %v", err)
-	}
+		bm, err := NewBufferManager(fm, lm, 3)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
 
-	if _, ok := bm.strategy.(*naiveStrategy); !ok {
-		t.Errorf("strategy = %T, want *naiveStrategy", bm.strategy)
-	}
+		if _, ok := bm.strategy.(*naiveStrategy); !ok {
+			t.Errorf("strategy = %T, want *naiveStrategy", bm.strategy)
+		}
+	})
 }
 
 // TestBufferManagerPinReplacesTheBufferChosenByPolicy drives the pool through a
@@ -758,22 +810,22 @@ func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "naive replaces the first buffer in the pool",
+			name:      "given the naive policy, the buffer it replaces is the first of the pool",
 			policy:    NaivePolicy,
 			wantIndex: 0,
 		},
 		{
-			name:      "FIFO replaces the buffer whose block was read in first",
+			name:      "given the FIFO policy, the buffer it replaces is the one read in first",
 			policy:    FIFOPolicy,
 			wantIndex: 1,
 		},
 		{
-			name:      "LRU replaces the buffer that was unpinned first",
+			name:      "given the LRU policy, the buffer it replaces is the one released first",
 			policy:    LRUPolicy,
 			wantIndex: 2,
 		},
 		{
-			name:      "clock replaces the buffer following the one replaced last",
+			name:      "given the clock policy, the buffer it replaces is the one after the last replaced",
 			policy:    ClockPolicy,
 			wantIndex: 3,
 		},
@@ -825,7 +877,7 @@ func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
 	}
 }
 
-func TestBufferManagerStatsCountsPinsAndHits(t *testing.T) {
+func TestBufferManagerStats(t *testing.T) {
 	const poolSize = 3
 
 	tests := []struct {
@@ -835,25 +887,25 @@ func TestBufferManagerStatsCountsPinsAndHits(t *testing.T) {
 		wantHits   int
 	}{
 		{
-			name:       "counts a pin and no hit when the block has to be read from disk",
+			name:       "given a block that has to be read from disk, the pin is counted but no hit",
 			pinBlkNums: []int{0},
 			wantPins:   1,
 			wantHits:   0,
 		},
 		{
-			name:       "counts a hit when a buffer already holds the requested block",
+			name:       "given a block the pool already holds, a hit is counted",
 			pinBlkNums: []int{0, 0},
 			wantPins:   2,
 			wantHits:   1,
 		},
 		{
-			name:       "counts no hit when every pin asks for a different block",
+			name:       "given every pin asks for a different block, no hit is counted",
 			pinBlkNums: []int{0, 1, 2},
 			wantPins:   3,
 			wantHits:   0,
 		},
 		{
-			name:       "counts a hit for each repeated request of a block still in the pool",
+			name:       "given a block asked for again and again, a hit is counted each time",
 			pinBlkNums: []int{0, 1, 0, 1},
 			wantPins:   4,
 			wantHits:   2,
@@ -885,12 +937,10 @@ func TestBufferManagerStatsCountsPinsAndHits(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestBufferManagerStatsCountsFlushes(t *testing.T) {
 	const unmodified = -1
 
-	tests := []struct {
+	flushTests := []struct {
 		name string
 		// modifyTxNum marks the pinned buffer as modified by that transaction,
 		// where unmodified leaves it alone.
@@ -902,26 +952,26 @@ func TestBufferManagerStatsCountsFlushes(t *testing.T) {
 		wantFlushes   int
 	}{
 		{
-			name:        "does not count a flush when the replaced buffer is unmodified",
+			name:        "given the replaced buffer was unmodified, no write is counted",
 			modifyTxNum: unmodified,
 			flushAll:    false,
 			wantFlushes: 0,
 		},
 		{
-			name:        "counts a flush when a modified buffer is replaced",
+			name:        "given the replaced buffer was modified, the write it needed is counted",
 			modifyTxNum: 1,
 			flushAll:    false,
 			wantFlushes: 1,
 		},
 		{
-			name:          "counts a flush when FlushAll writes the modified buffer",
+			name:          "given a modified buffer of the transaction flushed, the write is counted",
 			modifyTxNum:   1,
 			flushAll:      true,
 			flushAllTxNum: 1,
 			wantFlushes:   1,
 		},
 		{
-			name:          "does not count a flush when FlushAll runs for another transaction",
+			name:          "given the flush was for another transaction, no write is counted",
 			modifyTxNum:   1,
 			flushAll:      true,
 			flushAllTxNum: 2,
@@ -929,7 +979,7 @@ func TestBufferManagerStatsCountsFlushes(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range flushTests {
 		t.Run(tt.name, func(t *testing.T) {
 			fm, lm := newTestManagers(t, testBlockSize)
 			prepareDataFile(t, fm, []int32{100, 101})
@@ -962,99 +1012,45 @@ func TestBufferManagerStatsCountsFlushes(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestBufferManagerStatsCountsWaits(t *testing.T) {
-	fm, lm := newTestManagers(t, testBlockSize)
-	prepareDataFile(t, fm, []int32{100, 101})
+	t.Run("given a pin that had to wait for a buffer, the wait is counted", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, []int32{100, 101})
 
-	bm, err := NewBufferManager(fm, lm, 1)
-	if err != nil {
-		t.Fatalf("NewBufferManager() error = %v", err)
-	}
+		bm, err := NewBufferManager(fm, lm, 1)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
 
-	held, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
-	if err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if got := bm.GetStats().Waits(); got != 0 {
-		t.Fatalf("Waits() = %d for a pin served right away, want 0", got)
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
-		done <- err
-	}()
-
-	// Give the second pin time to find the pool full and start waiting.
-	time.Sleep(50 * time.Millisecond)
-	bm.Unpin(held)
-
-	select {
-	case err := <-done:
+		held, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
 		if err != nil {
 			t.Fatalf("Pin() error = %v", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("Pin() did not return after the buffer was unpinned")
-	}
+		if got := bm.GetStats().Waits(); got != 0 {
+			t.Fatalf("Waits() = %d for a pin served right away, want 0", got)
+		}
 
-	if got := bm.GetStats().Waits(); got != 1 {
-		t.Errorf("Waits() = %d, want 1", got)
-	}
-}
+		done := make(chan error, 1)
+		go func() {
+			_, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+			done <- err
+		}()
 
-func TestFindExistingBufferAfterReassignment(t *testing.T) {
-	fm, lm := newTestManagers(t, testBlockSize)
-	prepareDataFile(t, fm, []int32{100, 101})
+		// Give the second pin time to find the pool full and start waiting.
+		time.Sleep(50 * time.Millisecond)
+		bm.Unpin(held)
 
-	bm, err := NewBufferManager(fm, lm, 1)
-	if err != nil {
-		t.Fatalf("NewBufferManager() error = %v", err)
-	}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Pin() did not return after the buffer was unpinned")
+		}
 
-	buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, 0))
-	if err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	bm.Unpin(buf)
-	if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-
-	if got := bm.findExistingBuffer(filemanager.NewBlockId(testDataFile, 0)); got != nil {
-		t.Errorf("findExistingBuffer(block 0) = %v after its buffer was reassigned, want nil", got)
-	}
-	if got := bm.findExistingBuffer(filemanager.NewBlockId(testDataFile, 1)); got != buf {
-		t.Errorf("findExistingBuffer(block 1) = %v, want the reassigned buffer", got)
-	}
-}
-
-func TestFindExistingBufferKeepsTheMappingOwnedByAnotherBuffer(t *testing.T) {
-	fm, lm := newTestManagers(t, testBlockSize)
-	prepareDataFile(t, fm, []int32{100, 101})
-
-	bm, err := NewBufferManager(fm, lm, 2)
-	if err != nil {
-		t.Fatalf("NewBufferManager() error = %v", err)
-	}
-
-	block0 := filemanager.NewBlockId(testDataFile, 0)
-	held, err := bm.Pin(block0)
-	if err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-
-	// A failed assignment can leave a buffer naming a block it does not hold.
-	// Replacing that buffer must not disturb the buffer that really holds it.
-	bm.bufferPool[1].blk = block0
-
-	if _, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1)); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-
-	if got := bm.findExistingBuffer(block0); got != held {
-		t.Errorf("findExistingBuffer(block 0) = %v, want the buffer that holds it", got)
-	}
+		if got := bm.GetStats().Waits(); got != 1 {
+			t.Errorf("Waits() = %d, want 1", got)
+		}
+	})
 }

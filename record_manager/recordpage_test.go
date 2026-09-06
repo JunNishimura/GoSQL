@@ -59,50 +59,52 @@ func newTestLayout(t *testing.T) *Layout {
 }
 
 func TestNewRecordPage(t *testing.T) {
-	tx := newTestTransaction(t)
-	layout := newTestLayout(t)
+	t.Run("it carries the transaction, the block and the layout it was made from", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestLayout(t)
 
-	blk, err := tx.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+		blk, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-	rp, err := NewRecordPage(tx, blk, layout)
-	if err != nil {
-		t.Fatalf("NewRecordPage() error = %v", err)
-	}
+		rp, err := NewRecordPage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("NewRecordPage() error = %v", err)
+		}
 
-	if rp.tx != tx {
-		t.Errorf("tx = %p, want %p", rp.tx, tx)
-	}
-	if rp.blk != blk {
-		t.Errorf("blk = %v, want %v", rp.blk, blk)
-	}
-	if rp.layout != layout {
-		t.Errorf("layout = %p, want %p", rp.layout, layout)
-	}
-}
+		if rp.tx != tx {
+			t.Errorf("tx = %p, want %p", rp.tx, tx)
+		}
+		if rp.blk != blk {
+			t.Errorf("blk = %v, want %v", rp.blk, blk)
+		}
+		if rp.layout != layout {
+			t.Errorf("layout = %p, want %p", rp.layout, layout)
+		}
+	})
 
-func TestNewRecordPagePinsTheBlock(t *testing.T) {
-	tx := newTestTransaction(t)
-	layout := newTestLayout(t)
+	t.Run("given a block the transaction has not pinned, it pins it, so the page can be read", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestLayout(t)
 
-	blk, err := tx.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+		blk, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-	if _, err := tx.GetInt(blk, 0); !errors.Is(err, transaction.ErrBlockNotPinned) {
-		t.Fatalf("GetInt() before the record page error = %v, want %v", err, transaction.ErrBlockNotPinned)
-	}
+		if _, err := tx.GetInt(blk, 0); !errors.Is(err, transaction.ErrBlockNotPinned) {
+			t.Fatalf("GetInt() before the record page error = %v, want %v", err, transaction.ErrBlockNotPinned)
+		}
 
-	if _, err := NewRecordPage(tx, blk, layout); err != nil {
-		t.Fatalf("NewRecordPage() error = %v", err)
-	}
+		if _, err := NewRecordPage(tx, blk, layout); err != nil {
+			t.Fatalf("NewRecordPage() error = %v", err)
+		}
 
-	if _, err := tx.GetInt(blk, 0); err != nil {
-		t.Errorf("GetInt() after the record page error = %v, want nil: the block was not pinned", err)
-	}
+		if _, err := tx.GetInt(blk, 0); err != nil {
+			t.Errorf("GetInt() after the record page error = %v, want nil: the block was not pinned", err)
+		}
+	})
 }
 
 // The numbers the slot tests rely on, spelled out once:
@@ -142,17 +144,17 @@ func TestRecordPageSetIntAndGetInt(t *testing.T) {
 		val  int32
 	}{
 		{
-			name: "reads back the value written to the first slot",
+			name: "when an int is written to the first slot and read back, then it is unchanged",
 			slot: 0,
 			val:  42,
 		},
 		{
-			name: "reads back the value written to the last slot that fits",
+			name: "when an int is written to the last slot that fits and read back, then it is unchanged",
 			slot: testSlotsInBlock - 1,
 			val:  7,
 		},
 		{
-			name: "reads back a negative value",
+			name: "when a negative int is written and read back, then the sign survives",
 			slot: 0,
 			val:  -1,
 		},
@@ -184,22 +186,22 @@ func TestRecordPageSetStringAndGetString(t *testing.T) {
 		val  string
 	}{
 		{
-			name: "reads back the value written to the first slot",
+			name: "when a string is written to the first slot and read back, then it is unchanged",
 			slot: 0,
 			val:  "alice",
 		},
 		{
-			name: "reads back the value written to the last slot that fits",
+			name: "when a string is written to the last slot that fits and read back, then it is unchanged",
 			slot: testSlotsInBlock - 1,
 			val:  "bob",
 		},
 		{
-			name: "reads back an empty string",
+			name: "when an empty string is written and read back, then it is still empty",
 			slot: 0,
 			val:  "",
 		},
 		{
-			name: "reads back a string of multi-byte characters",
+			name: "when a string of multi-byte characters is written and read back, then it is unchanged",
 			slot: 0,
 			val:  "テスト",
 		},
@@ -224,36 +226,38 @@ func TestRecordPageSetStringAndGetString(t *testing.T) {
 	}
 }
 
-func TestRecordPageSlotsDoNotOverlap(t *testing.T) {
-	rp := newTestRecordPage(t)
+func TestRecordPageSlotOffset(t *testing.T) {
+	t.Run("when every slot of the block is written to, then each one keeps its own values and none writes over its neighbour", func(t *testing.T) {
+		rp := newTestRecordPage(t)
 
-	for slot := range testSlotsInBlock {
-		if err := rp.SetInt(slot, "id", int32(slot)); err != nil {
-			t.Fatalf("SetInt(%d) error = %v", slot, err)
-		}
-		if err := rp.SetString(slot, "name", fmt.Sprintf("name %d", slot)); err != nil {
-			t.Fatalf("SetString(%d) error = %v", slot, err)
-		}
-	}
-
-	for slot := range testSlotsInBlock {
-		gotID, err := rp.GetInt(slot, "id")
-		if err != nil {
-			t.Fatalf("GetInt(%d) error = %v", slot, err)
-		}
-		if gotID != int32(slot) {
-			t.Errorf("GetInt(%d) = %d, want %d: a later slot wrote over it", slot, gotID, slot)
+		for slot := range testSlotsInBlock {
+			if err := rp.SetInt(slot, "id", int32(slot)); err != nil {
+				t.Fatalf("SetInt(%d) error = %v", slot, err)
+			}
+			if err := rp.SetString(slot, "name", fmt.Sprintf("name %d", slot)); err != nil {
+				t.Fatalf("SetString(%d) error = %v", slot, err)
+			}
 		}
 
-		wantName := fmt.Sprintf("name %d", slot)
-		gotName, err := rp.GetString(slot, "name")
-		if err != nil {
-			t.Fatalf("GetString(%d) error = %v", slot, err)
+		for slot := range testSlotsInBlock {
+			gotID, err := rp.GetInt(slot, "id")
+			if err != nil {
+				t.Fatalf("GetInt(%d) error = %v", slot, err)
+			}
+			if gotID != int32(slot) {
+				t.Errorf("GetInt(%d) = %d, want %d: a later slot wrote over it", slot, gotID, slot)
+			}
+
+			wantName := fmt.Sprintf("name %d", slot)
+			gotName, err := rp.GetString(slot, "name")
+			if err != nil {
+				t.Fatalf("GetString(%d) error = %v", slot, err)
+			}
+			if gotName != wantName {
+				t.Errorf("GetString(%d) = %q, want %q: a later slot wrote over it", slot, gotName, wantName)
+			}
 		}
-		if gotName != wantName {
-			t.Errorf("GetString(%d) = %q, want %q: a later slot wrote over it", slot, gotName, wantName)
-		}
-	}
+	})
 }
 
 // Slot testSlotsInBlock is the first one whose bytes would run past the end of
@@ -264,53 +268,53 @@ func TestRecordPageRejectsASlotOutsideTheBlock(t *testing.T) {
 		call func(rp *RecordPage) error
 	}{
 		{
-			name: "GetInt refuses the first slot that does not fit",
+			name: "when GetInt is given the first slot that does not fit the block, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetInt(testSlotsInBlock, "id")
 				return err
 			},
 		},
 		{
-			name: "GetInt refuses a negative slot",
+			name: "when GetInt is given a negative slot, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetInt(-1, "id")
 				return err
 			},
 		},
 		{
-			name: "SetInt refuses the first slot that does not fit",
+			name: "when SetInt is given the first slot that does not fit the block, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				return rp.SetInt(testSlotsInBlock, "id", 1)
 			},
 		},
 		{
-			name: "SetInt refuses a negative slot",
+			name: "when SetInt is given a negative slot, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				return rp.SetInt(-1, "id", 1)
 			},
 		},
 		{
-			name: "GetString refuses the first slot that does not fit",
+			name: "when GetString is given the first slot that does not fit the block, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetString(testSlotsInBlock, "name")
 				return err
 			},
 		},
 		{
-			name: "GetString refuses a negative slot",
+			name: "when GetString is given a negative slot, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetString(-1, "name")
 				return err
 			},
 		},
 		{
-			name: "SetString refuses the first slot that does not fit",
+			name: "when SetString is given the first slot that does not fit the block, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				return rp.SetString(testSlotsInBlock, "name", "x")
 			},
 		},
 		{
-			name: "SetString refuses a negative slot",
+			name: "when SetString is given a negative slot, then it reports ErrSlotOutOfRange",
 			call: func(rp *RecordPage) error {
 				return rp.SetString(-1, "name", "x")
 			},
@@ -334,27 +338,27 @@ func TestRecordPageRejectsTheWrongFieldType(t *testing.T) {
 		call func(rp *RecordPage) error
 	}{
 		{
-			name: "GetInt refuses a varchar field",
+			name: "given a varchar field, when GetInt is called on it, then it reports ErrFieldTypeMismatch",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetInt(0, "name")
 				return err
 			},
 		},
 		{
-			name: "SetInt refuses a varchar field",
+			name: "given a varchar field, when SetInt is called on it, then it reports ErrFieldTypeMismatch",
 			call: func(rp *RecordPage) error {
 				return rp.SetInt(0, "name", 1)
 			},
 		},
 		{
-			name: "GetString refuses an int field",
+			name: "given an int field, when GetString is called on it, then it reports ErrFieldTypeMismatch",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetString(0, "id")
 				return err
 			},
 		},
 		{
-			name: "SetString refuses an int field",
+			name: "given an int field, when SetString is called on it, then it reports ErrFieldTypeMismatch",
 			call: func(rp *RecordPage) error {
 				return rp.SetString(0, "id", "x")
 			},
@@ -376,27 +380,27 @@ func TestRecordPageRejectsAnUnknownField(t *testing.T) {
 		call func(rp *RecordPage) error
 	}{
 		{
-			name: "GetInt refuses a field the schema does not have",
+			name: "given a field the schema does not have, when GetInt asks for it, then it reports ErrFieldNotFound",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetInt(0, "missing")
 				return err
 			},
 		},
 		{
-			name: "SetInt refuses a field the schema does not have",
+			name: "given a field the schema does not have, when SetInt writes to it, then it reports ErrFieldNotFound",
 			call: func(rp *RecordPage) error {
 				return rp.SetInt(0, "missing", 1)
 			},
 		},
 		{
-			name: "GetString refuses a field the schema does not have",
+			name: "given a field the schema does not have, when GetString asks for it, then it reports ErrFieldNotFound",
 			call: func(rp *RecordPage) error {
 				_, err := rp.GetString(0, "missing")
 				return err
 			},
 		},
 		{
-			name: "SetString refuses a field the schema does not have",
+			name: "given a field the schema does not have, when SetString writes to it, then it reports ErrFieldNotFound",
 			call: func(rp *RecordPage) error {
 				return rp.SetString(0, "missing", "x")
 			},
@@ -440,12 +444,12 @@ func TestRecordPageSetSlotState(t *testing.T) {
 		want   slotState
 	}{
 		{
-			name:   "marks a slot as holding a record",
+			name:   "when a slot is marked as holding a record, then it reads as in use",
 			states: []slotState{slotInUse},
 			want:   slotInUse,
 		},
 		{
-			name:   "marks a slot that held a record as holding none",
+			name:   "given a slot already in use, when it is marked as holding none, then it reads as free again",
 			states: []slotState{slotInUse, slotEmpty},
 			want:   slotEmpty,
 		},
@@ -468,97 +472,97 @@ func TestRecordPageSetSlotState(t *testing.T) {
 	}
 }
 
-// A block comes back from Append filled with zeroes, which is slotEmpty, so the
-// slot has to be marked in use before a delete can be seen to have done
-// anything.
 func TestRecordPageDelete(t *testing.T) {
-	rp := newTestRecordPage(t)
+	// A block comes back from Append filled with zeroes, which is slotEmpty, so
+	// the slot has to be marked in use before a delete can be seen to have done
+	// anything.
+	t.Run("given a slot holding a record, when it is deleted, then the slot reads as free", func(t *testing.T) {
+		rp := newTestRecordPage(t)
 
-	if err := rp.setSlotState(1, slotInUse); err != nil {
-		t.Fatalf("setSlotState(1, slotInUse) error = %v", err)
-	}
-	if got := readSlotState(t, rp, 1); got != slotInUse {
-		t.Fatalf("slot 1 flag = %d, want %d before the delete", got, slotInUse)
-	}
-
-	if err := rp.Delete(1); err != nil {
-		t.Fatalf("Delete(1) error = %v", err)
-	}
-
-	if got := readSlotState(t, rp, 1); got != slotEmpty {
-		t.Errorf("slot 1 flag = %d, want %d", got, slotEmpty)
-	}
-}
-
-func TestRecordPageDeleteLeavesTheOtherSlotsAlone(t *testing.T) {
-	const deleted = 1
-
-	rp := newTestRecordPage(t)
-
-	for slot := range testSlotsInBlock {
-		if err := rp.setSlotState(slot, slotInUse); err != nil {
-			t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+		if err := rp.setSlotState(1, slotInUse); err != nil {
+			t.Fatalf("setSlotState(1, slotInUse) error = %v", err)
 		}
-	}
-
-	if err := rp.Delete(deleted); err != nil {
-		t.Fatalf("Delete(%d) error = %v", deleted, err)
-	}
-
-	for slot := range testSlotsInBlock {
-		want := slotInUse
-		if slot == deleted {
-			want = slotEmpty
+		if got := readSlotState(t, rp, 1); got != slotInUse {
+			t.Fatalf("slot 1 flag = %d, want %d before the delete", got, slotInUse)
 		}
 
-		if got := readSlotState(t, rp, slot); got != want {
-			t.Errorf("slot %d flag = %d, want %d", slot, got, want)
+		if err := rp.Delete(1); err != nil {
+			t.Fatalf("Delete(1) error = %v", err)
 		}
-	}
-}
 
-func TestRecordPageDeleteKeepsTheFieldsOfTheOtherSlots(t *testing.T) {
-	const deleted = 1
-
-	rp := newTestRecordPage(t)
-
-	for slot := range testSlotsInBlock {
-		if err := rp.SetInt(slot, "id", int32(slot)); err != nil {
-			t.Fatalf("SetInt(%d) error = %v", slot, err)
+		if got := readSlotState(t, rp, 1); got != slotEmpty {
+			t.Errorf("slot 1 flag = %d, want %d", got, slotEmpty)
 		}
-	}
+	})
 
-	if err := rp.Delete(deleted); err != nil {
-		t.Fatalf("Delete(%d) error = %v", deleted, err)
-	}
+	t.Run("given every slot holding a record, when one is deleted, then the others still read as in use", func(t *testing.T) {
+		const deleted = 1
 
-	for slot := range testSlotsInBlock {
-		got, err := rp.GetInt(slot, "id")
-		if err != nil {
-			t.Fatalf("GetInt(%d) error = %v", slot, err)
+		rp := newTestRecordPage(t)
+
+		for slot := range testSlotsInBlock {
+			if err := rp.setSlotState(slot, slotInUse); err != nil {
+				t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+			}
 		}
-		if got != int32(slot) {
-			t.Errorf("GetInt(%d) = %d, want %d: the delete wrote outside the flag", slot, got, slot)
-		}
-	}
-}
 
-func TestRecordPageDeleteRejectsASlotOutsideTheBlock(t *testing.T) {
-	tests := []struct {
+		if err := rp.Delete(deleted); err != nil {
+			t.Fatalf("Delete(%d) error = %v", deleted, err)
+		}
+
+		for slot := range testSlotsInBlock {
+			want := slotInUse
+			if slot == deleted {
+				want = slotEmpty
+			}
+
+			if got := readSlotState(t, rp, slot); got != want {
+				t.Errorf("slot %d flag = %d, want %d", slot, got, want)
+			}
+		}
+	})
+
+	t.Run("when a slot is deleted, then it writes the flag alone and leaves every field where it was", func(t *testing.T) {
+		const deleted = 1
+
+		rp := newTestRecordPage(t)
+
+		for slot := range testSlotsInBlock {
+			if err := rp.SetInt(slot, "id", int32(slot)); err != nil {
+				t.Fatalf("SetInt(%d) error = %v", slot, err)
+			}
+		}
+
+		if err := rp.Delete(deleted); err != nil {
+			t.Fatalf("Delete(%d) error = %v", deleted, err)
+		}
+
+		for slot := range testSlotsInBlock {
+			got, err := rp.GetInt(slot, "id")
+			if err != nil {
+				t.Fatalf("GetInt(%d) error = %v", slot, err)
+			}
+			if got != int32(slot) {
+				t.Errorf("GetInt(%d) = %d, want %d: the delete wrote outside the flag", slot, got, slot)
+			}
+		}
+	})
+
+	slotTests := []struct {
 		name string
 		slot int
 	}{
 		{
-			name: "refuses the first slot that does not fit",
+			name: "given the first slot that does not fit the block, it reports ErrSlotOutOfRange",
 			slot: testSlotsInBlock,
 		},
 		{
-			name: "refuses a negative slot",
+			name: "given a negative slot, it reports ErrSlotOutOfRange",
 			slot: -1,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range slotTests {
 		t.Run(tt.name, func(t *testing.T) {
 			rp := newTestRecordPage(t)
 
@@ -576,22 +580,22 @@ func TestRecordPageIsValidSlot(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "accepts the first slot",
+			name: "given the first slot of the block, it reports the slot is one the block holds",
 			slot: 0,
 			want: true,
 		},
 		{
-			name: "accepts the last slot whose bytes all fit in the block",
+			name: "given the last slot whose bytes all fit, it reports the slot is one the block holds",
 			slot: testSlotsInBlock - 1,
 			want: true,
 		},
 		{
-			name: "refuses the slot whose bytes would run past the end of the block",
+			name: "given a slot whose bytes would run past the end of the block, it reports the block does not hold it",
 			slot: testSlotsInBlock,
 			want: false,
 		},
 		{
-			name: "refuses a negative slot",
+			name: "given a negative slot, it reports ErrSlotOutOfRange",
 			slot: -1,
 			want: false,
 		},
@@ -617,35 +621,35 @@ func TestRecordPageSearchAfter(t *testing.T) {
 		want  int
 	}{
 		{
-			name:  "finds the first slot in use when asked to start at the beginning",
+			name:  "given slots 1 and 3 in use, when the search starts before the first slot, then it finds slot 1",
 			inUse: []int{1, 3},
 			start: -1,
 			state: slotInUse,
 			want:  1,
 		},
 		{
-			name:  "skips the slot it is given and finds the next one in use",
+			name:  "given slots 1 and 3 in use, when the search starts at slot 1, then it skips it and finds slot 3",
 			inUse: []int{1, 3},
 			start: 1,
 			state: slotInUse,
 			want:  3,
 		},
 		{
-			name:  "finds the last slot of the block",
+			name:  "given only the last slot of the block in use, it is found rather than passed over",
 			inUse: []int{3},
 			start: -1,
 			state: slotInUse,
 			want:  3,
 		},
 		{
-			name:  "finds an empty slot among slots in use",
+			name:  "given slots in use either side of a free one, when a free slot is searched for, then the one between them is found",
 			inUse: []int{0, 1, 3},
 			start: -1,
 			state: slotEmpty,
 			want:  2,
 		},
 		{
-			name:  "finds the first slot when every slot matches",
+			name:  "given every slot in use, when the search starts before the first slot, then it finds slot 0",
 			inUse: []int{0, 1, 2, 3},
 			start: -1,
 			state: slotInUse,
@@ -671,42 +675,40 @@ func TestRecordPageSearchAfter(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestRecordPageSearchAfterReportsNoSuchSlot(t *testing.T) {
-	tests := []struct {
+	noSuchSlotTests := []struct {
 		name  string
 		inUse []int
 		start int
 		state slotState
 	}{
 		{
-			name:  "when no slot in the block is in use",
+			name:  "given a block with no slot in use, it reports ErrNoSuchSlot",
 			inUse: nil,
 			start: -1,
 			state: slotInUse,
 		},
 		{
-			name:  "when the only slot in use is at or before the one it starts from",
+			name:  "given the only slot in use is the one the search starts from, it reports ErrNoSuchSlot",
 			inUse: []int{1},
 			start: 1,
 			state: slotInUse,
 		},
 		{
-			name:  "when it starts from the last slot of the block",
+			name:  "given a search starting from the last slot of the block, it reports ErrNoSuchSlot",
 			inUse: nil,
 			start: testSlotsInBlock - 1,
 			state: slotEmpty,
 		},
 		{
-			name:  "when it starts from beyond the end of the block",
+			name:  "given a search starting past the end of the block, it reports ErrNoSuchSlot rather than a slot error",
 			inUse: []int{0},
 			start: testSlotsInBlock,
 			state: slotInUse,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range noSuchSlotTests {
 		t.Run(tt.name, func(t *testing.T) {
 			rp := newTestRecordPage(t)
 			for _, slot := range tt.inUse {
@@ -730,19 +732,19 @@ func TestRecordPageNextUsedSlotAfter(t *testing.T) {
 		want  int
 	}{
 		{
-			name:  "finds the first record in the block",
+			name:  "given records at slots 1 and 3, when the walk starts before the first slot, then it finds the one at slot 1",
 			inUse: []int{1, 3},
 			start: -1,
 			want:  1,
 		},
 		{
-			name:  "skips the slot it is given and finds the next record",
+			name:  "given records at slots 1 and 3, when the walk starts at slot 1, then it skips it and finds the one at slot 3",
 			inUse: []int{1, 3},
 			start: 1,
 			want:  3,
 		},
 		{
-			name:  "finds a record in the last slot of the block",
+			name:  "given the only record in the last slot of the block, it is found rather than passed over",
 			inUse: []int{3},
 			start: -1,
 			want:  3,
@@ -767,27 +769,25 @@ func TestRecordPageNextUsedSlotAfter(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestRecordPageNextUsedSlotAfterReportsNoSuchSlot(t *testing.T) {
-	tests := []struct {
+	noSuchSlotTests := []struct {
 		name  string
 		inUse []int
 		start int
 	}{
 		{
-			name:  "when the block holds no records at all",
+			name:  "given a block that holds no records, it reports ErrNoSuchSlot",
 			inUse: nil,
 			start: -1,
 		},
 		{
-			name:  "when the last record is at the slot it starts from",
+			name:  "given the last record is at the slot the walk starts from, it reports ErrNoSuchSlot",
 			inUse: []int{2},
 			start: 2,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range noSuchSlotTests {
 		t.Run(tt.name, func(t *testing.T) {
 			rp := newTestRecordPage(t)
 			for _, slot := range tt.inUse {
@@ -811,19 +811,19 @@ func TestRecordPageClaimFreeSlotAfter(t *testing.T) {
 		want  int
 	}{
 		{
-			name:  "takes the first slot of an empty block",
+			name:  "given a block with no records, it takes slot 0",
 			inUse: nil,
 			start: -1,
 			want:  0,
 		},
 		{
-			name:  "takes the first free slot among slots already in use",
+			name:  "given slots 0, 1 and 3 in use, it takes slot 2, the first free one",
 			inUse: []int{0, 1, 3},
 			start: -1,
 			want:  2,
 		},
 		{
-			name:  "skips the slot it is given even when that slot is free",
+			name:  "given a block with no records, when it starts at slot 0, then it skips that slot and takes slot 1",
 			inUse: nil,
 			start: 0,
 			want:  1,
@@ -852,47 +852,45 @@ func TestRecordPageClaimFreeSlotAfter(t *testing.T) {
 			}
 		})
 	}
-}
 
-// Claiming from the start of the block over and over is what an insert into a
-// table does, so each claim has to see the marks the ones before it left.
-func TestRecordPageClaimFreeSlotAfterTakesEachSlotOnce(t *testing.T) {
-	rp := newTestRecordPage(t)
+	// Claiming from the start of the block over and over is what an insert into
+	// a table does, so each claim has to see the marks the ones before it left.
+	t.Run("when it is asked from the start of the block over and over, then it gives out each slot once and then reports ErrNoSuchSlot", func(t *testing.T) {
+		rp := newTestRecordPage(t)
 
-	for want := range testSlotsInBlock {
-		got, err := rp.ClaimFreeSlotAfter(-1)
-		if err != nil {
-			t.Fatalf("ClaimFreeSlotAfter(-1) error = %v on claim %d", err, want)
+		for want := range testSlotsInBlock {
+			got, err := rp.ClaimFreeSlotAfter(-1)
+			if err != nil {
+				t.Fatalf("ClaimFreeSlotAfter(-1) error = %v on claim %d", err, want)
+			}
+			if got != want {
+				t.Fatalf("ClaimFreeSlotAfter(-1) = %d, want %d: an earlier claim did not stick", got, want)
+			}
 		}
-		if got != want {
-			t.Fatalf("ClaimFreeSlotAfter(-1) = %d, want %d: an earlier claim did not stick", got, want)
+
+		if _, err := rp.ClaimFreeSlotAfter(-1); !errors.Is(err, ErrNoSuchSlot) {
+			t.Errorf("ClaimFreeSlotAfter(-1) error = %v, want %v once the block is full", err, ErrNoSuchSlot)
 		}
-	}
+	})
 
-	if _, err := rp.ClaimFreeSlotAfter(-1); !errors.Is(err, ErrNoSuchSlot) {
-		t.Errorf("ClaimFreeSlotAfter(-1) error = %v, want %v once the block is full", err, ErrNoSuchSlot)
-	}
-}
-
-func TestRecordPageClaimFreeSlotAfterReportsNoSuchSlot(t *testing.T) {
-	tests := []struct {
+	noSuchSlotTests := []struct {
 		name  string
 		inUse []int
 		start int
 	}{
 		{
-			name:  "when every slot in the block is in use",
+			name:  "given every slot in the block in use, it reports ErrNoSuchSlot",
 			inUse: []int{0, 1, 2, 3},
 			start: -1,
 		},
 		{
-			name:  "when the only free slots are at or before the one it starts from",
+			name:  "given the only free slots are at or before the one it starts from, it reports ErrNoSuchSlot",
 			inUse: []int{2, 3},
 			start: 1,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range noSuchSlotTests {
 		t.Run(tt.name, func(t *testing.T) {
 			rp := newTestRecordPage(t)
 			for _, slot := range tt.inUse {
@@ -908,71 +906,75 @@ func TestRecordPageClaimFreeSlotAfterReportsNoSuchSlot(t *testing.T) {
 	}
 }
 
-// A block that has just been appended is already all zeroes, so the block is
-// filled in first: an initialize that did nothing at all would pass otherwise.
 func TestRecordPageInitializeNewBlock(t *testing.T) {
-	rp := newTestRecordPage(t)
+	// A block that has just been appended is already all zeroes, so the block
+	// is filled in first: an initialize that did nothing at all would pass
+	// otherwise.
+	t.Run("given a block whose slots all hold records, when it is initialized, then every slot is free and every field its zero value", func(t *testing.T) {
+		rp := newTestRecordPage(t)
 
-	for slot := range testSlotsInBlock {
-		if err := rp.setSlotState(slot, slotInUse); err != nil {
-			t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
-		}
-		if err := rp.SetInt(slot, "id", int32(slot)+1); err != nil {
-			t.Fatalf("SetInt(%d) error = %v", slot, err)
-		}
-		if err := rp.SetString(slot, "name", "written"); err != nil {
-			t.Fatalf("SetString(%d) error = %v", slot, err)
-		}
-	}
-
-	if err := rp.InitializeNewBlock(); err != nil {
-		t.Fatalf("InitializeNewBlock() error = %v", err)
-	}
-
-	for slot := range testSlotsInBlock {
-		if state := readSlotState(t, rp, slot); state != slotEmpty {
-			t.Errorf("slot %d flag = %d, want %d", slot, state, slotEmpty)
+		for slot := range testSlotsInBlock {
+			if err := rp.setSlotState(slot, slotInUse); err != nil {
+				t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+			}
+			if err := rp.SetInt(slot, "id", int32(slot)+1); err != nil {
+				t.Fatalf("SetInt(%d) error = %v", slot, err)
+			}
+			if err := rp.SetString(slot, "name", "written"); err != nil {
+				t.Fatalf("SetString(%d) error = %v", slot, err)
+			}
 		}
 
-		gotID, err := rp.GetInt(slot, "id")
+		if err := rp.InitializeNewBlock(); err != nil {
+			t.Fatalf("InitializeNewBlock() error = %v", err)
+		}
+
+		for slot := range testSlotsInBlock {
+			if state := readSlotState(t, rp, slot); state != slotEmpty {
+				t.Errorf("slot %d flag = %d, want %d", slot, state, slotEmpty)
+			}
+
+			gotID, err := rp.GetInt(slot, "id")
+			if err != nil {
+				t.Fatalf("GetInt(%d) error = %v", slot, err)
+			}
+			if gotID != 0 {
+				t.Errorf("GetInt(%d) = %d, want 0", slot, gotID)
+			}
+
+			gotName, err := rp.GetString(slot, "name")
+			if err != nil {
+				t.Fatalf("GetString(%d) error = %v", slot, err)
+			}
+			if gotName != "" {
+				t.Errorf("GetString(%d) = %q, want \"\"", slot, gotName)
+			}
+		}
+	})
+
+	// The block holds four whole slots and 32 bytes over, which belong to no
+	// slot. A marker is left in them to catch an initialize that runs past the
+	// last one.
+	t.Run("it leaves the bytes past the last whole slot alone, since no slot owns them", func(t *testing.T) {
+		const marker = 12345
+
+		rp := newTestRecordPage(t)
+
+		past := testSlotsInBlock * testSlotSize
+		if err := rp.tx.SetInt(rp.blk, past, marker); err != nil {
+			t.Fatalf("SetInt() past the last slot error = %v", err)
+		}
+
+		if err := rp.InitializeNewBlock(); err != nil {
+			t.Fatalf("InitializeNewBlock() error = %v", err)
+		}
+
+		got, err := rp.tx.GetInt(rp.blk, past)
 		if err != nil {
-			t.Fatalf("GetInt(%d) error = %v", slot, err)
+			t.Fatalf("GetInt() past the last slot error = %v", err)
 		}
-		if gotID != 0 {
-			t.Errorf("GetInt(%d) = %d, want 0", slot, gotID)
+		if got != marker {
+			t.Errorf("the bytes past the last slot = %d, want %d", got, marker)
 		}
-
-		gotName, err := rp.GetString(slot, "name")
-		if err != nil {
-			t.Fatalf("GetString(%d) error = %v", slot, err)
-		}
-		if gotName != "" {
-			t.Errorf("GetString(%d) = %q, want \"\"", slot, gotName)
-		}
-	}
-}
-
-// The block holds four whole slots and 32 bytes over, which belong to no slot.
-// A marker is left in them to catch an initialize that runs past the last one.
-func TestRecordPageInitializeNewBlockLeavesTheBytesPastTheLastSlot(t *testing.T) {
-	const marker = 12345
-
-	rp := newTestRecordPage(t)
-
-	past := testSlotsInBlock * testSlotSize
-	if err := rp.tx.SetInt(rp.blk, past, marker); err != nil {
-		t.Fatalf("SetInt() past the last slot error = %v", err)
-	}
-
-	if err := rp.InitializeNewBlock(); err != nil {
-		t.Fatalf("InitializeNewBlock() error = %v", err)
-	}
-
-	got, err := rp.tx.GetInt(rp.blk, past)
-	if err != nil {
-		t.Fatalf("GetInt() past the last slot error = %v", err)
-	}
-	if got != marker {
-		t.Errorf("the bytes past the last slot = %d, want %d", got, marker)
-	}
+	})
 }
