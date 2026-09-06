@@ -283,19 +283,19 @@ func TestSetModified(t *testing.T) {
 			wantLSN:       0,
 		},
 		{
-			name:          "leaves lsn at its initial value when lsn is negative",
+			name:          "given a change that was never logged, no lsn is recorded",
 			modifications: []modification{{txNum: 1, lsn: -1}},
 			wantTxNum:     1,
 			wantLSN:       -1,
 		},
 		{
-			name:          "keeps the previously recorded lsn when a later call passes a negative lsn",
+			name:          "given a later change that was never logged, the lsn already recorded is kept",
 			modifications: []modification{{txNum: 1, lsn: 5}, {txNum: 2, lsn: -1}},
 			wantTxNum:     2,
 			wantLSN:       5,
 		},
 		{
-			name:          "overwrites the previously recorded lsn when a later call passes a larger lsn",
+			name:          "given a later change with a newer lsn, that one replaces the one recorded",
 			modifications: []modification{{txNum: 1, lsn: 5}, {txNum: 2, lsn: 9}},
 			wantTxNum:     2,
 			wantLSN:       9,
@@ -329,25 +329,25 @@ func TestIsPinned(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:       "returns false when the buffer has never been pinned",
+			name:       "given a buffer nobody has pinned, it reports the buffer as free",
 			pinCalls:   0,
 			unpinCalls: 0,
 			want:       false,
 		},
 		{
-			name:       "returns true when the buffer is pinned once",
+			name:       "given a buffer pinned once, it reports the buffer as held",
 			pinCalls:   1,
 			unpinCalls: 0,
 			want:       true,
 		},
 		{
-			name:       "returns true when one of two pins is still held",
+			name:       "given a buffer pinned twice and released once, it is still held",
 			pinCalls:   2,
 			unpinCalls: 1,
 			want:       true,
 		},
 		{
-			name:       "returns false when every pin is released",
+			name:       "given every pin released, it reports the buffer as free again",
 			pinCalls:   2,
 			unpinCalls: 2,
 			want:       false,
@@ -381,22 +381,22 @@ func TestIsModified(t *testing.T) {
 		want       bool
 	}{
 		{
-			name:  "returns false when the buffer has never been modified",
+			name:  "given a buffer nobody has written to, it reports the buffer as unmodified",
 			txNum: -1,
 			want:  false,
 		},
 		{
-			name:  "returns true when the buffer is modified by transaction 0",
+			name:  "given a buffer modified by transaction zero, it is modified rather than read as unassigned",
 			txNum: 0,
 			want:  true,
 		},
 		{
-			name:  "returns true when the buffer is modified by a positive transaction",
+			name:  "given a buffer a transaction has written to, it reports the buffer as modified",
 			txNum: 3,
 			want:  true,
 		},
 		{
-			name:       "returns false once the modified buffer has been flushed",
+			name:       "given a modified buffer that has been flushed, it reports the buffer as unmodified again",
 			txNum:      3,
 			flushAfter: true,
 			want:       false,
@@ -437,13 +437,13 @@ func TestUnpin(t *testing.T) {
 		wantPins   int
 	}{
 		{
-			name:       "decrements pins back to 0 when the only pin is released",
+			name:       "given a buffer pinned once, releasing it leaves the buffer free",
 			pinCalls:   1,
 			unpinCalls: 1,
 			wantPins:   0,
 		},
 		{
-			name:       "decrements pins to 1 when two of three pins are released",
+			name:       "given a buffer pinned three times, releasing two leaves one hold on it",
 			pinCalls:   3,
 			unpinCalls: 2,
 			wantPins:   1,
@@ -502,17 +502,17 @@ func TestFlush(t *testing.T) {
 		wantWritten bool
 	}{
 		{
-			name:        "keeps the block on disk untouched when txNum is negative",
+			name:        "given an unmodified buffer, nothing is written and the block on disk is left alone",
 			txNum:       -1,
 			wantWritten: false,
 		},
 		{
-			name:        "writes the page to disk when txNum is 0",
+			name:        "given a buffer modified by transaction zero, its page is written out rather than taken as unmodified",
 			txNum:       0,
 			wantWritten: true,
 		},
 		{
-			name:        "writes the page to disk when txNum is positive",
+			name:        "given a modified buffer, its page is written out to the block it holds",
 			txNum:       3,
 			wantWritten: true,
 		},
@@ -571,13 +571,13 @@ func TestAssignToBlock(t *testing.T) {
 		wantOldBlkFlush bool
 	}{
 		{
-			name:            "discards the unmodified page and loads the new block",
+			name:            "given an unmodified buffer, the page it held is dropped and the new block read in",
 			txNum:           -1,
 			pins:            3,
 			wantOldBlkFlush: false,
 		},
 		{
-			name:            "flushes the modified page before loading the new block",
+			name:            "given a modified buffer, its page is written out before the new block is read in",
 			txNum:           1,
 			pins:            3,
 			wantOldBlkFlush: true,
