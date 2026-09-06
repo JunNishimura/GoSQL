@@ -25,22 +25,22 @@ func TestNaiveStrategyChooseUnpinnedBuffer(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "returns the first buffer when none of them is pinned",
+			name:      "given no buffer pinned, it chooses the first of the pool",
 			pins:      []int{0, 0, 0},
 			wantIndex: 0,
 		},
 		{
-			name:      "skips the pinned head and returns the first unpinned buffer",
+			name:      "given the first of the pool pinned, it passes over it and chooses the next free one",
 			pins:      []int{2, 0, 0},
 			wantIndex: 1,
 		},
 		{
-			name:      "returns the last buffer when it is the only unpinned one",
+			name:      "given only the last buffer free, it is chosen rather than passed over",
 			pins:      []int{1, 1, 0},
 			wantIndex: 2,
 		},
 		{
-			name:      "returns nil when every buffer is pinned",
+			name:      "given every buffer pinned, it chooses none",
 			pins:      []int{1, 1, 1},
 			wantIndex: -1,
 		},
@@ -68,25 +68,25 @@ func TestFifoStrategyChooseUnpinnedBuffer(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "returns the buffer read in first rather than the first buffer in the pool",
+			name:      "given buffers read in out of pool order, it chooses the one read in first rather than the first of the pool",
 			pins:      []int{0, 0, 0},
 			readTimes: []int{3, 1, 2},
 			wantIndex: 1,
 		},
 		{
-			name:      "skips the buffer read in first when it is pinned",
+			name:      "given the buffer read in first is pinned, it passes over it and chooses the next oldest",
 			pins:      []int{1, 0, 0},
 			readTimes: []int{1, 3, 2},
 			wantIndex: 2,
 		},
 		{
-			name:      "returns a buffer that has never been assigned a block before any assigned one",
+			name:      "given a buffer that has never held a block, it is chosen before any that has",
 			pins:      []int{0, 0, 0},
 			readTimes: []int{2, 0, 1},
 			wantIndex: 1,
 		},
 		{
-			name:      "returns nil when every buffer is pinned",
+			name:      "given every buffer pinned, it chooses none",
 			pins:      []int{1, 1, 1},
 			readTimes: []int{1, 2, 3},
 			wantIndex: -1,
@@ -131,12 +131,12 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "returns the head of the pool while no buffer has been used yet",
+			name:      "given no buffer has been used yet, it chooses the first of the pool",
 			changes:   nil,
 			wantIndex: 0,
 		},
 		{
-			name: "returns the buffer that was unpinned first rather than the head of the pool",
+			name: "given buffers unpinned out of pool order, it chooses the one unpinned first",
 			changes: []pinChange{
 				pinnedAt(0), pinnedAt(1), pinnedAt(2),
 				unpinnedAt(1), unpinnedAt(2), unpinnedAt(0),
@@ -144,7 +144,7 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 			wantIndex: 1,
 		},
 		{
-			name: "returns the only buffer that has been unpinned again",
+			name: "given only one buffer has been used and freed, it is chosen",
 			changes: []pinChange{
 				pinnedAt(0), pinnedAt(1), pinnedAt(2),
 				unpinnedAt(2),
@@ -152,7 +152,7 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 			wantIndex: 2,
 		},
 		{
-			name: "sends a buffer to the back of the queue when it is unpinned again",
+			name: "when a buffer is used again and freed, then it goes to the back and another is chosen first",
 			changes: []pinChange{
 				pinnedAt(0), pinnedAt(1), pinnedAt(2),
 				unpinnedAt(1), unpinnedAt(2), unpinnedAt(0),
@@ -161,7 +161,7 @@ func TestLruStrategyChooseUnpinnedBuffer(t *testing.T) {
 			wantIndex: 2,
 		},
 		{
-			name: "returns nil when every buffer is pinned",
+			name: "given every buffer pinned, it chooses none",
 			changes: []pinChange{
 				pinnedAt(0), pinnedAt(1), pinnedAt(2),
 			},
@@ -202,27 +202,27 @@ func TestClockStrategyChooseUnpinnedBuffer(t *testing.T) {
 		wantIndexes []int
 	}{
 		{
-			name:        "resumes the scan at the buffer following the one it returned",
+			name:        "given a buffer was chosen last time, the scan carries on from the one after it",
 			pins:        []int{0, 0, 0},
 			wantIndexes: []int{0, 1, 2},
 		},
 		{
-			name:        "wraps around to the head of the pool after the last buffer",
+			name:        "given the scan reached the end of the pool, it wraps round to the first buffer",
 			pins:        []int{0, 0, 0},
 			wantIndexes: []int{0, 1, 2, 0},
 		},
 		{
-			name:        "skips a pinned buffer while scanning forward",
+			name:        "given a pinned buffer in the way, the scan passes over it and carries on",
 			pins:        []int{0, 1, 0},
 			wantIndexes: []int{0, 2},
 		},
 		{
-			name:        "wraps around past the pinned buffers at the end of the pool",
+			name:        "given the rest of the pool is pinned, the scan wraps round and finds the free buffer behind it",
 			pins:        []int{0, 0, 1},
 			wantIndexes: []int{0, 1, 0},
 		},
 		{
-			name:        "returns nil when every buffer is pinned",
+			name:        "given every buffer pinned, it chooses none",
 			pins:        []int{1, 1, 1},
 			wantIndexes: []int{-1},
 		},
@@ -263,31 +263,31 @@ func TestUnmodifiedFirstStrategyChooseUnpinnedBuffer(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "skips a modified buffer and returns the first unmodified one",
+			name:      "given a modified buffer before an unmodified one, it chooses the unmodified one, which needs no write",
 			pins:      []int{0, 0, 0},
 			txNums:    []int{5, -1, -1},
 			wantIndex: 1,
 		},
 		{
-			name:      "falls back to the first unpinned buffer when every unpinned buffer is modified",
+			name:      "given every free buffer is modified, it takes the first of them rather than choosing none",
 			pins:      []int{0, 0, 0},
 			txNums:    []int{1, 2, 3},
 			wantIndex: 0,
 		},
 		{
-			name:      "skips an unmodified buffer that is pinned",
+			name:      "given the unmodified buffer is pinned, it is passed over despite needing no write",
 			pins:      []int{1, 0, 0},
 			txNums:    []int{-1, 5, -1},
 			wantIndex: 2,
 		},
 		{
-			name:      "falls back to a modified buffer when the only unmodified one is pinned",
+			name:      "given the only unmodified buffer is pinned, it takes a modified one rather than choosing none",
 			pins:      []int{1, 0, 0},
 			txNums:    []int{-1, 5, 6},
 			wantIndex: 1,
 		},
 		{
-			name:      "returns nil when every buffer is pinned even though none is modified",
+			name:      "given every buffer pinned, it chooses none, even though none would need a write",
 			pins:      []int{1, 1, 1},
 			txNums:    []int{-1, -1, -1},
 			wantIndex: -1,
@@ -319,42 +319,42 @@ func TestLeastRecentlyModifiedStrategyChooseUnpinnedBuffer(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "returns the modified buffer with the lowest LSN",
+			name:      "given several modified buffers, it chooses the one whose changes were logged earliest",
 			pins:      []int{0, 0, 0},
 			txNums:    []int{1, 1, 1},
 			lsns:      []int{30, 10, 20},
 			wantIndex: 1,
 		},
 		{
-			name:      "skips an unmodified buffer even when its LSN is the lowest",
+			name:      "given an unmodified buffer with the lowest lsn, it is passed over in favour of a modified one",
 			pins:      []int{0, 0, 0},
 			txNums:    []int{-1, 1, 1},
 			lsns:      []int{5, 30, 20},
 			wantIndex: 2,
 		},
 		{
-			name:      "prefers a modified buffer whose changes were never logged",
+			name:      "given a modified buffer whose changes were never logged, it is chosen before any that were",
 			pins:      []int{0, 0, 0},
 			txNums:    []int{1, 1, 1},
 			lsns:      []int{10, -1, 5},
 			wantIndex: 1,
 		},
 		{
-			name:      "skips a pinned buffer even when its LSN is the lowest",
+			name:      "given a pinned buffer with the lowest lsn, it is passed over",
 			pins:      []int{1, 0, 0},
 			txNums:    []int{1, 1, 1},
 			lsns:      []int{5, 30, 20},
 			wantIndex: 2,
 		},
 		{
-			name:      "falls back to the first unpinned buffer when none of them is modified",
+			name:      "given no free buffer is modified, it takes the first of them rather than choosing none",
 			pins:      []int{0, 0, 0},
 			txNums:    []int{-1, -1, -1},
 			lsns:      []int{30, 10, 20},
 			wantIndex: 0,
 		},
 		{
-			name:      "returns nil when every buffer is pinned",
+			name:      "given every buffer pinned, it chooses none",
 			pins:      []int{1, 1, 1},
 			txNums:    []int{1, 1, 1},
 			lsns:      []int{10, 20, 30},

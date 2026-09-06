@@ -33,11 +33,11 @@ func TestNewBuffer(t *testing.T) {
 		blockSize int
 	}{
 		{
-			name:      "allocates a page of 400 bytes when block size is 400",
+			name:      "it starts unpinned, unmodified, on no block, with a page of the block size",
 			blockSize: 400,
 		},
 		{
-			name:      "allocates a page of 20 bytes when block size is 20",
+			name:      "given a smaller block size, the page it allocates is that size rather than a fixed one",
 			blockSize: 20,
 		},
 	}
@@ -89,11 +89,11 @@ func TestBlock(t *testing.T) {
 		blkNum int
 	}{
 		{
-			name:   "reports the first block once it is assigned",
+			name:   "given a buffer assigned to a block, it reports that block",
 			blkNum: 0,
 		},
 		{
-			name:   "reports the block the buffer was last assigned to",
+			name:   "given a buffer assigned twice, it reports the block it was last given",
 			blkNum: 1,
 		},
 	}
@@ -126,18 +126,18 @@ func TestBlock(t *testing.T) {
 			}
 		})
 	}
-}
 
-// A buffer that has never been assigned holds no block, and callers such as the
-// recovery manager have to be able to tell that apart from a real one.
-func TestBlockBeforeAssignment(t *testing.T) {
-	fm, lm := newTestManagers(t, testBlockSize)
+	// A buffer that has never been assigned holds no block, and callers such as
+	// the recovery manager have to be able to tell that apart from a real one.
+	t.Run("given a buffer that has never been assigned a block, it reports none rather than a block of its own", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
 
-	buf := NewBuffer(fm, lm)
+		buf := NewBuffer(fm, lm)
 
-	if got := buf.Block(); got != nil {
-		t.Errorf("Block() = %v, want nil", got)
-	}
+		if got := buf.Block(); got != nil {
+			t.Errorf("Block() = %v, want nil", got)
+		}
+	})
 }
 
 func TestContents(t *testing.T) {
@@ -147,12 +147,12 @@ func TestContents(t *testing.T) {
 		value  int32
 	}{
 		{
-			name:   "exposes a value stored at the start of the block",
+			name:   "given a block holding a value at its start, the page it returns reads that value",
 			offset: 0,
 			value:  777,
 		},
 		{
-			name:   "exposes a value stored further into the block",
+			name:   "given a value further into the block, the page it returns reads it from there",
 			offset: 64,
 			value:  -12345,
 		},
@@ -184,44 +184,44 @@ func TestContents(t *testing.T) {
 			}
 		})
 	}
-}
 
-// Contents must hand out the buffer's own page rather than a copy. Callers such
-// as an undo restoring a pre-image write through it and expect flush to put
-// that write on disk; a copy would silently discard the change.
-func TestContentsIsTheBufferPage(t *testing.T) {
-	const (
-		txNum         = 1
-		restoredValue = 555
-	)
+	// Contents must hand out the buffer's own page rather than a copy. Callers
+	// such as an undo restoring a pre-image write through it and expect flush
+	// to put that write on disk; a copy would silently discard the change.
+	t.Run("when the page it returned is written to and the buffer is flushed, then the write reaches the disk", func(t *testing.T) {
+		const (
+			txNum         = 1
+			restoredValue = 555
+		)
 
-	fm, lm := newTestManagers(t, testBlockSize)
-	blk, err := fm.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+		fm, lm := newTestManagers(t, testBlockSize)
+		blk, err := fm.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-	buf := NewBuffer(fm, lm)
-	if err := buf.assignToBlock(blk); err != nil {
-		t.Fatalf("assignToBlock() error = %v", err)
-	}
+		buf := NewBuffer(fm, lm)
+		if err := buf.assignToBlock(blk); err != nil {
+			t.Fatalf("assignToBlock() error = %v", err)
+		}
 
-	if err := buf.Contents().SetInt(0, restoredValue); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-	buf.SetModified(txNum, appendLogRecord(t, lm))
+		if err := buf.Contents().SetInt(0, restoredValue); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		buf.SetModified(txNum, appendLogRecord(t, lm))
 
-	if err := buf.flush(); err != nil {
-		t.Fatalf("flush() error = %v", err)
-	}
+		if err := buf.flush(); err != nil {
+			t.Fatalf("flush() error = %v", err)
+		}
 
-	readPage := filemanager.NewPageByBlockSize(testBlockSize)
-	if err := fm.Read(blk, readPage); err != nil {
-		t.Fatalf("Read() error = %v", err)
-	}
-	if got := readPage.GetInt(0); got != restoredValue {
-		t.Errorf("value on disk = %d, want %d (Contents returned a copy)", got, restoredValue)
-	}
+		readPage := filemanager.NewPageByBlockSize(testBlockSize)
+		if err := fm.Read(blk, readPage); err != nil {
+			t.Fatalf("Read() error = %v", err)
+		}
+		if got := readPage.GetInt(0); got != restoredValue {
+			t.Errorf("value on disk = %d, want %d (Contents returned a copy)", got, restoredValue)
+		}
+	})
 }
 
 func TestPin(t *testing.T) {
@@ -231,12 +231,12 @@ func TestPin(t *testing.T) {
 		wantPins int
 	}{
 		{
-			name:     "increments pins from 0 to 1 on the first call",
+			name:     "given an unpinned buffer, one pin makes it held once",
 			pinCalls: 1,
 			wantPins: 1,
 		},
 		{
-			name:     "increments pins to 3 after three calls",
+			name:     "when a buffer is pinned three times, then it counts three holds rather than one",
 			pinCalls: 3,
 			wantPins: 3,
 		},
@@ -271,13 +271,13 @@ func TestSetModified(t *testing.T) {
 		wantLSN       int
 	}{
 		{
-			name:          "records both txNum and lsn when lsn is positive",
+			name:          "given a logged change, it records both the transaction and the lsn",
 			modifications: []modification{{txNum: 1, lsn: 5}},
 			wantTxNum:     1,
 			wantLSN:       5,
 		},
 		{
-			name:          "records lsn when lsn is 0",
+			name:          "given an lsn of zero, it is recorded rather than read as no lsn at all",
 			modifications: []modification{{txNum: 1, lsn: 0}},
 			wantTxNum:     1,
 			wantLSN:       0,
