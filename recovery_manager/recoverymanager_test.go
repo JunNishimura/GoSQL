@@ -88,11 +88,11 @@ func TestNewRecoveryManager(t *testing.T) {
 		txNum int
 	}{
 		{
-			name:  "keeps txNum 1 for the transaction it serves",
+			name:  "it holds the log manager, the buffer manager and the transaction number it was given",
 			txNum: 1,
 		},
 		{
-			name:  "keeps a multi-digit txNum without truncation",
+			name:  "given a transaction number of more than one digit, it keeps the whole of it",
 			txNum: 123456,
 		},
 	}
@@ -117,26 +117,24 @@ func TestNewRecoveryManager(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestNewRecoveryManagerWritesStartRecord(t *testing.T) {
 	// The start record must be on the log by the time the constructor returns,
 	// so that recovery can tell which transactions were in progress.
-	tests := []struct {
+	startRecordTests := []struct {
 		name  string
 		txNum int
 	}{
 		{
-			name:  "appends a start record for txNum 1",
+			name:  "by the time it returns, a start record for the transaction is on the log",
 			txNum: 1,
 		},
 		{
-			name:  "appends a start record for txNum 42",
+			name:  "given another transaction number, the start record carries that one",
 			txNum: 42,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range startRecordTests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, lm, bm := newTestRecoveryManagerDeps(t)
 
@@ -165,11 +163,11 @@ func TestRecoveryManagerCommit(t *testing.T) {
 		txNum int
 	}{
 		{
-			name:  "writes a commit record for txNum 1 to disk",
+			name:  "when it returns, the commit record is on disk rather than only in the log page",
 			txNum: 1,
 		},
 		{
-			name:  "writes a commit record for txNum 42 to disk",
+			name:  "given another transaction number, the commit record on disk carries that one",
 			txNum: 42,
 		},
 	}
@@ -195,29 +193,27 @@ func TestRecoveryManagerCommit(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestRecoveryManagerCommitFlushesBuffers(t *testing.T) {
-	const txNum = 1
+	const commitTxNum = 1
 
-	tests := []struct {
+	flushTests := []struct {
 		name        string
 		bufferTxNum int
 		wantFlushes int
 	}{
 		{
-			name:        "flushes a buffer modified by the committing transaction",
-			bufferTxNum: txNum,
+			name:        "given a buffer this transaction modified, it is written out",
+			bufferTxNum: commitTxNum,
 			wantFlushes: 1,
 		},
 		{
-			name:        "leaves a buffer modified by another transaction alone",
-			bufferTxNum: txNum + 1,
+			name:        "given a buffer another transaction modified, it is left alone",
+			bufferTxNum: commitTxNum + 1,
 			wantFlushes: 0,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range flushTests {
 		t.Run(tt.name, func(t *testing.T) {
 			fm, lm, bm := newTestRecoveryManagerDeps(t)
 			blk, err := fm.Append(testDataFile)
@@ -230,7 +226,7 @@ func TestRecoveryManagerCommitFlushesBuffers(t *testing.T) {
 			}
 			buf.SetModified(tt.bufferTxNum, -1)
 
-			rm, err := NewRecoveryManager(lm, bm, txNum)
+			rm, err := NewRecoveryManager(lm, bm, commitTxNum)
 			if err != nil {
 				t.Fatalf("NewRecoveryManager() error = %v", err)
 			}
@@ -279,11 +275,11 @@ func TestRecoveryManagerRollback(t *testing.T) {
 		txNum int
 	}{
 		{
-			name:  "writes a rollback record for txNum 1 to disk",
+			name:  "when it returns, the rollback record is on disk rather than only in the log page",
 			txNum: 1,
 		},
 		{
-			name:  "writes a rollback record for txNum 42 to disk",
+			name:  "given another transaction number, the rollback record on disk carries that one",
 			txNum: 42,
 		},
 	}
@@ -309,12 +305,10 @@ func TestRecoveryManagerRollback(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
-	const txNum = 1
+	const preImageTxNum = 1
 
-	tests := []struct {
+	preImageTests := []struct {
 		name string
 		// setCurrent puts the value the transaction wrote into the block.
 		setCurrent func(*filemanager.Page) error
@@ -323,10 +317,10 @@ func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
 		verify      func(*testing.T, *filemanager.Page)
 	}{
 		{
-			name:       "restores an int the transaction overwrote",
+			name:       "given a record for an int the transaction overwrote, the old int is put back",
 			setCurrent: func(p *filemanager.Page) error { return p.SetInt(0, 100) },
 			logPreImage: func(lm *logmanager.LogManager, blk *filemanager.BlockId) (int, error) {
-				return WriteSetIntRecordToLog(lm, txNum, blk, 0, 42)
+				return WriteSetIntRecordToLog(lm, preImageTxNum, blk, 0, 42)
 			},
 			verify: func(t *testing.T, p *filemanager.Page) {
 				if got := p.GetInt(0); got != 42 {
@@ -335,10 +329,10 @@ func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
 			},
 		},
 		{
-			name:       "restores a string the transaction overwrote",
+			name:       "given a record for a string the transaction overwrote, the old string is put back",
 			setCurrent: func(p *filemanager.Page) error { return p.SetString(0, "new") },
 			logPreImage: func(lm *logmanager.LogManager, blk *filemanager.BlockId) (int, error) {
-				return WriteSetStringRecordToLog(lm, txNum, blk, 0, "old")
+				return WriteSetStringRecordToLog(lm, preImageTxNum, blk, 0, "old")
 			},
 			verify: func(t *testing.T, p *filemanager.Page) {
 				if got := p.GetString(0); got != "old" {
@@ -348,7 +342,7 @@ func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range preImageTests {
 		t.Run(tt.name, func(t *testing.T) {
 			fm, lm, bm := newTestRecoveryManagerDeps(t)
 			blk, err := fm.Append(testDataFile)
@@ -357,7 +351,7 @@ func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
 			}
 			writeBlockOnDisk(t, fm, blk, tt.setCurrent)
 
-			rm, err := NewRecoveryManager(lm, bm, txNum)
+			rm, err := NewRecoveryManager(lm, bm, preImageTxNum)
 			if err != nil {
 				t.Fatalf("NewRecoveryManager() error = %v", err)
 			}
@@ -374,81 +368,81 @@ func TestRecoveryManagerRollbackRestoresPreImage(t *testing.T) {
 			tt.verify(t, blockOnDisk(t, fm, blk))
 		})
 	}
-}
 
-func TestRecoveryManagerRollbackLeavesOtherTransactionsAlone(t *testing.T) {
-	const (
-		txNum      = 1
-		otherTxNum = 2
-		mineOffset = 0
-		theirs     = 8
-	)
+	t.Run("given records from another transaction on the same block, only this transaction's changes are undone", func(t *testing.T) {
+		const (
+			txNum      = 1
+			otherTxNum = 2
+			mineOffset = 0
+			theirs     = 8
+		)
 
-	fm, lm, bm := newTestRecoveryManagerDeps(t)
-	blk, err := fm.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
-	writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error {
-		if err := p.SetInt(mineOffset, 100); err != nil {
-			return err
+		fm, lm, bm := newTestRecoveryManagerDeps(t)
+		blk, err := fm.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
 		}
-		return p.SetInt(theirs, 200)
+		writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error {
+			if err := p.SetInt(mineOffset, 100); err != nil {
+				return err
+			}
+			return p.SetInt(theirs, 200)
+		})
+
+		rm, err := NewRecoveryManager(lm, bm, txNum)
+		if err != nil {
+			t.Fatalf("NewRecoveryManager() error = %v", err)
+		}
+		if _, err := WriteSetIntRecordToLog(lm, txNum, blk, mineOffset, 42); err != nil {
+			t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+		}
+		if _, err := WriteSetIntRecordToLog(lm, otherTxNum, blk, theirs, 84); err != nil {
+			t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+		}
+
+		if err := rm.Rollback(); err != nil {
+			t.Fatalf("Rollback() error = %v", err)
+		}
+
+		p := blockOnDisk(t, fm, blk)
+		if got := p.GetInt(mineOffset); got != 42 {
+			t.Errorf("GetInt(%d) = %d, want 42 (own change should be undone)", mineOffset, got)
+		}
+		if got := p.GetInt(theirs); got != 200 {
+			t.Errorf("GetInt(%d) = %d, want 200 (another transaction's change should stand)", theirs, got)
+		}
 	})
 
-	rm, err := NewRecoveryManager(lm, bm, txNum)
-	if err != nil {
-		t.Fatalf("NewRecoveryManager() error = %v", err)
-	}
-	if _, err := WriteSetIntRecordToLog(lm, txNum, blk, mineOffset, 42); err != nil {
-		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
-	}
-	if _, err := WriteSetIntRecordToLog(lm, otherTxNum, blk, theirs, 84); err != nil {
-		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
-	}
+	// The walk backwards stops at the transaction's own start record: nothing
+	// written before a transaction began can belong to it.
+	t.Run("given a record written before this transaction started, the walk stops at the start record and leaves it alone", func(t *testing.T) {
+		const txNum = 1
 
-	if err := rm.Rollback(); err != nil {
-		t.Fatalf("Rollback() error = %v", err)
-	}
+		fm, lm, bm := newTestRecoveryManagerDeps(t)
+		blk, err := fm.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+		writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error { return p.SetInt(0, 100) })
 
-	p := blockOnDisk(t, fm, blk)
-	if got := p.GetInt(mineOffset); got != 42 {
-		t.Errorf("GetInt(%d) = %d, want 42 (own change should be undone)", mineOffset, got)
-	}
-	if got := p.GetInt(theirs); got != 200 {
-		t.Errorf("GetInt(%d) = %d, want 200 (another transaction's change should stand)", theirs, got)
-	}
-}
+		// A record carrying the same txNum, appended before the transaction starts.
+		if _, err := WriteSetIntRecordToLog(lm, txNum, blk, 0, 7); err != nil {
+			t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
+		}
 
-// The walk backwards stops at the transaction's own start record: nothing
-// written before a transaction began can belong to it.
-func TestRecoveryManagerRollbackStopsAtItsOwnStartRecord(t *testing.T) {
-	const txNum = 1
+		rm, err := NewRecoveryManager(lm, bm, txNum)
+		if err != nil {
+			t.Fatalf("NewRecoveryManager() error = %v", err)
+		}
 
-	fm, lm, bm := newTestRecoveryManagerDeps(t)
-	blk, err := fm.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
-	writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error { return p.SetInt(0, 100) })
+		if err := rm.Rollback(); err != nil {
+			t.Fatalf("Rollback() error = %v", err)
+		}
 
-	// A record carrying the same txNum, appended before the transaction starts.
-	if _, err := WriteSetIntRecordToLog(lm, txNum, blk, 0, 7); err != nil {
-		t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
-	}
-
-	rm, err := NewRecoveryManager(lm, bm, txNum)
-	if err != nil {
-		t.Fatalf("NewRecoveryManager() error = %v", err)
-	}
-
-	if err := rm.Rollback(); err != nil {
-		t.Fatalf("Rollback() error = %v", err)
-	}
-
-	if got := blockOnDisk(t, fm, blk).GetInt(0); got != 100 {
-		t.Errorf("GetInt(0) = %d, want 100 (the record before the start record must not be undone)", got)
-	}
+		if got := blockOnDisk(t, fm, blk).GetInt(0); got != 100 {
+			t.Errorf("GetInt(0) = %d, want 100 (the record before the start record must not be undone)", got)
+		}
+	})
 }
 
 func TestRecoveryManagerRecover(t *testing.T) {
@@ -463,14 +457,14 @@ func TestRecoveryManagerRecover(t *testing.T) {
 		want     int32
 	}{
 		{
-			name: "undoes a transaction that never finished",
+			name: "given a transaction the log shows as unfinished, its writes are undone",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 42)
 			},
 			want: 42,
 		},
 		{
-			name: "leaves a committed transaction alone",
+			name: "given a transaction the log shows as committed, its writes stand",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 42)
 				if _, err := WriteCommitRecordToLog(lm, 1); err != nil {
@@ -480,7 +474,7 @@ func TestRecoveryManagerRecover(t *testing.T) {
 			want: 100,
 		},
 		{
-			name: "leaves a rolled back transaction alone",
+			name: "given a transaction the log shows as rolled back, it is not undone a second time",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 42)
 				if _, err := WriteRollbackRecordToLog(lm, 1); err != nil {
@@ -490,7 +484,7 @@ func TestRecoveryManagerRecover(t *testing.T) {
 			want: 100,
 		},
 		{
-			name: "undoes one transaction while leaving a committed one alone",
+			name: "given one unfinished and one committed transaction, only the unfinished one is undone",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 42)
 				if _, err := WriteCommitRecordToLog(lm, 1); err != nil {
@@ -501,7 +495,7 @@ func TestRecoveryManagerRecover(t *testing.T) {
 			want: 7,
 		},
 		{
-			name: "stops at a checkpoint record",
+			name: "given a checkpoint on the log, the walk stops there rather than reading the whole log",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 42)
 				if _, err := WriteCheckpointRecordToLog(lm); err != nil {
@@ -513,7 +507,7 @@ func TestRecoveryManagerRecover(t *testing.T) {
 		{
 			// Reading backwards is what makes this come out right: the oldest
 			// pre-image has to be the one applied last.
-			name: "restores the oldest pre-image when a value was overwritten twice",
+			name: "given a value overwritten twice, the walk backwards leaves the oldest of the two pre-images in place",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 1)
 				writeSetIntRecord(t, lm, 1, blk, 2)
@@ -558,23 +552,25 @@ func writeSetIntRecord(t *testing.T, lm *logmanager.LogManager, txNum int, blk *
 	}
 }
 
-// Recover ends by writing a checkpoint, which is what lets a later recovery
-// stop there instead of walking the whole log again.
 func TestRecoveryManagerRecoverWritesCheckpoint(t *testing.T) {
-	fm, lm, bm := newTestRecoveryManagerDeps(t)
-	rm, err := NewRecoveryManager(lm, bm, 99)
-	if err != nil {
-		t.Fatalf("NewRecoveryManager() error = %v", err)
-	}
+	// Recover ends by writing a checkpoint, which is what lets a later recovery
+	// stop there instead of walking the whole log again.
+	t.Run("it ends by putting a checkpoint on the log, so a later recovery can stop there", func(t *testing.T) {
+		fm, lm, bm := newTestRecoveryManagerDeps(t)
+		rm, err := NewRecoveryManager(lm, bm, 99)
+		if err != nil {
+			t.Fatalf("NewRecoveryManager() error = %v", err)
+		}
 
-	if err := rm.Recover(); err != nil {
-		t.Fatalf("Recover() error = %v", err)
-	}
+		if err := rm.Recover(); err != nil {
+			t.Fatalf("Recover() error = %v", err)
+		}
 
-	rec := lastLogRecordOnDisk(t, fm)
-	if got := rec.Op(); got != Checkpoint {
-		t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
-	}
+		rec := lastLogRecordOnDisk(t, fm)
+		if got := rec.Op(); got != Checkpoint {
+			t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
+		}
+	})
 }
 
 // LogSetInt and LogSetString read the pre-image out of the buffer before the
@@ -595,7 +591,7 @@ func TestRecoveryManagerLogSetValue(t *testing.T) {
 		verify func(*testing.T, LogRecord)
 	}{
 		{
-			name:   "records the int a transaction is about to overwrite",
+			name:   "when an int is logged before being overwritten, then the record holds the old value, not the new one",
 			setOld: func(p *filemanager.Page) error { return p.SetInt(0, 42) },
 			log: func(rm *RecoveryManager, buf *buffermanager.Buffer) (int, error) {
 				return rm.LogSetInt(buf, 0)
@@ -619,7 +615,7 @@ func TestRecoveryManagerLogSetValue(t *testing.T) {
 			},
 		},
 		{
-			name:   "records the string a transaction is about to overwrite",
+			name:   "when a string is logged before being overwritten, then the record holds the old value, not the new one",
 			setOld: func(p *filemanager.Page) error { return p.SetString(0, "old") },
 			log: func(rm *RecoveryManager, buf *buffermanager.Buffer) (int, error) {
 				return rm.LogSetString(buf, 0)
