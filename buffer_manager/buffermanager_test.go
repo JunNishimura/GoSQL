@@ -110,35 +110,35 @@ func TestFindExistingBuffer(t *testing.T) {
 		wantIndex    int
 	}{
 		{
-			name:         "returns nil when no buffer has been assigned a block yet",
+			name:         "given a pool where no buffer holds a block yet, it finds none",
 			assigned:     []int{unassigned, unassigned, unassigned},
 			targetFile:   testDataFile,
 			targetBlkNum: 0,
 			wantIndex:    -1,
 		},
 		{
-			name:         "returns nil when no buffer holds the requested block",
+			name:         "given a pool holding other blocks, it finds none for the one asked about",
 			assigned:     []int{0, 1, 2},
 			targetFile:   testDataFile,
 			targetBlkNum: 3,
 			wantIndex:    -1,
 		},
 		{
-			name:         "returns the buffer holding the requested block",
+			name:         "given a buffer holding the block asked about, that buffer is found",
 			assigned:     []int{0, 1, 2},
 			targetFile:   testDataFile,
 			targetBlkNum: 1,
 			wantIndex:    1,
 		},
 		{
-			name:         "skips unassigned buffers and returns the one holding the requested block",
+			name:         "given buffers holding no block either side of it, the one that holds it is still found",
 			assigned:     []int{unassigned, 1, unassigned},
 			targetFile:   testDataFile,
 			targetBlkNum: 1,
 			wantIndex:    1,
 		},
 		{
-			name:         "returns nil when the block number matches but the file name differs",
+			name:         "given the same block number in another file, it finds none, so the file name counts too",
 			assigned:     []int{0, 1, 2},
 			targetFile:   testLogFile,
 			targetBlkNum: 1,
@@ -264,7 +264,7 @@ func TestTryToPin(t *testing.T) {
 		wantNumAvailable int
 	}{
 		{
-			name:             "assigns the block to an unpinned buffer when no buffer holds it",
+			name:             "given no buffer holds the block, a free one is given it and the block read in",
 			pins:             []int{0, 0, 0},
 			assigned:         []int{unassigned, unassigned, unassigned},
 			targetBlkNum:     1,
@@ -274,7 +274,7 @@ func TestTryToPin(t *testing.T) {
 			wantNumAvailable: 2,
 		},
 		{
-			name:             "reuses the buffer already holding the block without reloading it from disk",
+			name:             "given a buffer already holding the block, it is reused rather than the block read again",
 			pins:             []int{0, 0, 0},
 			assigned:         []int{unassigned, 1, unassigned},
 			targetBlkNum:     1,
@@ -284,7 +284,7 @@ func TestTryToPin(t *testing.T) {
 			wantNumAvailable: 2,
 		},
 		{
-			name:             "keeps numAvailable unchanged when the buffer holding the block is already pinned",
+			name:             "given the buffer holding the block is already pinned, the free count does not fall again",
 			pins:             []int{0, 1, 0},
 			assigned:         []int{unassigned, 1, unassigned},
 			targetBlkNum:     1,
@@ -294,7 +294,7 @@ func TestTryToPin(t *testing.T) {
 			wantNumAvailable: 2,
 		},
 		{
-			name:             "returns nil when every buffer is pinned and none holds the block",
+			name:             "given every buffer pinned and none holding the block, it takes none",
 			pins:             []int{1, 1, 1},
 			assigned:         []int{0, 2, 3},
 			targetBlkNum:     1,
@@ -364,19 +364,19 @@ func TestTryToPin(t *testing.T) {
 		wantReadTimes []int
 	}{
 		{
-			name:          "stamps an increasing readTime every time a block is newly assigned",
+			name:          "when blocks are read in one after another, then each buffer gets a later read time",
 			assigned:      []int{unassigned, unassigned, unassigned},
 			pinBlkNums:    []int{1, 2, 3},
 			wantReadTimes: []int{1, 2, 3},
 		},
 		{
-			name:          "leaves readTime untouched when the buffer already holds the block",
+			name:          "given a buffer already holding the block, its read time is left as it was",
 			assigned:      []int{unassigned, 1, unassigned},
 			pinBlkNums:    []int{1},
 			wantReadTimes: []int{0, 0, 0},
 		},
 		{
-			name:          "stamps only the buffer that receives a newly assigned block",
+			name:          "when one buffer is given a block, then the read times of the others are left alone",
 			assigned:      []int{unassigned, 1, unassigned},
 			pinBlkNums:    []int{1, 2},
 			wantReadTimes: []int{1, 0, 0},
@@ -425,7 +425,7 @@ func TestBufferManagerPin(t *testing.T) {
 		wantNumAvailable int
 	}{
 		{
-			name:             "loads the requested block into a free buffer",
+			name:             "given a free buffer, the block is read into it and the buffer counted as taken",
 			targets:          []int{1},
 			wantIndex:        0,
 			wantPins:         1,
@@ -433,7 +433,7 @@ func TestBufferManagerPin(t *testing.T) {
 			wantNumAvailable: poolSize - 1,
 		},
 		{
-			name:             "reuses the buffer already holding the block without consuming another one",
+			name:             "given the block is already in the pool, that buffer is reused rather than another taken",
 			targets:          []int{1, 1},
 			wantIndex:        0,
 			wantPins:         2,
@@ -441,7 +441,7 @@ func TestBufferManagerPin(t *testing.T) {
 			wantNumAvailable: poolSize - 1,
 		},
 		{
-			name:             "takes a second buffer when a different block is requested",
+			name:             "given another block is asked for, a second buffer is taken for it",
 			targets:          []int{0, 1},
 			wantIndex:        1,
 			wantPins:         1,
@@ -581,21 +581,21 @@ func TestBufferManagerUnpin(t *testing.T) {
 		wantNumAvailable int
 	}{
 		{
-			name:             "returns the buffer to the pool when its only pin is released",
+			name:             "given a buffer pinned once, releasing it counts the buffer free again",
 			pinCalls:         1,
 			unpinCalls:       1,
 			wantPins:         0,
 			wantNumAvailable: poolSize,
 		},
 		{
-			name:             "keeps the buffer unavailable while another pin remains",
+			name:             "given a buffer pinned twice, releasing one leaves it taken",
 			pinCalls:         2,
 			unpinCalls:       1,
 			wantPins:         1,
 			wantNumAvailable: poolSize - 1,
 		},
 		{
-			name:             "returns the buffer to the pool once every pin is released",
+			name:             "given a buffer pinned twice, releasing both counts it free again",
 			pinCalls:         2,
 			unpinCalls:       2,
 			wantPins:         0,
@@ -642,19 +642,19 @@ func TestFlushAll(t *testing.T) {
 		wantFlushed []bool
 	}{
 		{
-			name:        "flushes only the buffers modified by the given transaction",
+			name:        "given buffers of two transactions, only the one named has its buffers written out",
 			txNums:      []int{1, 2, 1},
 			flushTxNum:  1,
 			wantFlushed: []bool{true, false, true},
 		},
 		{
-			name:        "flushes nothing when no buffer belongs to the given transaction",
+			name:        "given no buffer belongs to the transaction named, nothing is written out",
 			txNums:      []int{1, 2, 3},
 			flushTxNum:  4,
 			wantFlushed: []bool{false, false, false},
 		},
 		{
-			name:        "flushes nothing when every buffer is unmodified",
+			name:        "given every buffer unmodified, nothing is written out",
 			txNums:      []int{-1, -1, -1},
 			flushTxNum:  -1,
 			wantFlushed: []bool{false, false, false},
@@ -719,37 +719,37 @@ func TestNewBufferManagerWithPolicy(t *testing.T) {
 		wantErr      bool
 	}{
 		{
-			name:         "builds a manager that replaces buffers naively",
+			name:         "given the naive policy, the manager replaces buffers naively",
 			policy:       NaivePolicy,
 			wantStrategy: &naiveStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces buffers in FIFO order",
+			name:         "given the FIFO policy, the manager replaces buffers in the order they were read in",
 			policy:       FIFOPolicy,
 			wantStrategy: &fifoStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces the least recently used buffer",
+			name:         "given the LRU policy, the manager replaces the buffer used longest ago",
 			policy:       LRUPolicy,
 			wantStrategy: &lruStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces buffers in clock order",
+			name:         "given the clock policy, the manager replaces buffers in clock order",
 			policy:       ClockPolicy,
 			wantStrategy: &clockStrategy{},
 		},
 		{
-			name:         "builds a manager that prefers to replace unmodified buffers",
+			name:         "given the unmodified-first policy, the manager prefers buffers that need no write",
 			policy:       UnmodifiedFirstPolicy,
 			wantStrategy: &unmodifiedFirstStrategy{},
 		},
 		{
-			name:         "builds a manager that replaces the modified buffer with the lowest LSN",
+			name:         "given the least-recently-modified policy, the manager replaces the buffer logged earliest",
 			policy:       LeastRecentlyModifiedPolicy,
 			wantStrategy: &leastRecentlyModifiedStrategy{},
 		},
 		{
-			name:    "returns an error when the policy is unknown",
+			name:    "given a policy it does not know, it refuses rather than falling back to one",
 			policy:  ReplacementPolicy(99),
 			wantErr: true,
 		},
@@ -810,22 +810,22 @@ func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
 		wantIndex int
 	}{
 		{
-			name:      "naive replaces the first buffer in the pool",
+			name:      "given the naive policy, the buffer it replaces is the first of the pool",
 			policy:    NaivePolicy,
 			wantIndex: 0,
 		},
 		{
-			name:      "FIFO replaces the buffer whose block was read in first",
+			name:      "given the FIFO policy, the buffer it replaces is the one read in first",
 			policy:    FIFOPolicy,
 			wantIndex: 1,
 		},
 		{
-			name:      "LRU replaces the buffer that was unpinned first",
+			name:      "given the LRU policy, the buffer it replaces is the one released first",
 			policy:    LRUPolicy,
 			wantIndex: 2,
 		},
 		{
-			name:      "clock replaces the buffer following the one replaced last",
+			name:      "given the clock policy, the buffer it replaces is the one after the last replaced",
 			policy:    ClockPolicy,
 			wantIndex: 3,
 		},
@@ -887,25 +887,25 @@ func TestBufferManagerStats(t *testing.T) {
 		wantHits   int
 	}{
 		{
-			name:       "counts a pin and no hit when the block has to be read from disk",
+			name:       "given a block that has to be read from disk, the pin is counted but no hit",
 			pinBlkNums: []int{0},
 			wantPins:   1,
 			wantHits:   0,
 		},
 		{
-			name:       "counts a hit when a buffer already holds the requested block",
+			name:       "given a block the pool already holds, a hit is counted",
 			pinBlkNums: []int{0, 0},
 			wantPins:   2,
 			wantHits:   1,
 		},
 		{
-			name:       "counts no hit when every pin asks for a different block",
+			name:       "given every pin asks for a different block, no hit is counted",
 			pinBlkNums: []int{0, 1, 2},
 			wantPins:   3,
 			wantHits:   0,
 		},
 		{
-			name:       "counts a hit for each repeated request of a block still in the pool",
+			name:       "given a block asked for again and again, a hit is counted each time",
 			pinBlkNums: []int{0, 1, 0, 1},
 			wantPins:   4,
 			wantHits:   2,
@@ -952,26 +952,26 @@ func TestBufferManagerStats(t *testing.T) {
 		wantFlushes   int
 	}{
 		{
-			name:        "does not count a flush when the replaced buffer is unmodified",
+			name:        "given the replaced buffer was unmodified, no write is counted",
 			modifyTxNum: unmodified,
 			flushAll:    false,
 			wantFlushes: 0,
 		},
 		{
-			name:        "counts a flush when a modified buffer is replaced",
+			name:        "given the replaced buffer was modified, the write it needed is counted",
 			modifyTxNum: 1,
 			flushAll:    false,
 			wantFlushes: 1,
 		},
 		{
-			name:          "counts a flush when FlushAll writes the modified buffer",
+			name:          "given a modified buffer of the transaction flushed, the write is counted",
 			modifyTxNum:   1,
 			flushAll:      true,
 			flushAllTxNum: 1,
 			wantFlushes:   1,
 		},
 		{
-			name:          "does not count a flush when FlushAll runs for another transaction",
+			name:          "given the flush was for another transaction, no write is counted",
 			modifyTxNum:   1,
 			flushAll:      true,
 			flushAllTxNum: 2,
