@@ -51,11 +51,11 @@ func TestNewTransaction(t *testing.T) {
 		txNum int
 	}{
 		{
-			name:  "keeps txNum 1 for the transaction it serves",
+			name:  "it keeps the transaction number it was given and builds a manager of each kind",
 			txNum: 1,
 		},
 		{
-			name:  "keeps a multi-digit txNum without truncation",
+			name:  "given a transaction number of more than one digit, it keeps the whole of it",
 			txNum: 42,
 		},
 	}
@@ -92,71 +92,71 @@ func TestNewTransaction(t *testing.T) {
 			}
 		})
 	}
-}
 
-// The start record is what puts the transaction on the log from the moment it
-// begins. It is also the only thing that shows txNum reached the recovery
-// manager, whose own copy is not reachable from here.
-func TestNewTransactionWritesStartRecord(t *testing.T) {
-	const txNum = 7
+	// The start record is what puts the transaction on the log from the moment
+	// it begins. It is also the only thing that shows txNum reached the
+	// recovery manager, whose own copy is not reachable from here.
+	t.Run("it puts a start record on the log carrying the transaction number", func(t *testing.T) {
+		const txNum = 7
 
-	fm, lm, bm, lt := newTestDeps(t)
+		fm, lm, bm, lt := newTestDeps(t)
 
-	if _, err := NewTransaction(fm, lm, bm, lt, txNum); err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
+		if _, err := NewTransaction(fm, lm, bm, lt, txNum); err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
 
-	it, err := lm.Iterator()
-	if err != nil {
-		t.Fatalf("Iterator() error = %v", err)
-	}
-	if !it.HasNext() {
-		t.Fatal("HasNext() = false, want a start record")
-	}
-	bytes, err := it.Next()
-	if err != nil {
-		t.Fatalf("Next() error = %v", err)
-	}
-	rec, err := recoverymanager.CreateLogRecord(bytes)
-	if err != nil {
-		t.Fatalf("CreateLogRecord() error = %v", err)
-	}
+		it, err := lm.Iterator()
+		if err != nil {
+			t.Fatalf("Iterator() error = %v", err)
+		}
+		if !it.HasNext() {
+			t.Fatal("HasNext() = false, want a start record")
+		}
+		bytes, err := it.Next()
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		rec, err := recoverymanager.CreateLogRecord(bytes)
+		if err != nil {
+			t.Fatalf("CreateLogRecord() error = %v", err)
+		}
 
-	if got := rec.Op(); got != recoverymanager.Start {
-		t.Errorf("Op() = %d, want %d (Start)", got, recoverymanager.Start)
-	}
-	if got := rec.TxNumber(); got != txNum {
-		t.Errorf("TxNumber() = %d, want %d", got, txNum)
-	}
-}
+		if got := rec.Op(); got != recoverymanager.Start {
+			t.Errorf("Op() = %d, want %d (Start)", got, recoverymanager.Start)
+		}
+		if got := rec.TxNumber(); got != txNum {
+			t.Errorf("TxNumber() = %d, want %d", got, txNum)
+		}
+	})
 
-// Transactions share the pool and the lock table, which is how they coordinate,
-// but each tracks its own pins and locks. Sharing those would let one
-// transaction release what another one holds.
-func TestNewTransactionKeepsItsOwnPinsAndLocks(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
+	// Transactions share the pool and the lock table, which is how they
+	// coordinate, but each tracks its own pins and locks. Sharing those would
+	// let one transaction release what another one holds.
+	t.Run("given two transactions over the same pool and lock table, each keeps its own pins and locks", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
 
-	first, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	second, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
+		first, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		second, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
 
-	if first.bufferManager != second.bufferManager {
-		t.Error("the two transactions point at different buffer managers, want the same one")
-	}
-	if first.buffers == second.buffers {
-		t.Error("the two transactions share a buffer list, want one each")
-	}
-	if first.concurrencyManager == second.concurrencyManager {
-		t.Error("the two transactions share a concurrency manager, want one each")
-	}
-	if first.recoveryManager == second.recoveryManager {
-		t.Error("the two transactions share a recovery manager, want one each")
-	}
+		if first.bufferManager != second.bufferManager {
+			t.Error("the two transactions point at different buffer managers, want the same one")
+		}
+		if first.buffers == second.buffers {
+			t.Error("the two transactions share a buffer list, want one each")
+		}
+		if first.concurrencyManager == second.concurrencyManager {
+			t.Error("the two transactions share a concurrency manager, want one each")
+		}
+		if first.recoveryManager == second.recoveryManager {
+			t.Error("the two transactions share a recovery manager, want one each")
+		}
+	})
 }
 
 // appendBlock adds a block to the data file so that a transaction has something
@@ -252,54 +252,58 @@ func assertReturns(t *testing.T, done <-chan error, what string) {
 	}
 }
 
-// Pinning has to go through the transaction's own list rather than straight to
-// the pool, or the pin would not be released when the transaction ends.
 func TestTransactionPin(t *testing.T) {
-	fm, _, _, tx := newTestTransaction(t)
-	blk := appendBlock(t, fm)
+	// Pinning has to go through the transaction's own list rather than straight
+	// to the pool, or the pin would not be released when the transaction ends.
+	t.Run("it records the pin against the transaction, not only in the pool", func(t *testing.T) {
+		fm, _, _, tx := newTestTransaction(t)
+		blk := appendBlock(t, fm)
 
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
 
-	buf := tx.buffers.Buffer(blk)
-	if buf == nil {
-		t.Fatal("the transaction did not record the pin, want the buffer holding the block")
-	}
-	if got := buf.Block(); !got.Equals(blk) {
-		t.Errorf("the recorded buffer holds %v, want %v", got, blk)
-	}
+		buf := tx.buffers.Buffer(blk)
+		if buf == nil {
+			t.Fatal("the transaction did not record the pin, want the buffer holding the block")
+		}
+		if got := buf.Block(); !got.Equals(blk) {
+			t.Errorf("the recorded buffer holds %v, want %v", got, blk)
+		}
+	})
+
+	// A pin that failed must be reported rather than swallowed, and must leave
+	// nothing recorded for the transaction to release later.
+	t.Run("given a block that cannot be read, it reports the failure and records nothing", func(t *testing.T) {
+		_, _, _, tx := newTestTransaction(t)
+		// The data file has no blocks, so reading this one cannot succeed.
+		blk := filemanager.NewBlockId(testDataFile, 0)
+
+		err := tx.Pin(blk)
+
+		if err == nil {
+			t.Fatal("Pin() error = nil, want an error")
+		}
+		if got := tx.buffers.Buffer(blk); got != nil {
+			t.Errorf("the transaction recorded %v, want nothing", got)
+		}
+	})
 }
 
 func TestTransactionUnpin(t *testing.T) {
-	fm, _, _, tx := newTestTransaction(t)
-	blk := appendBlock(t, fm)
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
+	t.Run("when a pinned block is unpinned, then the transaction no longer records it", func(t *testing.T) {
+		fm, _, _, tx := newTestTransaction(t)
+		blk := appendBlock(t, fm)
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
 
-	tx.Unpin(blk)
+		tx.Unpin(blk)
 
-	if got := tx.buffers.Buffer(blk); got != nil {
-		t.Errorf("the transaction still records %v, want the pin to be gone", got)
-	}
-}
-
-// A pin that failed must be reported rather than swallowed, and must leave
-// nothing recorded for the transaction to release later.
-func TestTransactionPinReportsAFailure(t *testing.T) {
-	_, _, _, tx := newTestTransaction(t)
-	// The data file has no blocks, so reading this one cannot succeed.
-	blk := filemanager.NewBlockId(testDataFile, 0)
-
-	err := tx.Pin(blk)
-
-	if err == nil {
-		t.Fatal("Pin() error = nil, want an error")
-	}
-	if got := tx.buffers.Buffer(blk); got != nil {
-		t.Errorf("the transaction recorded %v, want nothing", got)
-	}
+		if got := tx.buffers.Buffer(blk); got != nil {
+			t.Errorf("the transaction still records %v, want the pin to be gone", got)
+		}
+	})
 }
 
 func TestTransactionSetAndGet(t *testing.T) {
@@ -310,7 +314,7 @@ func TestTransactionSetAndGet(t *testing.T) {
 		want any
 	}{
 		{
-			name: "round trips an int",
+			name: "when an int is written to a pinned block and read back, then it is unchanged",
 			set: func(tx *Transaction, blk *filemanager.BlockId) error {
 				return tx.SetInt(blk, 0, 99)
 			},
@@ -320,7 +324,7 @@ func TestTransactionSetAndGet(t *testing.T) {
 			want: int32(99),
 		},
 		{
-			name: "round trips a string",
+			name: "when a string is written to a pinned block and read back, then it is unchanged",
 			set: func(tx *Transaction, blk *filemanager.BlockId) error {
 				return tx.SetString(blk, 0, "hello")
 			},
@@ -354,77 +358,115 @@ func TestTransactionSetAndGet(t *testing.T) {
 	}
 }
 
-// The record has to capture what the value was, which means logging it before
-// the write. Writing first would log the new value and make undo a no-op.
-func TestTransactionSetIntLogsThePreImage(t *testing.T) {
-	fm, lm, _, tx := newTestTransaction(t)
-	blk := appendBlock(t, fm)
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := tx.SetInt(blk, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
+func TestTransactionSetInt(t *testing.T) {
+	// The record has to capture what the value was, which means logging it
+	// before the write. Writing first would log the new value and make undo a
+	// no-op.
+	t.Run("when a value is written over another, then the record on the log holds the one that was there before", func(t *testing.T) {
+		fm, lm, _, tx := newTestTransaction(t)
+		blk := appendBlock(t, fm)
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := tx.SetInt(blk, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
 
-	if err := tx.SetInt(blk, 0, 100); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
+		if err := tx.SetInt(blk, 0, 100); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
 
-	rec := lastLogRecord(t, lm)
-	if got := rec.Op(); got != recoverymanager.SetInt {
-		t.Fatalf("Op() = %d, want %d (SetInt)", got, recoverymanager.SetInt)
-	}
-	if got := undonePage(t, rec).GetInt(0); got != 99 {
-		t.Errorf("the logged value is %d, want 99 (the value before the write)", got)
-	}
+		rec := lastLogRecord(t, lm)
+		if got := rec.Op(); got != recoverymanager.SetInt {
+			t.Fatalf("Op() = %d, want %d (SetInt)", got, recoverymanager.SetInt)
+		}
+		if got := undonePage(t, rec).GetInt(0); got != 99 {
+			t.Errorf("the logged value is %d, want 99 (the value before the write)", got)
+		}
+	})
+
+	// The buffer has to be stamped with this transaction's number, or the pool
+	// will not write it out when the transaction commits and the change is lost.
+	t.Run("it stamps the buffer with the transaction, so a flush of that transaction writes the block out", func(t *testing.T) {
+		fm, _, bm, tx := newTestTransaction(t)
+		blk := appendBlock(t, fm)
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := tx.SetInt(blk, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+
+		if err := bm.FlushAll(tx.txNum); err != nil {
+			t.Fatalf("FlushAll() error = %v", err)
+		}
+
+		page := filemanager.NewPageByBlockSize(testBlockSize)
+		if err := fm.Read(blk, page); err != nil {
+			t.Fatalf("Read() error = %v", err)
+		}
+		if got := page.GetInt(0); got != 99 {
+			t.Errorf("the block on disk holds %d, want 99", got)
+		}
+	})
+
+	// A write takes an exclusive lock, so nobody else may look at the block
+	// until this transaction releases it. Pinning is what waits: a transaction
+	// that may not read the block has no business holding a buffer for it
+	// either.
+	t.Run("given a block this transaction has written, another transaction waits to pin it until the lock is released", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		writer, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		reader, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		blk := appendBlock(t, fm)
+		if err := writer.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := writer.SetInt(blk, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+
+		done := runInBackground(func() error {
+			return reader.Pin(blk)
+		})
+
+		assertStillWaiting(t, done, "Pin()")
+
+		writer.concurrencyManager.Release()
+
+		assertReturns(t, done, "Pin()")
+	})
 }
 
-func TestTransactionSetStringLogsThePreImage(t *testing.T) {
-	fm, lm, _, tx := newTestTransaction(t)
-	blk := appendBlock(t, fm)
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := tx.SetString(blk, 0, "old"); err != nil {
-		t.Fatalf("SetString() error = %v", err)
-	}
+func TestTransactionSetString(t *testing.T) {
+	t.Run("when a value is written over another, then the record on the log holds the one that was there before", func(t *testing.T) {
+		fm, lm, _, tx := newTestTransaction(t)
+		blk := appendBlock(t, fm)
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := tx.SetString(blk, 0, "old"); err != nil {
+			t.Fatalf("SetString() error = %v", err)
+		}
 
-	if err := tx.SetString(blk, 0, "new"); err != nil {
-		t.Fatalf("SetString() error = %v", err)
-	}
+		if err := tx.SetString(blk, 0, "new"); err != nil {
+			t.Fatalf("SetString() error = %v", err)
+		}
 
-	rec := lastLogRecord(t, lm)
-	if got := rec.Op(); got != recoverymanager.SetString {
-		t.Fatalf("Op() = %d, want %d (SetString)", got, recoverymanager.SetString)
-	}
-	if got := undonePage(t, rec).GetString(0); got != "old" {
-		t.Errorf("the logged value is %q, want %q (the value before the write)", got, "old")
-	}
-}
-
-// The buffer has to be stamped with this transaction's number, or the pool will
-// not write it out when the transaction commits and the change is lost.
-func TestTransactionSetIntMarksTheBufferModified(t *testing.T) {
-	fm, _, bm, tx := newTestTransaction(t)
-	blk := appendBlock(t, fm)
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := tx.SetInt(blk, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-
-	if err := bm.FlushAll(tx.txNum); err != nil {
-		t.Fatalf("FlushAll() error = %v", err)
-	}
-
-	page := filemanager.NewPageByBlockSize(testBlockSize)
-	if err := fm.Read(blk, page); err != nil {
-		t.Fatalf("Read() error = %v", err)
-	}
-	if got := page.GetInt(0); got != 99 {
-		t.Errorf("the block on disk holds %d, want 99", got)
-	}
+		rec := lastLogRecord(t, lm)
+		if got := rec.Op(); got != recoverymanager.SetString {
+			t.Fatalf("Op() = %d, want %d (SetString)", got, recoverymanager.SetString)
+		}
+		if got := undonePage(t, rec).GetString(0); got != "old" {
+			t.Errorf("the logged value is %q, want %q (the value before the write)", got, "old")
+		}
+	})
 }
 
 // Reading or writing a block the transaction never pinned is a bug in the
@@ -436,27 +478,27 @@ func TestTransactionValueAccessWithoutPinning(t *testing.T) {
 		use  func(*Transaction, *filemanager.BlockId) error
 	}{
 		{
-			name: "GetInt reports that the block is not pinned",
+			name: "given a block the transaction never pinned, when GetInt reads it, then it reports ErrBlockNotPinned",
 			use: func(tx *Transaction, blk *filemanager.BlockId) error {
 				_, err := tx.GetInt(blk, 0)
 				return err
 			},
 		},
 		{
-			name: "SetInt reports that the block is not pinned",
+			name: "given a block the transaction never pinned, when SetInt writes to it, then it reports ErrBlockNotPinned",
 			use: func(tx *Transaction, blk *filemanager.BlockId) error {
 				return tx.SetInt(blk, 0, 99)
 			},
 		},
 		{
-			name: "GetString reports that the block is not pinned",
+			name: "given a block the transaction never pinned, when GetString reads it, then it reports ErrBlockNotPinned",
 			use: func(tx *Transaction, blk *filemanager.BlockId) error {
 				_, err := tx.GetString(blk, 0)
 				return err
 			},
 		},
 		{
-			name: "SetString reports that the block is not pinned",
+			name: "given a block the transaction never pinned, when SetString writes to it, then it reports ErrBlockNotPinned",
 			use: func(tx *Transaction, blk *filemanager.BlockId) error {
 				return tx.SetString(blk, 0, "hello")
 			},
@@ -477,66 +519,37 @@ func TestTransactionValueAccessWithoutPinning(t *testing.T) {
 	}
 }
 
-// A write takes an exclusive lock, so nobody else may look at the block until
-// this transaction releases it. Pinning is what waits: a transaction that may
-// not read the block has no business holding a buffer for it either.
-func TestTransactionSetIntKeepsOtherTransactionsOut(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	writer, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	reader, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	blk := appendBlock(t, fm)
-	if err := writer.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := writer.SetInt(blk, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-
-	done := runInBackground(func() error {
-		return reader.Pin(blk)
-	})
-
-	assertStillWaiting(t, done, "Pin()")
-
-	writer.concurrencyManager.Release()
-
-	assertReturns(t, done, "Pin()")
-}
-
-// A read takes a shared lock, so several transactions may read the same block
-// at once. An exclusive lock here would serialise readers for no reason.
-func TestTransactionGetIntLetsAnotherTransactionRead(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	first, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	second, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	blk := appendBlock(t, fm)
-	for _, tx := range []*Transaction{first, second} {
-		if err := tx.Pin(blk); err != nil {
-			t.Fatalf("Pin() error = %v", err)
+func TestTransactionGetInt(t *testing.T) {
+	// A read takes a shared lock, so several transactions may read the same
+	// block at once. An exclusive lock here would serialise readers for no
+	// reason.
+	t.Run("given a block this transaction has read, another transaction may read it too rather than waiting", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		first, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
 		}
-	}
-	if _, err := first.GetInt(blk, 0); err != nil {
-		t.Fatalf("GetInt() error = %v", err)
-	}
+		second, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		blk := appendBlock(t, fm)
+		for _, tx := range []*Transaction{first, second} {
+			if err := tx.Pin(blk); err != nil {
+				t.Fatalf("Pin() error = %v", err)
+			}
+		}
+		if _, err := first.GetInt(blk, 0); err != nil {
+			t.Fatalf("GetInt() error = %v", err)
+		}
 
-	done := runInBackground(func() error {
-		_, err := second.GetInt(blk, 0)
-		return err
+		done := runInBackground(func() error {
+			_, err := second.GetInt(blk, 0)
+			return err
+		})
+
+		assertReturns(t, done, "GetInt()")
 	})
-
-	assertReturns(t, done, "GetInt()")
 }
 
 func TestTransactionSize(t *testing.T) {
@@ -545,15 +558,15 @@ func TestTransactionSize(t *testing.T) {
 		blocks int
 	}{
 		{
-			name:   "reports zero for a file with no blocks",
+			name:   "given a file with no blocks, it reports zero",
 			blocks: 0,
 		},
 		{
-			name:   "reports one block",
+			name:   "given a file of one block, it reports one",
 			blocks: 1,
 		},
 		{
-			name:   "reports several blocks",
+			name:   "given a file of several blocks, it reports how many",
 			blocks: 3,
 		},
 	}
@@ -575,114 +588,116 @@ func TestTransactionSize(t *testing.T) {
 			}
 		})
 	}
+
+	// Reading the length takes a shared lock, so several transactions may read
+	// it at once.
+	t.Run("given a transaction that has read the length, another may read it too rather than waiting", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		first, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		second, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		if _, err := first.Size(testDataFile); err != nil {
+			t.Fatalf("Size() error = %v", err)
+		}
+
+		done := runInBackground(func() error {
+			_, err := second.Size(testDataFile)
+			return err
+		})
+
+		assertReturns(t, done, "Size()")
+	})
 }
 
 func TestTransactionAppend(t *testing.T) {
-	fm, _, _, tx := newTestTransaction(t)
+	t.Run("it returns each new block in turn, numbered from the end of the file", func(t *testing.T) {
+		fm, _, _, tx := newTestTransaction(t)
 
-	first, err := tx.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
-	second, err := tx.Append(testDataFile)
-	if err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+		first, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+		second, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-	if got := first.Number(); got != 0 {
-		t.Errorf("the first appended block is %d, want 0", got)
-	}
-	if got := second.Number(); got != 1 {
-		t.Errorf("the second appended block is %d, want 1", got)
-	}
-	length, err := fm.Length(testDataFile)
-	if err != nil {
-		t.Fatalf("Length() error = %v", err)
-	}
-	if length != 2 {
-		t.Errorf("the file holds %d blocks, want 2", length)
-	}
-}
-
-// The length of a file is guarded by a lock on a block that does not exist, one
-// past the end. Appending changes the length, so it takes that lock
-// exclusively and nobody may read the length until the transaction ends.
-func TestTransactionAppendKeepsOtherTransactionsFromReadingTheSize(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	appender, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	reader, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	if _, err := appender.Append(testDataFile); err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
-
-	done := runInBackground(func() error {
-		_, err := reader.Size(testDataFile)
-		return err
+		if got := first.Number(); got != 0 {
+			t.Errorf("the first appended block is %d, want 0", got)
+		}
+		if got := second.Number(); got != 1 {
+			t.Errorf("the second appended block is %d, want 1", got)
+		}
+		length, err := fm.Length(testDataFile)
+		if err != nil {
+			t.Fatalf("Length() error = %v", err)
+		}
+		if length != 2 {
+			t.Errorf("the file holds %d blocks, want 2", length)
+		}
 	})
 
-	assertStillWaiting(t, done, "Size()")
+	// The length of a file is guarded by a lock on a block that does not exist,
+	// one past the end. Appending changes the length, so it takes that lock
+	// exclusively and nobody may read the length until the transaction ends.
+	t.Run("given a transaction that has appended, another waits to read the length until the lock is released", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		appender, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		reader, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		if _, err := appender.Append(testDataFile); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-	appender.concurrencyManager.Release()
+		done := runInBackground(func() error {
+			_, err := reader.Size(testDataFile)
+			return err
+		})
 
-	assertReturns(t, done, "Size()")
-}
+		assertStillWaiting(t, done, "Size()")
 
-// Reading the length takes a shared lock, so several transactions may read it
-// at once.
-func TestTransactionSizeLetsAnotherTransactionReadTheSize(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	first, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	second, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	if _, err := first.Size(testDataFile); err != nil {
-		t.Fatalf("Size() error = %v", err)
-	}
+		appender.concurrencyManager.Release()
 
-	done := runInBackground(func() error {
-		_, err := second.Size(testDataFile)
-		return err
+		assertReturns(t, done, "Size()")
 	})
 
-	assertReturns(t, done, "Size()")
-}
+	// The block that guards the length is not one of the file's own, so
+	// extending the file leaves the blocks already in it free to read.
+	t.Run("when a transaction extends a file, then the blocks already in it stay free to read", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		appender, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		reader, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		blk := appendBlock(t, fm)
+		if err := reader.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if _, err := appender.Append(testDataFile); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
 
-// The block that guards the length is not one of the file's own, so extending
-// the file leaves the blocks already in it free to read.
-func TestTransactionAppendLeavesTheBlocksThemselvesUnlocked(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	appender, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	reader, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	blk := appendBlock(t, fm)
-	if err := reader.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if _, err := appender.Append(testDataFile); err != nil {
-		t.Fatalf("Append() error = %v", err)
-	}
+		done := runInBackground(func() error {
+			_, err := reader.GetInt(blk, 0)
+			return err
+		})
 
-	done := runInBackground(func() error {
-		_, err := reader.GetInt(blk, 0)
-		return err
+		assertReturns(t, done, "GetInt()")
 	})
-
-	assertReturns(t, done, "GetInt()")
 }
 
 // writeInt puts a value straight into a block on disk, standing for what was
@@ -716,11 +731,11 @@ func TestTransactionEndReleasesLocksAndPins(t *testing.T) {
 		end  func(*Transaction) error
 	}{
 		{
-			name: "commit releases the locks and pins",
+			name: "when a transaction commits, then it gives up every lock and pin it held",
 			end:  (*Transaction).Commit,
 		},
 		{
-			name: "rollback releases the locks and pins",
+			name: "when a transaction rolls back, then it gives up every lock and pin it held",
 			end:  (*Transaction).Rollback,
 		},
 	}
@@ -763,95 +778,101 @@ func TestTransactionEndReleasesLocksAndPins(t *testing.T) {
 	}
 }
 
-// The commit record is what tells recovery the transaction finished, so a
-// transaction that says it committed has to have put one on the log.
-func TestTransactionCommitWritesACommitRecord(t *testing.T) {
-	const txNum = 1
+func TestTransactionCommit(t *testing.T) {
+	// The commit record is what tells recovery the transaction finished, so a
+	// transaction that says it committed has to have put one on the log.
+	t.Run("it puts a commit record on the log carrying the transaction number", func(t *testing.T) {
+		const txNum = 1
 
-	fm, lm, bm, lt := newTestDeps(t)
-	tx, err := NewTransaction(fm, lm, bm, lt, txNum)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	blk := appendBlock(t, fm)
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := tx.SetInt(blk, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
+		fm, lm, bm, lt := newTestDeps(t)
+		tx, err := NewTransaction(fm, lm, bm, lt, txNum)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		blk := appendBlock(t, fm)
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := tx.SetInt(blk, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
 
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("Commit() error = %v", err)
-	}
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Commit() error = %v", err)
+		}
 
-	rec := lastLogRecord(t, lm)
-	if got := rec.Op(); got != recoverymanager.Commit {
-		t.Errorf("Op() = %d, want %d (Commit)", got, recoverymanager.Commit)
-	}
-	if got := rec.TxNumber(); got != txNum {
-		t.Errorf("TxNumber() = %d, want %d", got, txNum)
-	}
+		rec := lastLogRecord(t, lm)
+		if got := rec.Op(); got != recoverymanager.Commit {
+			t.Errorf("Op() = %d, want %d (Commit)", got, recoverymanager.Commit)
+		}
+		if got := rec.TxNumber(); got != txNum {
+			t.Errorf("TxNumber() = %d, want %d", got, txNum)
+		}
+	})
 }
 
-func TestTransactionRollbackUndoesItsChanges(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	tx, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	blk := appendBlock(t, fm)
-	writeInt(t, fm, blk, 42)
-	if err := tx.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := tx.SetInt(blk, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
+func TestTransactionRollback(t *testing.T) {
+	t.Run("when a transaction that wrote to a block rolls back, then the block holds what it did beforehand", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		tx, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		blk := appendBlock(t, fm)
+		writeInt(t, fm, blk, 42)
+		if err := tx.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := tx.SetInt(blk, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
 
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("Rollback() error = %v", err)
-	}
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("Rollback() error = %v", err)
+		}
 
-	if got := readInt(t, fm, blk); got != 42 {
-		t.Errorf("the block on disk holds %d, want 42 (the value before the transaction)", got)
-	}
+		if got := readInt(t, fm, blk); got != 42 {
+			t.Errorf("the block on disk holds %d, want 42 (the value before the transaction)", got)
+		}
+	})
 }
 
-// Recovery runs under its own transaction and undoes the work of every
-// transaction the log shows as unfinished.
 func TestTransactionRecover(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
-	blk := appendBlock(t, fm)
-	writeInt(t, fm, blk, 42)
+	// Recovery runs under its own transaction and undoes the work of every
+	// transaction the log shows as unfinished.
+	t.Run("given a transaction the log shows as unfinished, its writes are undone", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
+		blk := appendBlock(t, fm)
+		writeInt(t, fm, blk, 42)
 
-	crashed, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	if err := crashed.Pin(blk); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := crashed.SetInt(blk, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-	// The change reached disk before the crash, but the transaction never
-	// committed, so recovery has to take it back out.
-	if err := bm.FlushAll(1); err != nil {
-		t.Fatalf("FlushAll() error = %v", err)
-	}
+		crashed, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		if err := crashed.Pin(blk); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := crashed.SetInt(blk, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		// The change reached disk before the crash, but the transaction never
+		// committed, so recovery has to take it back out.
+		if err := bm.FlushAll(1); err != nil {
+			t.Fatalf("FlushAll() error = %v", err)
+		}
 
-	recoverer, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	if err := recoverer.Recover(); err != nil {
-		t.Fatalf("Recover() error = %v", err)
-	}
+		recoverer, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		if err := recoverer.Recover(); err != nil {
+			t.Fatalf("Recover() error = %v", err)
+		}
 
-	if got := readInt(t, fm, blk); got != 42 {
-		t.Errorf("the block on disk holds %d, want 42 (the value before the unfinished transaction)", got)
-	}
+		if got := readInt(t, fm, blk); got != 42 {
+			t.Errorf("the block on disk holds %d, want 42 (the value before the unfinished transaction)", got)
+		}
+	})
 }
 
 // Taking the lock before the buffer is the point of locking at pin time. A
@@ -862,59 +883,63 @@ func TestTransactionRecover(t *testing.T) {
 // the buffer goes back to the pool while the lock is held until the transaction
 // ends.
 func TestTransactionPinDoesNotHoldABufferWhileWaiting(t *testing.T) {
-	fm, lm, bm, lt := newTestDepsWithPool(t, 1)
-	writer, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	reader, err := NewTransaction(fm, lm, bm, lt, 2)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	other, err := NewTransaction(fm, lm, bm, lt, 3)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
-	locked := appendBlock(t, fm)
-	free := appendBlock(t, fm)
+	t.Run("given a pool of one buffer and a transaction waiting for a lock, a third transaction can still take that buffer", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDepsWithPool(t, 1)
+		writer, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		reader, err := NewTransaction(fm, lm, bm, lt, 2)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		other, err := NewTransaction(fm, lm, bm, lt, 3)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		locked := appendBlock(t, fm)
+		free := appendBlock(t, fm)
 
-	if err := writer.Pin(locked); err != nil {
-		t.Fatalf("Pin() error = %v", err)
-	}
-	if err := writer.SetInt(locked, 0, 99); err != nil {
-		t.Fatalf("SetInt() error = %v", err)
-	}
-	writer.Unpin(locked)
+		if err := writer.Pin(locked); err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		if err := writer.SetInt(locked, 0, 99); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		writer.Unpin(locked)
 
-	blocked := runInBackground(func() error {
-		return reader.Pin(locked)
+		blocked := runInBackground(func() error {
+			return reader.Pin(locked)
+		})
+		assertStillWaiting(t, blocked, "Pin()")
+
+		// The pool holds one buffer and nobody is using it, so a transaction with
+		// no interest in the locked block must still be able to work.
+		done := runInBackground(func() error {
+			return other.Pin(free)
+		})
+		assertReturns(t, done, "Pin()")
+
+		// Give the buffer back before releasing the lock, or the waiting pin would
+		// only swap one thing to wait for with another.
+		other.Unpin(free)
+
+		writer.concurrencyManager.Release()
+		assertReturns(t, blocked, "Pin()")
 	})
-	assertStillWaiting(t, blocked, "Pin()")
-
-	// The pool holds one buffer and nobody is using it, so a transaction with
-	// no interest in the locked block must still be able to work.
-	done := runInBackground(func() error {
-		return other.Pin(free)
-	})
-	assertReturns(t, done, "Pin()")
-
-	// Give the buffer back before releasing the lock, or the waiting pin would
-	// only swap one thing to wait for with another.
-	other.Unpin(free)
-
-	writer.concurrencyManager.Release()
-	assertReturns(t, blocked, "Pin()")
 }
 
 func TestTransactionBlockSize(t *testing.T) {
-	fm, lm, bm, lt := newTestDeps(t)
+	t.Run("it reports the block size the database was created with", func(t *testing.T) {
+		fm, lm, bm, lt := newTestDeps(t)
 
-	tx, err := NewTransaction(fm, lm, bm, lt, 1)
-	if err != nil {
-		t.Fatalf("NewTransaction() error = %v", err)
-	}
+		tx, err := NewTransaction(fm, lm, bm, lt, 1)
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
 
-	if got := tx.BlockSize(); got != testBlockSize {
-		t.Errorf("BlockSize() = %d, want %d", got, testBlockSize)
-	}
+		if got := tx.BlockSize(); got != testBlockSize {
+			t.Errorf("BlockSize() = %d, want %d", got, testBlockSize)
+		}
+	})
 }
