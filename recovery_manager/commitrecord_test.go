@@ -36,17 +36,17 @@ func TestNewCommitRecord(t *testing.T) {
 		wantTxNum int
 	}{
 		{
-			name:      "reads txNum 0 stored right after the op code",
+			name:      "given transaction number zero, it reads the zero rather than taking it as unset",
 			txNum:     0,
 			wantTxNum: 0,
 		},
 		{
-			name:      "reads txNum 1 stored right after the op code",
+			name:      "it reads the transaction number from the bytes after the op code",
 			txNum:     1,
 			wantTxNum: 1,
 		},
 		{
-			name:      "reads a multi-byte txNum without truncation",
+			name:      "given a transaction number that fills more than one byte, it reads the whole of it",
 			txNum:     123456,
 			wantTxNum: 123456,
 		},
@@ -76,12 +76,12 @@ func TestCommitRecordString(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "formats txNum 1 as <COMMIT 1>",
+			name:  "it reads as COMMIT alongside the transaction number",
 			txNum: 1,
 			want:  "<COMMIT 1>",
 		},
 		{
-			name:  "formats txNum 42 as <COMMIT 42>",
+			name:  "given a transaction number of more than one digit, it shows the whole of it",
 			txNum: 42,
 			want:  "<COMMIT 42>",
 		},
@@ -108,12 +108,12 @@ func TestWriteCommitRecordToLog(t *testing.T) {
 		wantLSN int
 	}{
 		{
-			name:    "returns LSN 1 for the first record appended to an empty log",
+			name:    "given a log with nothing on it, the record it writes gets lsn 1",
 			txNums:  []int{1},
 			wantLSN: 1,
 		},
 		{
-			name:    "returns an increasing LSN for each appended record",
+			name:    "given records already on the log, each one it writes gets the next lsn",
 			txNums:  []int{1, 2, 3},
 			wantLSN: 3,
 		},

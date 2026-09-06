@@ -34,15 +34,15 @@ func TestRecordConstructorsRejectShortRecords(t *testing.T) {
 		new  func([]byte) (LogRecord, error)
 	}{
 		{
-			name: "NewStartRecord rejects a record without its txNum",
+			name: "given bytes too short to hold a transaction number, NewStartRecord refuses them",
 			new:  func(b []byte) (LogRecord, error) { return asLogRecord(NewStartRecord(b)) },
 		},
 		{
-			name: "NewCommitRecord rejects a record without its txNum",
+			name: "given bytes too short to hold a transaction number, NewCommitRecord refuses them",
 			new:  func(b []byte) (LogRecord, error) { return asLogRecord(NewCommitRecord(b)) },
 		},
 		{
-			name: "NewRollbackRecord rejects a record without its txNum",
+			name: "given bytes too short to hold a transaction number, NewRollbackRecord refuses them",
 			new:  func(b []byte) (LogRecord, error) { return asLogRecord(NewRollbackRecord(b)) },
 		},
 	}
@@ -181,42 +181,42 @@ func TestCreateLogRecord(t *testing.T) {
 		wantType  string
 	}{
 		{
-			name:      "builds a CheckpointRecord from a checkpoint op",
+			name:      "given a checkpoint op, it builds a CheckpointRecord",
 			record:    newCheckpointRecordBytes(),
 			wantOp:    Checkpoint,
 			wantTxNum: noTxNum,
 			wantType:  "<CHECKPOINT>",
 		},
 		{
-			name:      "builds a StartRecord from a start op",
+			name:      "given a start op, it builds a StartRecord",
 			record:    newTxRecordBytes(Start, 1),
 			wantOp:    Start,
 			wantTxNum: 1,
 			wantType:  "<START 1>",
 		},
 		{
-			name:      "builds a CommitRecord from a commit op",
+			name:      "given a commit op, it builds a CommitRecord",
 			record:    newTxRecordBytes(Commit, 2),
 			wantOp:    Commit,
 			wantTxNum: 2,
 			wantType:  "<COMMIT 2>",
 		},
 		{
-			name:      "builds a RollbackRecord from a rollback op",
+			name:      "given a rollback op, it builds a RollbackRecord",
 			record:    newTxRecordBytes(Rollback, 3),
 			wantOp:    Rollback,
 			wantTxNum: 3,
 			wantType:  "<ROLLBACK 3>",
 		},
 		{
-			name:      "builds a SetIntRecord from a set int op",
+			name:      "given a set int op, it builds a SetIntRecord",
 			record:    newSetIntRecordBytes(t, 4, filemanager.NewBlockId(testDataFile, 2), 80, 99),
 			wantOp:    SetInt,
 			wantTxNum: 4,
 			wantType:  "<SETINT 4 [file test.tbl, block 2] 80 99>",
 		},
 		{
-			name:      "builds a SetStringRecord from a set string op",
+			name:      "given a set string op, it builds a SetStringRecord",
 			record:    newSetStringRecordBytes(t, 5, filemanager.NewBlockId(testDataFile, 2), 80, "hi"),
 			wantOp:    SetString,
 			wantTxNum: 5,
@@ -246,24 +246,22 @@ func TestCreateLogRecord(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestCreateLogRecordUnknownOp(t *testing.T) {
-	tests := []struct {
+	unknownOpTests := []struct {
 		name string
 		op   Op
 	}{
 		{
-			name: "rejects an op code past the last defined one",
+			name: "given an op code past the last defined one, it refuses the record",
 			op:   SetString + 1,
 		},
 		{
-			name: "rejects a negative op code",
+			name: "given a negative op code, it refuses the record",
 			op:   -1,
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range unknownOpTests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec, err := CreateLogRecord(newTxRecordBytes(tt.op, 1))
 
@@ -275,28 +273,26 @@ func TestCreateLogRecordUnknownOp(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestCreateLogRecordShortRecord(t *testing.T) {
-	tests := []struct {
+	shortRecordTests := []struct {
 		name   string
 		record []byte
 	}{
 		{
-			name:   "rejects an empty record",
+			name:   "given no bytes at all, it refuses the record",
 			record: []byte{},
 		},
 		{
-			name:   "rejects a record too short to hold an op code",
+			name:   "given bytes too short to hold even an op code, it refuses the record",
 			record: make([]byte, filemanager.IntBytes-1),
 		},
 		{
-			name:   "rejects a start record without its txNum",
+			name:   "given an op whose layout needs a transaction number that is not there, it refuses the record",
 			record: newCheckpointRecordBytes(),
 		},
 	}
 
-	for _, tt := range tests {
+	for _, tt := range shortRecordTests {
 		t.Run(tt.name, func(t *testing.T) {
 			// The third case carries a valid checkpoint op, so overwrite it with
 			// an op whose layout demands a txNum that is not there.
