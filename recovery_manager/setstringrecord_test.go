@@ -23,22 +23,24 @@ func newSetStringRecordBytes(t *testing.T, txNum int, blk *filemanager.BlockId, 
 // record has two length-prefixed fields. The layout is pinned to explicit bytes
 // so that a mistake made symmetrically in the encoder and the parser shows up.
 func TestSetStringRecordLayout(t *testing.T) {
-	record := newSetStringRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, "hi")
+	t.Run("the bytes on the log read as the op, the transaction, the file name, the block, the offset and the old value, each inline field behind its length", func(t *testing.T) {
+		record := newSetStringRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, "hi")
 
-	want := []byte{
-		0, 0, 0, 5, // op: SetString
-		0, 0, 0, 1, // txNum
-		0, 0, 0, 8, // length of the file name
-		't', 'e', 's', 't', '.', 't', 'b', 'l',
-		0, 0, 0, 2, // block number
-		0, 0, 0, 80, // offset of the value within the block
-		0, 0, 0, 2, // length of the value that was overwritten
-		'h', 'i',
-	}
+		want := []byte{
+			0, 0, 0, 5, // op: SetString
+			0, 0, 0, 1, // txNum
+			0, 0, 0, 8, // length of the file name
+			't', 'e', 's', 't', '.', 't', 'b', 'l',
+			0, 0, 0, 2, // block number
+			0, 0, 0, 80, // offset of the value within the block
+			0, 0, 0, 2, // length of the value that was overwritten
+			'h', 'i',
+		}
 
-	if !bytes.Equal(record, want) {
-		t.Errorf("record = %v, want %v", record, want)
-	}
+		if !bytes.Equal(record, want) {
+			t.Errorf("record = %v, want %v", record, want)
+		}
+	})
 }
 
 func TestNewSetStringRecord(t *testing.T) {
@@ -49,19 +51,19 @@ func TestNewSetStringRecord(t *testing.T) {
 		blkNum   int
 	}{
 		{
-			name:     "reads a record written by transaction 1",
+			name:     "it reads back the transaction and the block the record was written for",
 			txNum:    1,
 			fileName: "test.tbl",
 			blkNum:   2,
 		},
 		{
-			name:     "reads a record naming a file whose name is a different length",
+			name:     "given a file name of another length, the fields after it are still read from the right place",
 			txNum:    42,
 			fileName: "a.tbl",
 			blkNum:   0,
 		},
 		{
-			name:     "reads a record naming a multi-byte file name",
+			name:     "given a file name of multi-byte characters, it is read by its bytes rather than its characters",
 			txNum:    7,
 			fileName: "テーブル.tbl",
 			blkNum:   13,
@@ -88,6 +90,62 @@ func TestNewSetStringRecord(t *testing.T) {
 			}
 		})
 	}
+
+	// This record has two inline fields, so there is one more way for a
+	// truncated record to look plausible than there is for a set int record:
+	// the length of the value can claim more bytes than the record holds.
+	full := newSetStringRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, "hi")
+
+	shortRecordTests := []struct {
+		name string
+		size int
+	}{
+		{
+			name: "given no bytes at all, it refuses the record",
+			size: 0,
+		},
+		{
+			name: "given a record that stops before the file name length, it refuses it",
+			size: 2 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record whose file name length claims more bytes than are there, it refuses it",
+			size: 3 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record that stops after the file name, it refuses it",
+			size: 5 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record that stops before the offset, it refuses it",
+			size: 6 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record that stops before the value length, it refuses it",
+			size: 7 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record whose value length claims more bytes than are there, it refuses it",
+			size: 8 * filemanager.IntBytes,
+		},
+		{
+			name: "given a record missing the last byte of the value, it refuses it",
+			size: len(full) - 1,
+		},
+	}
+
+	for _, tt := range shortRecordTests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, err := NewSetStringRecord(full[:tt.size])
+
+			if rec != nil {
+				t.Errorf("NewSetStringRecord() = %v, want nil", rec)
+			}
+			if err == nil {
+				t.Fatal("error = nil, want an error")
+			}
+		})
+	}
 }
 
 // Undo writes the pre-image into the page it is handed. The offset and the old
@@ -101,25 +159,25 @@ func TestSetStringRecordUndo(t *testing.T) {
 		overwith string
 	}{
 		{
-			name:     "restores a value at the start of the block",
+			name:     "given a record for the start of the block, the old value is put back there",
 			offset:   0,
 			oldVal:   "hi",
 			overwith: "bye",
 		},
 		{
-			name:     "restores a value shorter than the one that replaced it",
+			name:     "given an old value shorter than the one that replaced it, the length prefix is put back too",
 			offset:   80,
 			oldVal:   "a",
 			overwith: "a much longer value",
 		},
 		{
-			name:     "restores an empty value",
+			name:     "given an empty old value, the field is put back empty rather than left as it was",
 			offset:   80,
 			oldVal:   "",
 			overwith: "something",
 		},
 		{
-			name:     "restores a multi-byte value",
+			name:     "given an old value of multi-byte characters, it is put back unchanged",
 			offset:   80,
 			oldVal:   "テーブル",
 			overwith: "x",
@@ -161,7 +219,7 @@ func TestSetStringRecordString(t *testing.T) {
 		want   string
 	}{
 		{
-			name:   "formats the transaction, block, offset and old value",
+			name:   "it reads as SETSTRING alongside the transaction, block, offset and old value",
 			txNum:  1,
 			offset: 80,
 			oldVal: "hi",
@@ -169,7 +227,7 @@ func TestSetStringRecordString(t *testing.T) {
 		},
 		{
 			// Quoting keeps an empty value from reading as a missing field.
-			name:   "formats an empty old value",
+			name:   "given an empty old value, the empty string is shown rather than left out",
 			txNum:  42,
 			offset: 0,
 			oldVal: "",
@@ -192,64 +250,6 @@ func TestSetStringRecordString(t *testing.T) {
 	}
 }
 
-// This record has two inline fields, so there is one more way for a truncated
-// record to look plausible than there is for a set int record: the length of
-// the value can claim more bytes than the record holds.
-func TestNewSetStringRecordRejectsShortRecords(t *testing.T) {
-	full := newSetStringRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, "hi")
-
-	tests := []struct {
-		name string
-		size int
-	}{
-		{
-			name: "rejects an empty record",
-			size: 0,
-		},
-		{
-			name: "rejects a record that stops before the file name length",
-			size: 2 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record whose file name length exceeds what is present",
-			size: 3 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record that stops after the file name",
-			size: 5 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record that stops before the offset",
-			size: 6 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record that stops before the value length",
-			size: 7 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record whose value length exceeds what is present",
-			size: 8 * filemanager.IntBytes,
-		},
-		{
-			name: "rejects a record missing the last byte of the value",
-			size: len(full) - 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec, err := NewSetStringRecord(full[:tt.size])
-
-			if rec != nil {
-				t.Errorf("NewSetStringRecord() = %v, want nil", rec)
-			}
-			if err == nil {
-				t.Fatal("error = nil, want an error")
-			}
-		})
-	}
-}
-
 func TestWriteSetStringRecordToLog(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -257,12 +257,12 @@ func TestWriteSetStringRecordToLog(t *testing.T) {
 		wantLSN int
 	}{
 		{
-			name:    "returns LSN 1 for the first record appended to an empty log",
+			name:    "given a log with nothing on it, the record it writes gets lsn 1",
 			txNums:  []int{1},
 			wantLSN: 1,
 		},
 		{
-			name:    "returns an increasing LSN for each appended record",
+			name:    "given records already on the log, each one it writes gets the next lsn",
 			txNums:  []int{1, 2, 3},
 			wantLSN: 3,
 		},
