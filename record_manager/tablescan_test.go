@@ -348,9 +348,9 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 	}
 }
 
-// The scan is taken to a second block and put part way into it, so that going
-// back to the start has both a block and a slot to undo.
 func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
+	// The scan is taken to a second block and put part way into it, so that
+	// going back to the start has both a block and a slot to undo.
 	t.Run("given a scan part way into a later block, it returns to the first block without appending one or wiping it", func(t *testing.T) {
 		const id = 42
 
@@ -453,9 +453,9 @@ func walkTestRecords(t *testing.T, ts *TableScan) []int32 {
 	}
 }
 
-// Slot 1 is left free between the two records, so a walk that reported every
-// slot rather than every record would come back with three ids.
 func TestTableScanMoveToNextRecord(t *testing.T) {
+	// Slot 1 is left free between the two records, so a walk that reported
+	// every slot rather than every record would come back with three ids.
 	t.Run("given records with a free slot between them, the walk returns the records and passes over the gap", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -794,11 +794,12 @@ func TestTableScanCurrentRecordID(t *testing.T) {
 		}
 	})
 
-	// Noting a record, reading past it, and coming back is what a record id is for,
 }
 
-// so the round trip is what has to hold rather than either half on its own.
 func TestTableScanMoveToRecordID(t *testing.T) {
+	// Noting a record, reading past it, and coming back is what a record id is
+	// for, so the round trip is what has to hold rather than either half on its
+	// own.
 	t.Run("given a record noted while walking, when the scan is moved back to it after reading past it, then it reads that record again", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
