@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
@@ -17,6 +18,10 @@ const (
 	testDataFile   = "test.tbl"
 	testBlockSize  = 400
 	testNumBuffers = 3
+	// testStringFieldLength is the character limit of the varchar field the
+	// tests share. It is named rather than written out so that a case about the
+	// limit reads as being about the limit, whatever the number happens to be.
+	testStringFieldLength = 20
 )
 
 // newTestTransaction builds a transaction over a database of its own, so that
@@ -53,7 +58,7 @@ func newTestLayout(t *testing.T) *Layout {
 
 	s := NewSchema()
 	mustAddIntField(t, s, "id")
-	mustAddStringField(t, s, "name", 20)
+	mustAddStringField(t, s, "name", testStringFieldLength)
 
 	return NewLayout(s)
 }
@@ -204,6 +209,16 @@ func TestRecordPageSetStringAndGetString(t *testing.T) {
 			name: "when a string of multi-byte characters is written and read back, then it is unchanged",
 			slot: 0,
 			val:  "テスト",
+		},
+		{
+			name: "when a string of exactly as many characters as the field allows is written and read back, then it is unchanged",
+			slot: 0,
+			val:  strings.Repeat("a", testStringFieldLength),
+		},
+		{
+			name: "when a string of multi-byte characters fills the field to its limit and is read back, then it is unchanged",
+			slot: 0,
+			val:  strings.Repeat("あ", testStringFieldLength),
 		},
 	}
 
@@ -369,6 +384,69 @@ func TestRecordPageRejectsTheWrongFieldType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.call(newTestRecordPage(t)); !errors.Is(err, ErrFieldTypeMismatch) {
 				t.Errorf("error = %v, want %v", err, ErrFieldTypeMismatch)
+			}
+		})
+	}
+}
+
+// A varchar field is given room for its character limit in the widest encoding
+// there is, so an over-long string only reaches past the field once it is
+// longer than that: four bytes for every character the field allows. Below
+// that the string is written and read back intact, and the only thing wrong
+// with it is that the field now holds more characters than its schema says it
+// can. Above it, the write runs into whatever follows the field in the block,
+// which for the last field of a slot is the next slot's in-use flag.
+//
+// Both are the same fault, so both are refused by the same rule, and the cases
+// below cover either side of that boundary.
+func TestRecordPageRejectsAStringLongerThanItsField(t *testing.T) {
+	// A slot holds the in-use flag, an int and the varchar, so a string long
+	// enough to run past the varchar runs into the slot after it.
+	const charsPastTheSlot = testStringFieldLength*4 + 1
+
+	tests := []struct {
+		name string
+		val  string
+	}{
+		{
+			name: "given a varchar field, when a string one character over its limit is written, then it reports ErrStringTooLong",
+			val:  strings.Repeat("a", testStringFieldLength+1),
+		},
+		{
+			name: "given a varchar field, when a string of multi-byte characters one character over its limit is written, then it reports ErrStringTooLong",
+			val:  strings.Repeat("あ", testStringFieldLength+1),
+		},
+		{
+			name: "given a varchar field, when a string long enough to reach past the slot is written, then it reports ErrStringTooLong",
+			val:  strings.Repeat("a", charsPastTheSlot),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+
+			// The slot after the one written to is marked, so that a write that
+			// reached past its own slot shows up as that mark being gone rather
+			// than as a byte no test can name.
+			if err := rp.setSlotState(1, slotInUse); err != nil {
+				t.Fatalf("setSlotState() error = %v", err)
+			}
+
+			if err := rp.SetString(0, "name", tt.val); !errors.Is(err, ErrStringTooLong) {
+				t.Errorf("error = %v, want %v", err, ErrStringTooLong)
+			}
+
+			slotOffset, err := rp.slotOffset(1)
+			if err != nil {
+				t.Fatalf("slotOffset() error = %v", err)
+			}
+			flag, err := rp.tx.GetInt(rp.blk, slotOffset)
+			if err != nil {
+				t.Fatalf("GetInt() error = %v", err)
+			}
+			if slotState(flag) != slotInUse {
+				t.Errorf("the slot after the one written to is %d, want %d: the write reached past its own slot", flag, slotInUse)
 			}
 		})
 	}

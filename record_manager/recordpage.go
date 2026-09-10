@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -14,6 +15,10 @@ var ErrSlotOutOfRange = errors.New("slot out of range")
 // ErrFieldTypeMismatch reports reading or writing a field as one type when the
 // schema says it is another.
 var ErrFieldTypeMismatch = errors.New("field type mismatch")
+
+// ErrStringTooLong reports writing a string of more characters than the varchar
+// field it is written to was declared to hold.
+var ErrStringTooLong = errors.New("string too long")
 
 // ErrNoSuchSlot reports that a search reached the end of the block without
 // finding a slot in the state it was looking for. It is the ordinary way a walk
@@ -277,10 +282,33 @@ func (rp *RecordPage) GetString(slot int, fieldName string) (string, error) {
 }
 
 // SetString writes val to the varchar field fieldName of slot.
+//
+// A string of more characters than the field was declared to hold is refused
+// rather than written. The field is given room for its limit in the widest
+// encoding there is, so a string a little over it would be written and read
+// back intact, and the schema would be the only thing saying anything was
+// wrong; a string far enough over reaches past the field and overwrites
+// whatever follows it in the block. Both are the same violation of the width
+// the schema declared, so both are refused here.
+//
+// The count is of characters rather than bytes because that is what a varchar's
+// length means. Counting bytes would refuse strings that fit, since a character
+// may take up to four of them.
 func (rp *RecordPage) SetString(slot int, fieldName string, val string) error {
 	pos, err := rp.fieldPos(slot, fieldName, FieldTypeVarchar)
 	if err != nil {
 		return err
+	}
+
+	// Length cannot fail here: fieldPos has already looked the field up in the
+	// same schema. The error is returned rather than dropped so that this stays
+	// true if it grows another reason to.
+	length, err := rp.layout.schema.Length(fieldName)
+	if err != nil {
+		return err
+	}
+	if count := utf8.RuneCountInString(val); count > length {
+		return fmt.Errorf("write %d characters to field %q, which holds %d: %w", count, fieldName, length, ErrStringTooLong)
 	}
 
 	return rp.tx.SetString(rp.blk, pos, val)

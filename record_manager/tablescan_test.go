@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -334,6 +335,13 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 				return ts.SetInt("missing", 1)
 			},
 			wantErr: ErrFieldNotFound,
+		},
+		{
+			name: "given a varchar field, when a string over its limit is written, then ErrStringTooLong reaches the caller",
+			call: func(ts *TableScan) error {
+				return ts.SetString("name", strings.Repeat("a", testStringFieldLength+1))
+			},
+			wantErr: ErrStringTooLong,
 		},
 	}
 
