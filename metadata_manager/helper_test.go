@@ -1,6 +1,7 @@
 package metadatamanager
 
 import (
+	"slices"
 	"testing"
 
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
@@ -158,6 +159,72 @@ func mustAddStringField(t *testing.T, schema *recordmanager.Schema, fieldName st
 
 	if err := schema.AddStringField(fieldName, length); err != nil {
 		t.Fatalf("AddStringField(%q) error = %v", fieldName, err)
+	}
+}
+
+// layoutField is one placed field of a layout: what a schema says about it,
+// plus where the layout put it.
+type layoutField struct {
+	name      string
+	fieldType recordmanager.FieldType
+	length    int
+	offset    int
+}
+
+// layoutDescription is everything a layout says, flattened so that two layouts
+// can be compared as data rather than field by field at every call site.
+type layoutDescription struct {
+	slotSize int
+	fields   []layoutField
+}
+
+func describeLayout(t *testing.T, layout *recordmanager.Layout) layoutDescription {
+	t.Helper()
+
+	schema := layout.Schema()
+
+	fields := []layoutField{}
+	for _, fieldName := range schema.Fields() {
+		fieldType, err := schema.Type(fieldName)
+		if err != nil {
+			t.Fatalf("Type(%q) error = %v", fieldName, err)
+		}
+		length, err := schema.Length(fieldName)
+		if err != nil {
+			t.Fatalf("Length(%q) error = %v", fieldName, err)
+		}
+		offset, err := layout.Offset(fieldName)
+		if err != nil {
+			t.Fatalf("Offset(%q) error = %v", fieldName, err)
+		}
+
+		fields = append(fields, layoutField{
+			name:      fieldName,
+			fieldType: fieldType,
+			length:    length,
+			offset:    offset,
+		})
+	}
+
+	return layoutDescription{
+		slotSize: layout.SlotSize(),
+		fields:   fields,
+	}
+}
+
+// assertLayout reports the slot size and the fields separately, so that a
+// failure says which of the two is wrong rather than printing both layouts and
+// leaving the reader to find the difference.
+func assertLayout(t *testing.T, got *recordmanager.Layout, want layoutDescription) {
+	t.Helper()
+
+	description := describeLayout(t, got)
+
+	if description.slotSize != want.slotSize {
+		t.Errorf("the layout has slots of %d bytes, want %d", description.slotSize, want.slotSize)
+	}
+	if !slices.Equal(description.fields, want.fields) {
+		t.Errorf("the layout holds %+v, want %+v", description.fields, want.fields)
 	}
 }
 

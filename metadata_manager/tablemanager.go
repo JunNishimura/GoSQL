@@ -13,6 +13,9 @@ import (
 // catalogs were built to hold.
 var ErrNameTooLong = errors.New("name too long")
 
+// ErrTableNotFound reports a table the catalogs have no row for.
+var ErrTableNotFound = errors.New("table not found")
+
 // The catalogs are ordinary tables, so they are stored under names of their
 // own, alongside the tables they describe.
 const (
@@ -126,6 +129,124 @@ func (tm *TableManager) CreateCatalogTables(tx *transaction.Transaction) error {
 	}
 
 	return tm.CreateTable(tx, fieldCatalogName, tm.fieldCatalogLayout.Schema())
+}
+
+// GetLayout reads a table's definition back out of the catalogs.
+//
+// The layout is rebuilt from what was written down rather than worked out again
+// from the schema, so that the offsets it gives are the ones the table's
+// records were written to. A version of this code that laid fields out
+// differently would otherwise read every record of every older table at the
+// wrong place, and say nothing about it.
+func (tm *TableManager) GetLayout(tx *transaction.Transaction, tableName string) (*recordmanager.Layout, error) {
+	slotSize, err := tm.readSlotSize(tx, tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	schema, offsets, err := tm.readFields(tx, tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	return recordmanager.NewLayoutFromCatalog(schema, offsets, slotSize)
+}
+
+// readSlotSize finds the table catalog's row for this table and returns the
+// slot size on it. A table with no row there is one the database does not have.
+func (tm *TableManager) readSlotSize(tx *transaction.Transaction, tableName string) (int, error) {
+	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
+	if err != nil {
+		return 0, err
+	}
+	defer ts.Close()
+
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			return 0, err
+		}
+		if !hasNext {
+			return 0, fmt.Errorf("read the layout of table %q: %w", tableName, ErrTableNotFound)
+		}
+
+		name, err := ts.GetString(tableNameField)
+		if err != nil {
+			return 0, err
+		}
+		if name != tableName {
+			continue
+		}
+
+		slotSize, err := ts.GetInt(slotSizeField)
+		if err != nil {
+			return 0, err
+		}
+
+		return int(slotSize), nil
+	}
+}
+
+// readFields walks the whole field catalog and collects the rows belonging to
+// this table, as a schema and the offsets that go with it.
+//
+// Every row is looked at, because the rows of one table are not kept together:
+// a row is written wherever the field catalog has a free slot, which for a
+// table created after others is wherever their deleted rows left room.
+//
+// The fields come out in the order their rows were written, which is the order
+// the schema listed them when the table was created. That order is part of the
+// record format, so a layout that had them in another one would not be the same
+// layout even with the same offsets.
+func (tm *TableManager) readFields(tx *transaction.Transaction, tableName string) (*recordmanager.Schema, map[string]int, error) {
+	ts, err := recordmanager.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer ts.Close()
+
+	schema := recordmanager.NewSchema()
+	offsets := map[string]int{}
+
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			return nil, nil, err
+		}
+		if !hasNext {
+			return schema, offsets, nil
+		}
+
+		name, err := ts.GetString(tableNameField)
+		if err != nil {
+			return nil, nil, err
+		}
+		if name != tableName {
+			continue
+		}
+
+		fieldName, err := ts.GetString(fieldNameField)
+		if err != nil {
+			return nil, nil, err
+		}
+		fieldType, err := ts.GetInt(fieldTypeField)
+		if err != nil {
+			return nil, nil, err
+		}
+		length, err := ts.GetInt(fieldLengthField)
+		if err != nil {
+			return nil, nil, err
+		}
+		offset, err := ts.GetInt(fieldOffsetField)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		if err := schema.AddField(fieldName, recordmanager.FieldType(fieldType), int(length)); err != nil {
+			return nil, nil, fmt.Errorf("rebuild the schema of table %q: %w", tableName, err)
+		}
+		offsets[fieldName] = int(offset)
+	}
 }
 
 // checkNames refuses a table or field name the catalogs cannot hold.

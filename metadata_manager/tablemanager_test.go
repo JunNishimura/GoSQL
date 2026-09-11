@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
 )
 
 // catalogField is one field a catalog's schema has to hold: what it is called,
@@ -361,4 +362,137 @@ func TestTableManagerRejectsANameLongerThanTheCatalogsHold(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The second table the read tests need. Its one field is a varchar of its own
+// width, so that a layout carrying it cannot be mistaken for testTableName's.
+//
+//	other_table  4 + (4 + 120) = 128 bytes, with "title" at offset 4
+const (
+	otherTableName = "other_table"
+	otherTableSlot = 128
+)
+
+// createTestTables puts two tables in the catalogs, so that reading one back is
+// a matter of picking rows out rather than of reading every row there is.
+func createTestTables(t *testing.T, tx *transaction.Transaction, tm *TableManager) {
+	t.Helper()
+
+	if err := tm.CreateTable(tx, testTableName, newTestSchema(t)); err != nil {
+		t.Fatalf("CreateTable(%q) error = %v", testTableName, err)
+	}
+
+	other := recordmanager.NewSchema()
+	mustAddStringField(t, other, "title", 30)
+
+	if err := tm.CreateTable(tx, otherTableName, other); err != nil {
+		t.Fatalf("CreateTable(%q) error = %v", otherTableName, err)
+	}
+}
+
+func TestTableManagerGetLayout(t *testing.T) {
+	tests := []struct {
+		name      string
+		tableName string
+		want      layoutDescription
+	}{
+		{
+			name:      "given two tables in the catalogs, when the first one is asked for, then the layout holds its own fields and none of the other's",
+			tableName: testTableName,
+			want: layoutDescription{
+				slotSize: 92,
+				fields: []layoutField{
+					{
+						name:      "id",
+						fieldType: recordmanager.FieldTypeInt,
+						length:    0,
+						offset:    4,
+					},
+					{
+						name:      "name",
+						fieldType: recordmanager.FieldTypeVarchar,
+						length:    testStringFieldLength,
+						offset:    8,
+					},
+				},
+			},
+		},
+		{
+			name:      "given two tables in the catalogs, when the second one is asked for, then the layout holds its own fields and none of the other's",
+			tableName: otherTableName,
+			want: layoutDescription{
+				slotSize: otherTableSlot,
+				fields: []layoutField{
+					{
+						name:      "title",
+						fieldType: recordmanager.FieldTypeVarchar,
+						length:    30,
+						offset:    4,
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			tm := mustNewTableManager(t)
+			createTestTables(t, tx, tm)
+
+			layout, err := tm.GetLayout(tx, tt.tableName)
+			if err != nil {
+				t.Fatalf("GetLayout() error = %v", err)
+			}
+
+			assertLayout(t, layout, tt.want)
+		})
+	}
+
+	t.Run("given catalogs that hold another table, when a table they do not hold is asked for, then it reports ErrTableNotFound", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		tm := mustNewTableManager(t)
+		createTestTables(t, tx, tm)
+
+		if _, err := tm.GetLayout(tx, "no_such_table"); !errors.Is(err, ErrTableNotFound) {
+			t.Errorf("error = %v, want %v", err, ErrTableNotFound)
+		}
+	})
+
+	// The catalogs describe themselves, so reading one of them back out of
+	// itself has to give the layout it was created from. That is the one read
+	// the rest of the database rests on: every other table's layout is read
+	// through these two, so if they do not come back as they went in, nothing
+	// read afterwards means anything.
+	t.Run("given the catalogs describing themselves, when the table catalog's layout is read back out of them, then it is the one it was created from", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		tm := mustNewTableManager(t)
+
+		if err := tm.CreateCatalogTables(tx); err != nil {
+			t.Fatalf("CreateCatalogTables() error = %v", err)
+		}
+
+		layout, err := tm.GetLayout(tx, tableCatalogName)
+		if err != nil {
+			t.Fatalf("GetLayout() error = %v", err)
+		}
+
+		assertLayout(t, layout, describeLayout(t, tm.tableCatalogLayout))
+	})
+
+	t.Run("given the catalogs describing themselves, when the field catalog's layout is read back out of them, then it is the one it was created from", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		tm := mustNewTableManager(t)
+
+		if err := tm.CreateCatalogTables(tx); err != nil {
+			t.Fatalf("CreateCatalogTables() error = %v", err)
+		}
+
+		layout, err := tm.GetLayout(tx, fieldCatalogName)
+		if err != nil {
+			t.Fatalf("GetLayout() error = %v", err)
+		}
+
+		assertLayout(t, layout, describeLayout(t, tm.fieldCatalogLayout))
+	})
 }
