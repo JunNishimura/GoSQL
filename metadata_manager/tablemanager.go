@@ -1,8 +1,17 @@
 package metadatamanager
 
 import (
+	"errors"
+	"fmt"
+	"unicode/utf8"
+
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
 )
+
+// ErrNameTooLong reports a table or field name of more characters than the
+// catalogs were built to hold.
+var ErrNameTooLong = errors.New("name too long")
 
 // The catalogs are ordinary tables, so they are stored under names of their
 // own, alongside the tables they describe.
@@ -82,6 +91,134 @@ func NewTableManager() (*TableManager, error) {
 		tableCatalogLayout: recordmanager.NewLayout(tableCatalogSchema),
 		fieldCatalogLayout: recordmanager.NewLayout(fieldCatalogSchema),
 	}, nil
+}
+
+// CreateTable writes a table's definition into the catalogs: one row naming the
+// table and giving the width of its records, and one row for each of its fields.
+//
+// The layout is worked out here and written down, rather than left to be worked
+// out again when the table is read back. That is what makes the offsets saved
+// here the ones the table's records are written to for as long as the table
+// exists.
+func (tm *TableManager) CreateTable(tx *transaction.Transaction, tableName string, schema *recordmanager.Schema) error {
+	if err := checkNames(tableName, schema); err != nil {
+		return err
+	}
+
+	layout := recordmanager.NewLayout(schema)
+
+	if err := tm.recordTable(tx, tableName, layout); err != nil {
+		return err
+	}
+
+	return tm.recordFields(tx, tableName, layout)
+}
+
+// CreateCatalogTables writes the two catalogs into themselves, which is what
+// makes them tables the rest of the database can read like any other.
+//
+// It is separate from NewTableManager so that whether a database is new is the
+// caller's to know rather than a flag handed down to a constructor. Calling it
+// on a database that already has catalogs would describe them a second time.
+func (tm *TableManager) CreateCatalogTables(tx *transaction.Transaction) error {
+	if err := tm.CreateTable(tx, tableCatalogName, tm.tableCatalogLayout.Schema()); err != nil {
+		return err
+	}
+
+	return tm.CreateTable(tx, fieldCatalogName, tm.fieldCatalogLayout.Schema())
+}
+
+// checkNames refuses a table or field name the catalogs cannot hold.
+//
+// Every name is looked at before any of them is written, so that a refusal
+// leaves the catalogs as they were. A record page would refuse the same name on
+// its own, but only once it reached the row carrying it, and by then the rows
+// ahead of it describe a table the catalogs half know about, which nothing
+// later has any reason to clean up.
+//
+// The count is of characters because that is what the catalogs' varchar fields
+// are measured in.
+func checkNames(tableName string, schema *recordmanager.Schema) error {
+	if count := utf8.RuneCountInString(tableName); count > maxNameLength {
+		return fmt.Errorf("create a table named %q, which is %d characters and the catalogs hold %d: %w", tableName, count, maxNameLength, ErrNameTooLong)
+	}
+
+	for _, fieldName := range schema.Fields() {
+		if count := utf8.RuneCountInString(fieldName); count > maxNameLength {
+			return fmt.Errorf("create a field named %q, which is %d characters and the catalogs hold %d: %w", fieldName, count, maxNameLength, ErrNameTooLong)
+		}
+	}
+
+	return nil
+}
+
+// recordTable writes the table catalog's row for this table.
+func (tm *TableManager) recordTable(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) error {
+	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
+	if err != nil {
+		return err
+	}
+	defer ts.Close()
+
+	if err := ts.MoveToNewRecord(); err != nil {
+		return err
+	}
+	if err := ts.SetString(tableNameField, tableName); err != nil {
+		return err
+	}
+
+	return ts.SetInt(slotSizeField, int32(layout.SlotSize()))
+}
+
+// recordFields writes the field catalog's rows for this table, one per field,
+// in the order the schema lists them.
+func (tm *TableManager) recordFields(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) error {
+	ts, err := recordmanager.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
+	if err != nil {
+		return err
+	}
+	defer ts.Close()
+
+	schema := layout.Schema()
+	for _, fieldName := range schema.Fields() {
+		// None of these three can fail: the field came from the schema's own
+		// list, and the layout was built from that schema. They are returned
+		// rather than dropped so that this stays true if they grow another
+		// reason to refuse a field.
+		fieldType, err := schema.Type(fieldName)
+		if err != nil {
+			return err
+		}
+		length, err := schema.Length(fieldName)
+		if err != nil {
+			return err
+		}
+		offset, err := layout.Offset(fieldName)
+		if err != nil {
+			return err
+		}
+
+		if err := ts.MoveToNewRecord(); err != nil {
+			return err
+		}
+		if err := ts.SetString(tableNameField, tableName); err != nil {
+			return err
+		}
+		if err := ts.SetString(fieldNameField, fieldName); err != nil {
+			return err
+		}
+		if err := ts.SetInt(fieldTypeField, int32(fieldType)); err != nil {
+			return err
+		}
+		if err := ts.SetInt(fieldLengthField, int32(length)); err != nil {
+			return err
+		}
+		if err := ts.SetInt(fieldOffsetField, int32(offset)); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // newTableCatalogSchema is the schema of the table catalog: one row per table,
