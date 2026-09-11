@@ -10,36 +10,56 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// catalogField is one field a catalog's schema has to hold: what it is called,
-// what type it is, and, for a varchar, how many characters it takes at most.
-// length is 0 for an int, whose width the schema does not carry.
-type catalogField struct {
-	name      string
-	fieldType recordmanager.FieldType
-	length    int
-}
+// The widths every expected number in this file is built from, spelled out
+// once:
+//
+//	an int          4 bytes
+//	a varchar(n)    4 + 4n bytes
+//	the in-use flag 4 bytes, at the front of every slot
+//
+// The catalogs describe themselves, so their own widths are asserted twice
+// over: once as the layouts the manager builds in code, and again as the rows
+// those layouts are written into.
+//
+//	table_catalog   4 + (4 + 64) + 4                     =  76 bytes
+//	field_catalog   4 + (4 + 64) + (4 + 64) + 4 + 4 + 4  = 152 bytes
+//
+// Every expected number below is written as a literal rather than asked of a
+// layout, so that a change to any of those widths shows up here as a failing
+// test. Asking a layout would only check that the catalogs agree with whatever
+// the layout said, which they would go on doing after the format changed
+// underneath both.
+const (
+	tableCatalogSlotSize = 76
+	fieldCatalogSlotSize = 152
+)
 
 func TestNewTableManager(t *testing.T) {
 	tests := []struct {
 		name   string
 		layout func(tm *TableManager) *recordmanager.Layout
-		want   []catalogField
+		want   layoutDescription
 	}{
 		{
 			name: "it builds a table catalog layout holding the name and the slot size of one table",
 			layout: func(tm *TableManager) *recordmanager.Layout {
 				return tm.tableCatalogLayout
 			},
-			want: []catalogField{
-				{
-					name:      tableNameField,
-					fieldType: recordmanager.FieldTypeVarchar,
-					length:    maxNameLength,
-				},
-				{
-					name:      slotSizeField,
-					fieldType: recordmanager.FieldTypeInt,
-					length:    0,
+			want: layoutDescription{
+				slotSize: tableCatalogSlotSize,
+				fields: []layoutField{
+					{
+						name:      tableNameField,
+						fieldType: recordmanager.FieldTypeVarchar,
+						length:    maxNameLength,
+						offset:    4,
+					},
+					{
+						name:      slotSizeField,
+						fieldType: recordmanager.FieldTypeInt,
+						length:    0,
+						offset:    72,
+					},
 				},
 			},
 		},
@@ -48,31 +68,39 @@ func TestNewTableManager(t *testing.T) {
 			layout: func(tm *TableManager) *recordmanager.Layout {
 				return tm.fieldCatalogLayout
 			},
-			want: []catalogField{
-				{
-					name:      tableNameField,
-					fieldType: recordmanager.FieldTypeVarchar,
-					length:    maxNameLength,
-				},
-				{
-					name:      fieldNameField,
-					fieldType: recordmanager.FieldTypeVarchar,
-					length:    maxNameLength,
-				},
-				{
-					name:      fieldTypeField,
-					fieldType: recordmanager.FieldTypeInt,
-					length:    0,
-				},
-				{
-					name:      fieldLengthField,
-					fieldType: recordmanager.FieldTypeInt,
-					length:    0,
-				},
-				{
-					name:      fieldOffsetField,
-					fieldType: recordmanager.FieldTypeInt,
-					length:    0,
+			want: layoutDescription{
+				slotSize: fieldCatalogSlotSize,
+				fields: []layoutField{
+					{
+						name:      tableNameField,
+						fieldType: recordmanager.FieldTypeVarchar,
+						length:    maxNameLength,
+						offset:    4,
+					},
+					{
+						name:      fieldNameField,
+						fieldType: recordmanager.FieldTypeVarchar,
+						length:    maxNameLength,
+						offset:    72,
+					},
+					{
+						name:      fieldTypeField,
+						fieldType: recordmanager.FieldTypeInt,
+						length:    0,
+						offset:    140,
+					},
+					{
+						name:      fieldLengthField,
+						fieldType: recordmanager.FieldTypeInt,
+						length:    0,
+						offset:    144,
+					},
+					{
+						name:      fieldOffsetField,
+						fieldType: recordmanager.FieldTypeInt,
+						length:    0,
+						offset:    148,
+					},
 				},
 			},
 		},
@@ -84,46 +112,23 @@ func TestNewTableManager(t *testing.T) {
 				t.Fatalf("NewTableManager() error = %v", err)
 			}
 
-			schema := tt.layout(tm).Schema()
-
-			gotFields := schema.Fields()
-			if len(gotFields) != len(tt.want) {
-				t.Fatalf("the catalog has fields %v, want %d of them", gotFields, len(tt.want))
-			}
-
-			// The order is checked along with the names: a layout assigns
-			// offsets by walking the fields in order, so a catalog whose fields
-			// were added in another order is another record format.
-			for i, want := range tt.want {
-				if gotFields[i] != want.name {
-					t.Errorf("field %d is %q, want %q", i, gotFields[i], want.name)
-					continue
-				}
-
-				gotType, err := schema.Type(want.name)
-				if err != nil {
-					t.Fatalf("Type(%q) error = %v", want.name, err)
-				}
-				if gotType != want.fieldType {
-					t.Errorf("field %q is a %v, want a %v", want.name, gotType, want.fieldType)
-				}
-
-				gotLength, err := schema.Length(want.name)
-				if err != nil {
-					t.Fatalf("Length(%q) error = %v", want.name, err)
-				}
-				if gotLength != want.length {
-					t.Errorf("field %q holds %d characters, want %d", want.name, gotLength, want.length)
-				}
-			}
+			// The order the fields come back in is part of what is asserted: a
+			// layout assigns offsets by walking them in order, so a catalog
+			// whose fields were added in another order is another record
+			// format, whatever the offsets say.
+			assertLayout(t, tt.layout(tm), tt.want)
 		})
 	}
 }
 
-// The table the create tests describe: an int and a varchar of 20 characters.
+// The table the tests below create: an int and a varchar of 20 characters.
+//
+//	test_table  4 + 4 + (4 + 80) = 92 bytes, with "id" at offset 4 and "name"
+//	            at offset 8
 const (
 	testTableName         = "test_table"
 	testStringFieldLength = 20
+	testTableSlotSize     = 92
 )
 
 // newTestSchema is the schema of testTableName. One field of each kind is what
@@ -139,19 +144,6 @@ func newTestSchema(t *testing.T) *recordmanager.Schema {
 	return schema
 }
 
-// The widths the expected numbers below are built from, spelled out once:
-//
-//	an int          4 bytes
-//	a varchar(n)    4 + 4n bytes
-//	the in-use flag 4 bytes, at the front of every slot
-//
-// So a record of testTableName takes 4 + 4 + (4 + 80) = 92 bytes, with "id" at
-// offset 4 and "name" at offset 8.
-//
-// They are written as literals rather than asked of a layout, so that a change
-// to any of those widths shows up here as a failing test. Asking a layout would
-// only check that the catalog agrees with whatever the layout said, which it
-// would go on doing after the format changed underneath both.
 func TestTableManagerCreateTable(t *testing.T) {
 	t.Run("given a table of an int and a varchar field, when it is created, then the table catalog holds its name and the size of its slots", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -164,7 +156,7 @@ func TestTableManagerCreateTable(t *testing.T) {
 		want := []tableCatalogRow{
 			{
 				tableName: testTableName,
-				slotSize:  92,
+				slotSize:  testTableSlotSize,
 			},
 		}
 		if got := readTableCatalog(t, tx, tm); !slices.Equal(got, want) {
@@ -220,9 +212,6 @@ func TestTableManagerCreateTable(t *testing.T) {
 
 // The catalogs describe themselves, so creating them writes rows about the two
 // of them into the two of them.
-//
-//	table_catalog   4 + (4 + 64) + 4                     =  76 bytes
-//	field_catalog   4 + (4 + 64) + (4 + 64) + 4 + 4 + 4  = 152 bytes
 func TestTableManagerCreateCatalogTables(t *testing.T) {
 	t.Run("when the catalogs are created, then the table catalog holds a row for itself and one for the field catalog", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -235,11 +224,11 @@ func TestTableManagerCreateCatalogTables(t *testing.T) {
 		want := []tableCatalogRow{
 			{
 				tableName: tableCatalogName,
-				slotSize:  76,
+				slotSize:  tableCatalogSlotSize,
 			},
 			{
 				tableName: fieldCatalogName,
-				slotSize:  152,
+				slotSize:  fieldCatalogSlotSize,
 			},
 		}
 		if got := readTableCatalog(t, tx, tm); !slices.Equal(got, want) {
@@ -369,8 +358,8 @@ func TestTableManagerRejectsANameLongerThanTheCatalogsHold(t *testing.T) {
 //
 //	other_table  4 + (4 + 120) = 128 bytes, with "title" at offset 4
 const (
-	otherTableName = "other_table"
-	otherTableSlot = 128
+	otherTableName     = "other_table"
+	otherTableSlotSize = 128
 )
 
 // createTestTables puts two tables in the catalogs, so that reading one back is
@@ -400,7 +389,7 @@ func TestTableManagerGetLayout(t *testing.T) {
 			name:      "given two tables in the catalogs, when the first one is asked for, then the layout holds its own fields and none of the other's",
 			tableName: testTableName,
 			want: layoutDescription{
-				slotSize: 92,
+				slotSize: testTableSlotSize,
 				fields: []layoutField{
 					{
 						name:      "id",
@@ -421,7 +410,7 @@ func TestTableManagerGetLayout(t *testing.T) {
 			name:      "given two tables in the catalogs, when the second one is asked for, then the layout holds its own fields and none of the other's",
 			tableName: otherTableName,
 			want: layoutDescription{
-				slotSize: otherTableSlot,
+				slotSize: otherTableSlotSize,
 				fields: []layoutField{
 					{
 						name:      "title",
