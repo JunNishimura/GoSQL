@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -105,6 +106,22 @@ func TestNewTableScan(t *testing.T) {
 		}
 		if got != id {
 			t.Errorf("GetInt() = %d, want %d: the record was wiped", got, id)
+		}
+	})
+}
+
+// Opening the scan is where a layout too wide for a block has to be caught,
+// because every later call assumes the scan is on a block it can hold records
+// in. MoveToNewRecord in particular would take "no free slot here" as a reason
+// to append another block, and would never stop.
+func TestNewTableScanRejectsASlotWiderThanABlock(t *testing.T) {
+	t.Run("given a layout whose slot is wider than a block, when a scan is opened on the table, then ErrSlotWiderThanBlock reaches the caller", func(t *testing.T) {
+		tx := newTestTransaction(t)
+
+		layout := newLayoutOfOneStringField(t, overwideFieldLength)
+
+		if _, err := NewTableScan(tx, testTableName, layout); !errors.Is(err, ErrSlotWiderThanBlock) {
+			t.Errorf("error = %v, want %v", err, ErrSlotWiderThanBlock)
 		}
 	})
 }
@@ -334,6 +351,13 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 				return ts.SetInt("missing", 1)
 			},
 			wantErr: ErrFieldNotFound,
+		},
+		{
+			name: "given a varchar field, when a string over its limit is written, then ErrStringTooLong reaches the caller",
+			call: func(ts *TableScan) error {
+				return ts.SetString("name", strings.Repeat("a", testStringFieldLength+1))
+			},
+			wantErr: ErrStringTooLong,
 		},
 	}
 

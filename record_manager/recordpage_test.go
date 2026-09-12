@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
@@ -17,6 +18,10 @@ const (
 	testDataFile   = "test.tbl"
 	testBlockSize  = 400
 	testNumBuffers = 3
+	// testStringFieldLength is the character limit of the varchar field the
+	// tests share. It is named rather than written out so that a case about the
+	// limit reads as being about the limit, whatever the number happens to be.
+	testStringFieldLength = 20
 )
 
 // newTestTransaction builds a transaction over a database of its own, so that
@@ -53,7 +58,7 @@ func newTestLayout(t *testing.T) *Layout {
 
 	s := NewSchema()
 	mustAddIntField(t, s, "id")
-	mustAddStringField(t, s, "name", 20)
+	mustAddStringField(t, s, "name", testStringFieldLength)
 
 	return NewLayout(s)
 }
@@ -116,6 +121,77 @@ const (
 	testSlotSize     = 92
 	testSlotsInBlock = testBlockSize / testSlotSize
 )
+
+// The two widths either side of a block, for a layout of one varchar field:
+//
+//	varchar(98)  4 + (4 + 392) = 400 bytes, exactly one slot to a block
+//	varchar(99)  4 + (4 + 396) = 404 bytes, and no slot fits at all
+const (
+	widestFittingFieldLength = 98
+	overwideFieldLength      = 99
+)
+
+// newLayoutOfOneStringField builds a layout of a single varchar, which is what
+// lets a test put a slot at a width of its choosing.
+func newLayoutOfOneStringField(t *testing.T, length int) *Layout {
+	t.Helper()
+
+	s := NewSchema()
+	mustAddStringField(t, s, "definition", length)
+
+	return NewLayout(s)
+}
+
+// A layout whose slot does not fit in a block is refused when the record page
+// is made, rather than at the first read or write of it.
+//
+// Nothing can be done with such a layout: slot 0 already runs past the end of
+// the block, so every slot is out of range and the page holds no records at
+// all. Left to be found later it is worse than useless, because the caller that
+// finds it is TableScan.MoveToNewRecord, which reads "no free slot in this
+// block" as "append another block and look again" and does so forever, growing
+// the file until the disk fills.
+func TestNewRecordPageRejectsASlotWiderThanABlock(t *testing.T) {
+	t.Run("given a layout whose slot is wider than a block, when a record page is made on it, then it reports ErrSlotWiderThanBlock", func(t *testing.T) {
+		tx := newTestTransaction(t)
+
+		blk, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+
+		layout := newLayoutOfOneStringField(t, overwideFieldLength)
+
+		if _, err := NewRecordPage(tx, blk, layout); !errors.Is(err, ErrSlotWiderThanBlock) {
+			t.Errorf("error = %v, want %v", err, ErrSlotWiderThanBlock)
+		}
+
+		// The block is left as it was found. Pinning it and then refusing would
+		// hold a buffer for a page that was never handed out, and nothing would
+		// know to give it back.
+		if _, err := tx.GetInt(blk, 0); err == nil {
+			t.Error("GetInt() after the refused record page error = nil, want an error: the block was pinned and left that way")
+		}
+	})
+
+	t.Run("given a layout whose slot is exactly as wide as a block, when a record page is made on it, then it is made", func(t *testing.T) {
+		tx := newTestTransaction(t)
+
+		blk, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+
+		layout := newLayoutOfOneStringField(t, widestFittingFieldLength)
+		if got := layout.SlotSize(); got != testBlockSize {
+			t.Fatalf("the layout has slots of %d bytes, want %d: the case is not testing the boundary", got, testBlockSize)
+		}
+
+		if _, err := NewRecordPage(tx, blk, layout); err != nil {
+			t.Errorf("NewRecordPage() error = %v, want nil: one slot of this width fits", err)
+		}
+	})
+}
 
 // newTestRecordPage builds a record page over a freshly appended block, so that
 // every slot in it starts out zeroed.
@@ -204,6 +280,16 @@ func TestRecordPageSetStringAndGetString(t *testing.T) {
 			name: "when a string of multi-byte characters is written and read back, then it is unchanged",
 			slot: 0,
 			val:  "テスト",
+		},
+		{
+			name: "when a string of exactly as many characters as the field allows is written and read back, then it is unchanged",
+			slot: 0,
+			val:  strings.Repeat("a", testStringFieldLength),
+		},
+		{
+			name: "when a string of multi-byte characters fills the field to its limit and is read back, then it is unchanged",
+			slot: 0,
+			val:  strings.Repeat("あ", testStringFieldLength),
 		},
 	}
 
@@ -369,6 +455,69 @@ func TestRecordPageRejectsTheWrongFieldType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.call(newTestRecordPage(t)); !errors.Is(err, ErrFieldTypeMismatch) {
 				t.Errorf("error = %v, want %v", err, ErrFieldTypeMismatch)
+			}
+		})
+	}
+}
+
+// A varchar field is given room for its character limit in the widest encoding
+// there is, so an over-long string only reaches past the field once it is
+// longer than that: four bytes for every character the field allows. Below
+// that the string is written and read back intact, and the only thing wrong
+// with it is that the field now holds more characters than its schema says it
+// can. Above it, the write runs into whatever follows the field in the block,
+// which for the last field of a slot is the next slot's in-use flag.
+//
+// Both are the same fault, so both are refused by the same rule, and the cases
+// below cover either side of that boundary.
+func TestRecordPageRejectsAStringLongerThanItsField(t *testing.T) {
+	// A slot holds the in-use flag, an int and the varchar, so a string long
+	// enough to run past the varchar runs into the slot after it.
+	const charsPastTheSlot = testStringFieldLength*4 + 1
+
+	tests := []struct {
+		name string
+		val  string
+	}{
+		{
+			name: "given a varchar field, when a string one character over its limit is written, then it reports ErrStringTooLong",
+			val:  strings.Repeat("a", testStringFieldLength+1),
+		},
+		{
+			name: "given a varchar field, when a string of multi-byte characters one character over its limit is written, then it reports ErrStringTooLong",
+			val:  strings.Repeat("あ", testStringFieldLength+1),
+		},
+		{
+			name: "given a varchar field, when a string long enough to reach past the slot is written, then it reports ErrStringTooLong",
+			val:  strings.Repeat("a", charsPastTheSlot),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rp := newTestRecordPage(t)
+
+			// The slot after the one written to is marked, so that a write that
+			// reached past its own slot shows up as that mark being gone rather
+			// than as a byte no test can name.
+			if err := rp.setSlotState(1, slotInUse); err != nil {
+				t.Fatalf("setSlotState() error = %v", err)
+			}
+
+			if err := rp.SetString(0, "name", tt.val); !errors.Is(err, ErrStringTooLong) {
+				t.Errorf("error = %v, want %v", err, ErrStringTooLong)
+			}
+
+			slotOffset, err := rp.slotOffset(1)
+			if err != nil {
+				t.Fatalf("slotOffset() error = %v", err)
+			}
+			flag, err := rp.tx.GetInt(rp.blk, slotOffset)
+			if err != nil {
+				t.Fatalf("GetInt() error = %v", err)
+			}
+			if slotState(flag) != slotInUse {
+				t.Errorf("the slot after the one written to is %d, want %d: the write reached past its own slot", flag, slotInUse)
 			}
 		})
 	}

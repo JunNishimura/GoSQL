@@ -3,6 +3,7 @@ package recordmanager
 import (
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -14,6 +15,14 @@ var ErrSlotOutOfRange = errors.New("slot out of range")
 // ErrFieldTypeMismatch reports reading or writing a field as one type when the
 // schema says it is another.
 var ErrFieldTypeMismatch = errors.New("field type mismatch")
+
+// ErrStringTooLong reports writing a string of more characters than the varchar
+// field it is written to was declared to hold.
+var ErrStringTooLong = errors.New("string too long")
+
+// ErrSlotWiderThanBlock reports a layout whose slot does not fit in a block, so
+// that no block can hold even one record of it.
+var ErrSlotWiderThanBlock = errors.New("slot wider than block")
 
 // ErrNoSuchSlot reports that a search reached the end of the block without
 // finding a slot in the state it was looking for. It is the ordinary way a walk
@@ -50,11 +59,27 @@ type RecordPage struct {
 // NewRecordPage takes hold of blk on behalf of tx and reads it as slots of the
 // shape layout gives.
 //
+// A layout whose slot is wider than a block is refused. Such a page could hold
+// no records at all, since slot 0 alone already runs past the end of the block,
+// and every call on it would fail one at a time for that reason. Saying so once
+// here also stops the one caller that would not fail: TableScan.MoveToNewRecord
+// reads "no free slot in this block" as "append another block and look again",
+// and against a layout nothing fits in it would do that until the disk filled.
+//
+// The check comes before the pin so that a refusal leaves the block as it was
+// found. Pinning and then refusing would hold a buffer on behalf of a page
+// that was never handed out, and nothing would be left holding the page to
+// give it back.
+//
 // The block is pinned here because a record page is only useful while the block
 // it stands for is in a buffer, and pinning at each read would leave the page
 // working on a block that may have been replaced between two of them. The pin
 // is the transaction's to give back, at Unpin or when it ends.
 func NewRecordPage(tx *transaction.Transaction, blk *filemanager.BlockId, layout *Layout) (*RecordPage, error) {
+	if slotSize := layout.SlotSize(); slotSize > tx.BlockSize() {
+		return nil, fmt.Errorf("read %s as records of %d bytes, which a block of %d bytes cannot hold one of: %w", blk, slotSize, tx.BlockSize(), ErrSlotWiderThanBlock)
+	}
+
 	if err := tx.Pin(blk); err != nil {
 		return nil, fmt.Errorf("pin %s to read it as records: %w", blk, err)
 	}
@@ -277,10 +302,33 @@ func (rp *RecordPage) GetString(slot int, fieldName string) (string, error) {
 }
 
 // SetString writes val to the varchar field fieldName of slot.
+//
+// A string of more characters than the field was declared to hold is refused
+// rather than written. The field is given room for its limit in the widest
+// encoding there is, so a string a little over it would be written and read
+// back intact, and the schema would be the only thing saying anything was
+// wrong; a string far enough over reaches past the field and overwrites
+// whatever follows it in the block. Both are the same violation of the width
+// the schema declared, so both are refused here.
+//
+// The count is of characters rather than bytes because that is what a varchar's
+// length means. Counting bytes would refuse strings that fit, since a character
+// may take up to four of them.
 func (rp *RecordPage) SetString(slot int, fieldName string, val string) error {
 	pos, err := rp.fieldPos(slot, fieldName, FieldTypeVarchar)
 	if err != nil {
 		return err
+	}
+
+	// Length cannot fail here: fieldPos has already looked the field up in the
+	// same schema. The error is returned rather than dropped so that this stays
+	// true if it grows another reason to.
+	length, err := rp.layout.schema.Length(fieldName)
+	if err != nil {
+		return err
+	}
+	if count := utf8.RuneCountInString(val); count > length {
+		return fmt.Errorf("write %d characters to field %q, which holds %d: %w", count, fieldName, length, ErrStringTooLong)
 	}
 
 	return rp.tx.SetString(rp.blk, pos, val)
