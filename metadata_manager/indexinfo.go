@@ -95,6 +95,19 @@ func NewIndexInfo(
 		return nil, err
 	}
 
+	// An index whose own records do not fit in a block is refused here. A record
+	// page would refuse it too, so it could never be opened, but the cost of a
+	// search through it is asked before it is opened, and that is worked out by
+	// dividing by how many of its records go in a block. For this one that is
+	// none, and dividing by it would take the database down rather than report
+	// an index nobody can have.
+	if slotSize := indexLayout.SlotSize(); slotSize > tx.BlockSize() {
+		return nil, fmt.Errorf(
+			"describe an index on field %q, whose records are %d bytes and a block of %d bytes cannot hold one of: %w",
+			fieldName, slotSize, tx.BlockSize(), recordmanager.ErrSlotWiderThanBlock,
+		)
+	}
+
 	return &IndexInfo{
 		tx:              tx,
 		indexName:       indexName,
@@ -148,4 +161,67 @@ func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*re
 	}
 
 	return recordmanager.NewLayout(schema), nil
+}
+
+// BlocksAccessed is how many blocks a search through this index touches.
+//
+// It is the size of the index in blocks: one index record stands for one record
+// of the table, so how many blocks they take follows from how many of them go
+// in one. That is worked out from the index's own records rather than the
+// table's, and those are three fields against however many the table has, which
+// is the whole reason a search through an index beats reading the table.
+//
+// Reading all of it is the most a search could cost. What a real index charges
+// is less, and by how much is its own business: a hash index reads the one
+// bucket a key falls in, a B-tree the one path down to it. Until there is an
+// index to ask, this stands in for the answer, and it errs towards saying an
+// index costs more than it does.
+//
+// The division rounds up, since records that fill a block and start another are
+// in two blocks, and the second is read like the first.
+func (info *IndexInfo) BlocksAccessed() int {
+	recordsPerBlock := info.tx.BlockSize() / info.indexLayout.SlotSize()
+
+	return ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
+}
+
+// RecordsOutput is how many records a search through this index gives back.
+//
+// A search is for one value, so what comes back is the records holding that
+// value rather than the whole table: the records spread over the values the
+// indexed field takes, and one value's worth of them.
+//
+// This is what an index is for. A table of a hundred records whose indexed
+// field takes thirty-four different values gives back two of them per search,
+// and it is against that two that reading all hundred is weighed.
+func (info *IndexInfo) RecordsOutput() int {
+	return info.tableStatistics.RecordsOutput() / info.tableStatistics.DistinctValues(info.fieldName)
+}
+
+// DistinctValues is how many different values fieldName takes among the records
+// a search through this index gives back.
+//
+// For the indexed field it is one. Every record that came back was filed under
+// the value that was searched for, so that field holds that one value across
+// all of them however many the table holds.
+//
+// For any other field it is whatever the table says. Picking out the records
+// that share one value of the indexed field says nothing about how varied some
+// other field is among them, and this layer has no way to find out; taking the
+// table's answer amounts to supposing the two fields have nothing to do with
+// each other, which is the most that can be said without looking.
+func (info *IndexInfo) DistinctValues(fieldName string) int {
+	if fieldName == info.fieldName {
+		return 1
+	}
+
+	return info.tableStatistics.DistinctValues(fieldName)
+}
+
+// ceilDivide is dividend/divisor rounded up.
+//
+// Blocks are counted this way because a part of a block is read as a whole one:
+// records that fill one and start another are in two, and both are read.
+func ceilDivide(dividend int, divisor int) int {
+	return (dividend + divisor - 1) / divisor
 }
