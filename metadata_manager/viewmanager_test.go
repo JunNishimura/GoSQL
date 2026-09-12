@@ -178,6 +178,78 @@ func TestViewManagerCreateView(t *testing.T) {
 	})
 }
 
+// createTestViews puts two views in the catalog, so that asking for one is a
+// matter of picking a row out rather than of reading the only row there is.
+func createTestViews(t *testing.T, tx *transaction.Transaction, vm *ViewManager) {
+	t.Helper()
+
+	if err := vm.CreateView(tx, testViewName, testViewDefinition); err != nil {
+		t.Fatalf("CreateView(%q) error = %v", testViewName, err)
+	}
+	if err := vm.CreateView(tx, otherViewName, otherViewDefinition); err != nil {
+		t.Fatalf("CreateView(%q) error = %v", otherViewName, err)
+	}
+}
+
+func TestViewManagerGetViewDefinition(t *testing.T) {
+	tests := []struct {
+		name     string
+		viewName string
+		want     string
+	}{
+		{
+			name:     "given two views in the catalog, when the first one is asked for, then its own definition comes back",
+			viewName: testViewName,
+			want:     testViewDefinition,
+		},
+		{
+			name:     "given two views in the catalog, when the second one is asked for, then its own definition comes back",
+			viewName: otherViewName,
+			want:     otherViewDefinition,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			vm := newTestViewManager(t, tx)
+			createTestViews(t, tx, vm)
+
+			got, found, err := vm.GetViewDefinition(tx, tt.viewName)
+			if err != nil {
+				t.Fatalf("GetViewDefinition() error = %v", err)
+			}
+			if !found {
+				t.Fatalf("GetViewDefinition() found = false, want true: the catalog holds %q", tt.viewName)
+			}
+			if got != tt.want {
+				t.Errorf("GetViewDefinition() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// A name the catalog has no row for is not a failure. A query naming a
+	// table asks this first, and for every table that is not a view the answer
+	// is no. Saying so through the error would make the usual case the one the
+	// caller handles as a fault.
+	t.Run("given a catalog that holds other views, when a name it has no row for is asked for, then it reports that there is no such view and no error", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		vm := newTestViewManager(t, tx)
+		createTestViews(t, tx, vm)
+
+		got, found, err := vm.GetViewDefinition(tx, "no_such_view")
+		if err != nil {
+			t.Fatalf("GetViewDefinition() error = %v, want nil: a name that is not a view is not a failure", err)
+		}
+		if found {
+			t.Errorf("GetViewDefinition() found = true, want false")
+		}
+		if got != "" {
+			t.Errorf("GetViewDefinition() = %q, want the empty string when there is no view", got)
+		}
+	})
+}
+
 // A name or a definition the catalog cannot hold is refused here rather than
 // left to the record page. The record page would refuse it too, but its message
 // names a field of the view catalog, and what the caller passed was a view.

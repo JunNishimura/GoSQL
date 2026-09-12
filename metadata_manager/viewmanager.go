@@ -128,6 +128,55 @@ func (vm *ViewManager) CreateView(tx *transaction.Transaction, viewName string, 
 	return ts.SetString(viewDefinitionField, definition)
 }
 
+// GetViewDefinition returns the query viewName stands for, and whether the
+// catalog holds a row for that name at all.
+//
+// A name with no row is not a failure, which is why it comes back as false
+// rather than as an error. A query that names a table asks this first, and for
+// every name that is a table rather than a view the answer is no. Reporting
+// that through the error would leave the caller handling the usual case as a
+// fault, and unable to tell it apart from a catalog it could not read.
+//
+// The whole catalog is walked, because the rows are not in any order: a view is
+// written wherever the catalog has a free slot.
+func (vm *ViewManager) GetViewDefinition(tx *transaction.Transaction, viewName string) (string, bool, error) {
+	layout, err := vm.tableManager.GetLayout(tx, viewCatalogName)
+	if err != nil {
+		return "", false, err
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, viewCatalogName, layout)
+	if err != nil {
+		return "", false, err
+	}
+	defer ts.Close()
+
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			return "", false, err
+		}
+		if !hasNext {
+			return "", false, nil
+		}
+
+		name, err := ts.GetString(viewNameField)
+		if err != nil {
+			return "", false, err
+		}
+		if name != viewName {
+			continue
+		}
+
+		definition, err := ts.GetString(viewDefinitionField)
+		if err != nil {
+			return "", false, err
+		}
+
+		return definition, true, nil
+	}
+}
+
 // checkViewFits refuses a name or a definition the view catalog cannot hold.
 //
 // A record page would refuse either of them on its own, and nothing would be
