@@ -26,6 +26,15 @@ func NewRecordID(blkNum, slot int) *RecordID {
 	}
 }
 
+// BlockNumber is the block of the table's file the record sits in.
+//
+// It is what lets a caller outside this package tell how far through a table a
+// record is, which is how the blocks a table takes up are counted: the last
+// record found is in the last block that holds anything.
+func (r *RecordID) BlockNumber() int {
+	return r.blkNum
+}
+
 // Equals reports whether other names the same slot of the same block.
 func (r *RecordID) Equals(other *RecordID) bool {
 	return r.blkNum == other.blkNum && r.slot == other.slot

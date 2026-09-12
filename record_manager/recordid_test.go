@@ -73,6 +73,33 @@ func TestRecordIDEquals(t *testing.T) {
 	}
 }
 
+func TestRecordIDBlockNumber(t *testing.T) {
+	tests := []struct {
+		name   string
+		blkNum int
+		want   int
+	}{
+		{
+			name:   "given a record id of block three, when its block is asked for, then it is that three",
+			blkNum: 3,
+			want:   3,
+		},
+		{
+			name:   "given a record id of block zero, when its block is asked for, then it is that zero rather than nothing",
+			blkNum: 0,
+			want:   0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NewRecordID(tt.blkNum, 2).BlockNumber(); got != tt.want {
+				t.Errorf("BlockNumber() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRecordIDString(t *testing.T) {
 	tests := []struct {
 		name   string
