@@ -1,6 +1,11 @@
 package metadatamanager
 
-import "sync"
+import (
+	"sync"
+
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
+)
 
 // StatisticsManager keeps the statistics a planner costs tables by, one set per
 // table, and works out when they are old enough to gather again.
@@ -44,5 +49,109 @@ func NewStatisticsManager(tableManager *TableManager) *StatisticsManager {
 	return &StatisticsManager{
 		tableManager: tableManager,
 		statistics:   map[string]*TableStatistics{},
+	}
+}
+
+// refreshStatistics measures every table the table catalog names and keeps what
+// it finds, throwing away whatever was held before.
+//
+// What is kept afterwards is what the catalogs say now, rather than that laid
+// over what was there. A table that has been dropped is out of the catalog, so
+// it falls out here too; left in, its numbers would last as long as the process
+// did, and a table made under the same name later would be costed by them.
+//
+// Nothing is kept until all of it has been gathered. A run that fails partway
+// leaves the old numbers, which are merely old, rather than a set that is half
+// one measurement and half another.
+//
+// The catalogs are measured along with everything else, since the table catalog
+// names them too. A plan that reads them is costed like any other.
+//
+// It takes no lock. The caller holds one already, and a Go mutex cannot be
+// taken twice by the same goroutine.
+func (sm *StatisticsManager) refreshStatistics(tx *transaction.Transaction) error {
+	layout, err := sm.tableManager.GetLayout(tx, tableCatalogName)
+	if err != nil {
+		return err
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, layout)
+	if err != nil {
+		return err
+	}
+	defer ts.Close()
+
+	gathered := map[string]*TableStatistics{}
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			return err
+		}
+		if !hasNext {
+			sm.statistics = gathered
+			sm.callsSinceRefresh = 0
+
+			return nil
+		}
+
+		tableName, err := ts.GetString(tableNameField)
+		if err != nil {
+			return err
+		}
+
+		tableLayout, err := sm.tableManager.GetLayout(tx, tableName)
+		if err != nil {
+			return err
+		}
+
+		stats, err := sm.calculateTableStatistics(tx, tableName, tableLayout)
+		if err != nil {
+			return err
+		}
+
+		gathered[tableName] = stats
+	}
+}
+
+// calculateTableStatistics reads a table through to count what is in it.
+//
+// There is no cheaper way to it. Nothing counts records as they are written, so
+// the only way to know how many there are is to walk past all of them, which is
+// what makes gathering expensive enough to be worth doing rarely.
+//
+// The blocks are counted from the last record found rather than from the file's
+// length, so a table whose last blocks were emptied is counted by what is left
+// in it. The count starts at one because a table has the block its scan opens
+// even with nothing in it, and reading it costs that block.
+//
+// It takes no lock, for the reason refreshStatistics gives.
+func (sm *StatisticsManager) calculateTableStatistics(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) (*TableStatistics, error) {
+	ts, err := recordmanager.NewTableScan(tx, tableName, layout)
+	if err != nil {
+		return nil, err
+	}
+	defer ts.Close()
+
+	numRecords := 0
+	numBlocks := 1
+
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			return nil, err
+		}
+		if !hasNext {
+			return NewTableStatistics(numBlocks, numRecords), nil
+		}
+
+		numRecords++
+
+		rid, err := ts.CurrentRecordID()
+		if err != nil {
+			return nil, err
+		}
+		if blocks := rid.BlockNumber() + 1; blocks > numBlocks {
+			numBlocks = blocks
+		}
 	}
 }

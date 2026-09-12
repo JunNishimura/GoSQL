@@ -1,6 +1,7 @@
 package metadatamanager
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -128,6 +129,36 @@ func readFieldCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManage
 			fieldOffset: mustGetInt(t, ts, fieldOffsetField),
 		}
 		rows = append(rows, row)
+	}
+}
+
+// insertTestRecords writes count records into the test table, so that measuring
+// it has something to count. The values differ from one record to the next only
+// so that a record written over another would show.
+func insertTestRecords(t *testing.T, tx *transaction.Transaction, tm *TableManager, count int) {
+	t.Helper()
+
+	layout, err := tm.GetLayout(tx, testTableName)
+	if err != nil {
+		t.Fatalf("GetLayout(%q) error = %v", testTableName, err)
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, testTableName, layout)
+	if err != nil {
+		t.Fatalf("NewTableScan(%q) error = %v", testTableName, err)
+	}
+	defer ts.Close()
+
+	for i := range count {
+		if err := ts.MoveToNewRecord(); err != nil {
+			t.Fatalf("MoveToNewRecord() error = %v", err)
+		}
+		if err := ts.SetInt("id", int32(i)); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+		if err := ts.SetString("name", fmt.Sprintf("name%d", i)); err != nil {
+			t.Fatalf("SetString() error = %v", err)
+		}
 	}
 }
 
