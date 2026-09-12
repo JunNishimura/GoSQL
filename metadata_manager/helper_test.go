@@ -13,8 +13,15 @@ import (
 )
 
 const (
-	testLogFile    = "test.log"
-	testBlockSize  = 400
+	testLogFile = "test.log"
+	// testBlockSize has to hold a slot of the widest catalog, which is the view
+	// catalog at 476 bytes, since a record page refuses a layout whose slot
+	// does not fit in a block.
+	//
+	// It is not raised any further than that. A block that took every record of
+	// every test would leave the paths that cross from one block to the next
+	// unwalked, and those are where a scan is worth testing at all.
+	testBlockSize  = 800
 	testNumBuffers = 8
 )
 
