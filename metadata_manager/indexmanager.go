@@ -137,3 +137,107 @@ func checkIndexFits(indexName string, tableName string, fieldName string) error 
 
 	return checkNameFits("field", fieldName)
 }
+
+// GetIndexInfo returns the indexes on tableName, one per field, filed under the
+// field each is on.
+//
+// A table with no index is not a failure but the usual case: most tables have
+// none, and a planner asks about every table it reads. What comes back then is
+// an empty map, which is also what comes back for a table the database does not
+// have, since neither has a row in the index catalog.
+//
+// The whole catalog is walked, because every table's indexes are kept in it
+// together and a table's rows are not kept next to each other.
+//
+// What is read of the indexed table is read once and used for every index on
+// it, rather than once per index. The answers cannot differ between two rows
+// about the same table, and reading the table's measurements means reading the
+// table through.
+func (im *IndexManager) GetIndexInfo(tx *transaction.Transaction, tableName string) (map[string]*IndexInfo, error) {
+	layout, err := im.tableManager.GetLayout(tx, indexCatalogName)
+	if err != nil {
+		return nil, err
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, indexCatalogName, layout)
+	if err != nil {
+		return nil, err
+	}
+	defer ts.Close()
+
+	indexes := map[string]*IndexInfo{}
+
+	// These stay nil until a row for this table turns up, so that a table with
+	// no index is answered without reading the table at all. A nil schema is
+	// what says they have not been read yet; they are read together and there
+	// is no schema for a table that could not be measured.
+	var tableSchema *recordmanager.Schema
+	var tableStatistics *TableStatistics
+
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			return nil, err
+		}
+		if !hasNext {
+			return indexes, nil
+		}
+
+		name, err := ts.GetString(tableNameField)
+		if err != nil {
+			return nil, err
+		}
+		if name != tableName {
+			continue
+		}
+
+		if tableSchema == nil {
+			tableSchema, tableStatistics, err = im.describeIndexedTable(tx, tableName)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		indexName, err := ts.GetString(indexNameField)
+		if err != nil {
+			return nil, err
+		}
+		fieldName, err := ts.GetString(fieldNameField)
+		if err != nil {
+			return nil, err
+		}
+
+		info, err := NewIndexInfo(tx, indexName, fieldName, tableSchema, tableStatistics)
+		if err != nil {
+			return nil, err
+		}
+
+		indexes[fieldName] = info
+	}
+}
+
+// describeIndexedTable reads the two things an index on tableName is described
+// and costed from: the shape of the table's records, and its measurements.
+//
+// Both are about the table rather than the index. The index catalog says only
+// that an index exists; how much of the table one search through it saves is
+// the table's to answer, and that is why this manager holds a statistics
+// manager as well as a table manager.
+//
+// The statistics may be gathered here, which reads every table in the database,
+// and it happens while the caller has a scan of the index catalog open. That
+// costs buffers rather than correctness: no lock of this package is held across
+// it, since this manager holds none of its own.
+func (im *IndexManager) describeIndexedTable(tx *transaction.Transaction, tableName string) (*recordmanager.Schema, *TableStatistics, error) {
+	layout, err := im.tableManager.GetLayout(tx, tableName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	statistics, err := im.statisticsManager.GetStatistics(tx, tableName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return layout.Schema(), statistics, nil
+}
