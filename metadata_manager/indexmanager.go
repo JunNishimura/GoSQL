@@ -1,6 +1,9 @@
 package metadatamanager
 
 import (
+	"fmt"
+	"unicode/utf8"
+
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -80,4 +83,81 @@ func (im *IndexManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	}
 
 	return im.tableManager.CreateTable(tx, indexCatalogName, schema)
+}
+
+// CreateIndex writes down that an index called indexName is on fieldName of
+// tableName.
+//
+// That row is all there is to registering an index here. What it takes to build
+// the index itself, and to keep it up as records are written, is not this
+// layer's: what is kept here is that the index exists, so that a planner asking
+// what a table has to go through finds it.
+func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName string, tableName string, fieldName string) error {
+	if err := checkIndexFits(indexName, tableName, fieldName); err != nil {
+		return err
+	}
+
+	layout, err := im.tableManager.GetLayout(tx, indexCatalogName)
+	if err != nil {
+		return err
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, indexCatalogName, layout)
+	if err != nil {
+		return err
+	}
+	defer ts.Close()
+
+	if err := ts.MoveToNewRecord(); err != nil {
+		return err
+	}
+	if err := ts.SetString(indexNameField, indexName); err != nil {
+		return err
+	}
+	if err := ts.SetString(tableNameField, tableName); err != nil {
+		return err
+	}
+
+	return ts.SetString(fieldNameField, fieldName)
+}
+
+// checkIndexFits refuses any of the three names the index catalog cannot hold.
+//
+// A record page would refuse them on its own, and nothing would be half written
+// even then, since an index is one row. What is gained by saying so here is
+// what the caller is told: the record page speaks of a field of the index
+// catalog, and what the caller passed was an index, a table and a field.
+//
+// The index's own name has to fit twice over. An index is kept as a table, and
+// that table is named by the index, so the name goes in the table catalog as
+// well as here.
+func checkIndexFits(indexName string, tableName string, fieldName string) error {
+	named := []struct {
+		what string
+		name string
+	}{
+		{
+			what: "index",
+			name: indexName,
+		},
+		{
+			what: "table",
+			name: tableName,
+		},
+		{
+			what: "field",
+			name: fieldName,
+		},
+	}
+
+	for _, n := range named {
+		if count := utf8.RuneCountInString(n.name); count > maxNameLength {
+			return fmt.Errorf(
+				"create an index on the %s named %q, which is %d characters and the catalogs hold %d: %w",
+				n.what, n.name, count, maxNameLength, ErrNameTooLong,
+			)
+		}
+	}
+
+	return nil
 }

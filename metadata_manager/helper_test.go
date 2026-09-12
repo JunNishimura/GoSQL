@@ -273,6 +273,52 @@ func readViewCatalog(t *testing.T, tx *transaction.Transaction, vm *ViewManager)
 	}
 }
 
+// indexCatalogRow is one row of the index catalog, read back out.
+type indexCatalogRow struct {
+	indexName string
+	tableName string
+	fieldName string
+}
+
+// readIndexCatalog reads every row of the index catalog, in the order the rows
+// were written.
+//
+// Its layout is asked of the table manager the way the index manager asks for
+// it, rather than built here, so that a test cannot pass by reading through a
+// layout the manager never wrote through.
+func readIndexCatalog(t *testing.T, tx *transaction.Transaction, im *IndexManager) []indexCatalogRow {
+	t.Helper()
+
+	layout, err := im.tableManager.GetLayout(tx, indexCatalogName)
+	if err != nil {
+		t.Fatalf("GetLayout(%q) error = %v", indexCatalogName, err)
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, indexCatalogName, layout)
+	if err != nil {
+		t.Fatalf("NewTableScan(%q) error = %v", indexCatalogName, err)
+	}
+	defer ts.Close()
+
+	rows := []indexCatalogRow{}
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !hasNext {
+			return rows
+		}
+
+		row := indexCatalogRow{
+			indexName: mustGetString(t, ts, indexNameField),
+			tableName: mustGetString(t, ts, tableNameField),
+			fieldName: mustGetString(t, ts, fieldNameField),
+		}
+		rows = append(rows, row)
+	}
+}
+
 func mustGetString(t *testing.T, ts *recordmanager.TableScan, fieldName string) string {
 	t.Helper()
 

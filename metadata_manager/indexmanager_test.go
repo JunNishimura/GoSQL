@@ -1,7 +1,9 @@
 package metadatamanager
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
@@ -107,4 +109,126 @@ func TestIndexManagerCreateCatalogTable(t *testing.T) {
 			},
 		})
 	})
+}
+
+// The second index the tests need, on the other field of the test table. Two
+// indexes of one table is the ordinary case: a table is indexed on whichever
+// of its fields queries ask about.
+const (
+	otherIndexName      = "name_index"
+	otherIndexFieldName = "name"
+)
+
+// newTestIndexManagerWithCatalog builds an index manager whose catalog exists,
+// which is where creating an index starts from.
+func newTestIndexManagerWithCatalog(t *testing.T, tx *transaction.Transaction) *IndexManager {
+	t.Helper()
+
+	im := newTestIndexManager(t, tx)
+	if err := im.CreateCatalogTable(tx); err != nil {
+		t.Fatalf("CreateCatalogTable() error = %v", err)
+	}
+
+	return im
+}
+
+func TestIndexManagerCreateIndex(t *testing.T) {
+	t.Run("when an index is created, then the index catalog holds its name, the table it is on and the field", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		im := newTestIndexManagerWithCatalog(t, tx)
+
+		if err := im.CreateIndex(tx, testIndexName, testTableName, testIndexFieldName); err != nil {
+			t.Fatalf("CreateIndex() error = %v", err)
+		}
+
+		want := []indexCatalogRow{
+			{
+				indexName: testIndexName,
+				tableName: testTableName,
+				fieldName: testIndexFieldName,
+			},
+		}
+		if got := readIndexCatalog(t, tx, im); !slices.Equal(got, want) {
+			t.Errorf("the index catalog holds %+v, want %+v", got, want)
+		}
+	})
+
+	// A table may be indexed on more than one of its fields, so a second index
+	// has to sit alongside the first rather than replace it.
+	t.Run("given an index the catalog already holds, when a second one on the same table is created, then the catalog holds both", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		im := newTestIndexManagerWithCatalog(t, tx)
+
+		if err := im.CreateIndex(tx, testIndexName, testTableName, testIndexFieldName); err != nil {
+			t.Fatalf("CreateIndex(%q) error = %v", testIndexName, err)
+		}
+		if err := im.CreateIndex(tx, otherIndexName, testTableName, otherIndexFieldName); err != nil {
+			t.Fatalf("CreateIndex(%q) error = %v", otherIndexName, err)
+		}
+
+		want := []indexCatalogRow{
+			{
+				indexName: testIndexName,
+				tableName: testTableName,
+				fieldName: testIndexFieldName,
+			},
+			{
+				indexName: otherIndexName,
+				tableName: testTableName,
+				fieldName: otherIndexFieldName,
+			},
+		}
+		if got := readIndexCatalog(t, tx, im); !slices.Equal(got, want) {
+			t.Errorf("the index catalog holds %+v, want %+v", got, want)
+		}
+	})
+}
+
+// All three of what an index is registered under are names, and the catalog
+// holds each of them to the same length. The index's own name is held to it
+// twice over, since an index is kept as a table and that table is named by it.
+func TestIndexManagerRejectsANameLongerThanTheCatalogHolds(t *testing.T) {
+	overlongName := strings.Repeat("a", maxNameLength+1)
+
+	tests := []struct {
+		name      string
+		indexName string
+		tableName string
+		fieldName string
+	}{
+		{
+			name:      "given an index name one character over what the catalog holds, when the index is created, then it reports ErrNameTooLong",
+			indexName: overlongName,
+			tableName: testTableName,
+			fieldName: testIndexFieldName,
+		},
+		{
+			name:      "given a table name one character over what the catalog holds, when an index on it is created, then it reports ErrNameTooLong",
+			indexName: testIndexName,
+			tableName: overlongName,
+			fieldName: testIndexFieldName,
+		},
+		{
+			name:      "given a field name one character over what the catalog holds, when an index on it is created, then it reports ErrNameTooLong",
+			indexName: testIndexName,
+			tableName: testTableName,
+			fieldName: overlongName,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			im := newTestIndexManagerWithCatalog(t, tx)
+
+			err := im.CreateIndex(tx, tt.indexName, tt.tableName, tt.fieldName)
+			if !errors.Is(err, ErrNameTooLong) {
+				t.Errorf("error = %v, want %v", err, ErrNameTooLong)
+			}
+
+			if rows := readIndexCatalog(t, tx, im); len(rows) != 0 {
+				t.Errorf("the index catalog holds %+v, want nothing: the refused index was written anyway", rows)
+			}
+		})
+	}
 }

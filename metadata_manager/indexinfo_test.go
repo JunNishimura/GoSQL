@@ -8,8 +8,9 @@ import (
 )
 
 // The index the tests below describe: one on the int field of the test table.
+// The name is short enough for the catalogs to hold, as any real one has to be.
 const (
-	testIndexName      = "test_table_id_index"
+	testIndexName      = "id_index"
 	testIndexFieldName = "id"
 )
 
