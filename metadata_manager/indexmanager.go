@@ -1,9 +1,6 @@
 package metadatamanager
 
 import (
-	"fmt"
-	"unicode/utf8"
-
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -123,41 +120,20 @@ func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName strin
 
 // checkIndexFits refuses any of the three names the index catalog cannot hold.
 //
-// A record page would refuse them on its own, and nothing would be half written
-// even then, since an index is one row. What is gained by saying so here is
-// what the caller is told: the record page speaks of a field of the index
-// catalog, and what the caller passed was an index, a table and a field.
+// All three are looked at before the row is written, so that a refusal names
+// the one the caller has to change rather than the first the record page
+// happens to reach.
 //
 // The index's own name has to fit twice over. An index is kept as a table, and
 // that table is named by the index, so the name goes in the table catalog as
 // well as here.
 func checkIndexFits(indexName string, tableName string, fieldName string) error {
-	named := []struct {
-		what string
-		name string
-	}{
-		{
-			what: "index",
-			name: indexName,
-		},
-		{
-			what: "table",
-			name: tableName,
-		},
-		{
-			what: "field",
-			name: fieldName,
-		},
+	if err := checkNameFits("index", indexName); err != nil {
+		return err
+	}
+	if err := checkNameFits("table", tableName); err != nil {
+		return err
 	}
 
-	for _, n := range named {
-		if count := utf8.RuneCountInString(n.name); count > maxNameLength {
-			return fmt.Errorf(
-				"create an index on the %s named %q, which is %d characters and the catalogs hold %d: %w",
-				n.what, n.name, count, maxNameLength, ErrNameTooLong,
-			)
-		}
-	}
-
-	return nil
+	return checkNameFits("field", fieldName)
 }

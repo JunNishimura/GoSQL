@@ -184,15 +184,15 @@ func (vm *ViewManager) GetViewDefinition(tx *transaction.Transaction, viewName s
 // here is what the caller is told: the record page speaks of a field of the
 // view catalog, and what the caller passed was a view.
 //
-// The counts are of characters because that is what the catalog's varchar
-// fields are measured in.
+// The definition is not a name and has a limit of its own, so it is counted
+// here rather than through checkNameFits.
 func checkViewFits(viewName string, definition string) error {
-	if count := utf8.RuneCountInString(viewName); count > maxNameLength {
-		return fmt.Errorf("create a view named %q, which is %d characters and the catalog holds %d: %w", viewName, count, maxNameLength, ErrNameTooLong)
+	if err := checkNameFits("view", viewName); err != nil {
+		return err
 	}
 
 	if count := utf8.RuneCountInString(definition); count > maxViewDefinitionLength {
-		return fmt.Errorf("create the view %q, whose definition is %d characters and the catalog holds %d: %w", viewName, count, maxViewDefinitionLength, ErrViewDefinitionTooLong)
+		return fmt.Errorf("the definition of view %q is %d characters, and the catalog holds %d: %w", viewName, count, maxViewDefinitionLength, ErrViewDefinitionTooLong)
 	}
 
 	return nil

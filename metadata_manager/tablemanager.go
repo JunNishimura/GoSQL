@@ -3,15 +3,10 @@ package metadatamanager
 import (
 	"errors"
 	"fmt"
-	"unicode/utf8"
 
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
-
-// ErrNameTooLong reports a table or field name of more characters than the
-// catalogs were built to hold.
-var ErrNameTooLong = errors.New("name too long")
 
 // ErrTableNotFound reports a table the catalogs have no row for.
 var ErrTableNotFound = errors.New("table not found")
@@ -47,14 +42,6 @@ const (
 	// on disk keep being read at the offsets they were written to.
 	fieldOffsetField = "field_offset"
 )
-
-// maxNameLength is the longest table or field name the catalogs can hold.
-//
-// The catalogs are tables, so a name in them is a varchar, and a varchar takes
-// up the room its limit allows rather than the room its value needs. Raising
-// this is therefore paid for by every catalog record, whether or not any name
-// is that long.
-const maxNameLength = 16
 
 // TableManager is what the database knows about its own tables: which tables
 // exist, what fields each of them has, and where those fields sit in a record.
@@ -159,17 +146,14 @@ func (tm *TableManager) GetLayout(tx *transaction.Transaction, tableName string)
 // its own, but only once it reached the row carrying it, and by then the rows
 // ahead of it describe a table the catalogs half know about, which nothing
 // later has any reason to clean up.
-//
-// The count is of characters because that is what the catalogs' varchar fields
-// are measured in.
 func checkNames(tableName string, schema *recordmanager.Schema) error {
-	if count := utf8.RuneCountInString(tableName); count > maxNameLength {
-		return fmt.Errorf("create a table named %q, which is %d characters and the catalogs hold %d: %w", tableName, count, maxNameLength, ErrNameTooLong)
+	if err := checkNameFits("table", tableName); err != nil {
+		return err
 	}
 
 	for _, fieldName := range schema.Fields() {
-		if count := utf8.RuneCountInString(fieldName); count > maxNameLength {
-			return fmt.Errorf("create a field named %q, which is %d characters and the catalogs hold %d: %w", fieldName, count, maxNameLength, ErrNameTooLong)
+		if err := checkNameFits("field", fieldName); err != nil {
+			return err
 		}
 	}
 
