@@ -3,6 +3,7 @@ package metadatamanager
 import (
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
@@ -130,6 +131,71 @@ func readFieldCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManage
 		}
 		rows = append(rows, row)
 	}
+}
+
+// testDatabase is what several transactions have in common: one set of files,
+// one log, one buffer pool, and the one lock table they arbitrate through.
+//
+// newTestTransaction gives every transaction a database to itself, which is
+// what keeps one test from reading another's catalogs. A test about what
+// happens when transactions meet needs the opposite of that, and this is it.
+type testDatabase struct {
+	fileManager   *filemanager.FileManager
+	logManager    *logmanager.LogManager
+	bufferManager *buffermanager.BufferManager
+	lockTable     *concurrencymanager.LockTable
+	nextTxNum     atomic.Int64
+}
+
+func newTestDatabase(t *testing.T) *testDatabase {
+	t.Helper()
+
+	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
+	if err != nil {
+		t.Fatalf("NewFileManager() error = %v", err)
+	}
+	lm, err := logmanager.NewLogManager(fm, testLogFile)
+	if err != nil {
+		t.Fatalf("NewLogManager() error = %v", err)
+	}
+	bm, err := buffermanager.NewBufferManager(fm, lm, testNumBuffers)
+	if err != nil {
+		t.Fatalf("NewBufferManager() error = %v", err)
+	}
+
+	return &testDatabase{
+		fileManager:   fm,
+		logManager:    lm,
+		bufferManager: bm,
+		lockTable:     concurrencymanager.NewLockTable(),
+	}
+}
+
+// newTransaction starts a transaction on the shared database, under a number no
+// other transaction of it has had.
+//
+// It reports by returning rather than through *testing.T, so that a goroutine
+// other than the test's own can call it. A Fatal from one of those does not
+// stop the test that started it, and leaves it passing on a run that failed.
+func (db *testDatabase) newTransaction() (*transaction.Transaction, error) {
+	return transaction.NewTransaction(
+		db.fileManager,
+		db.logManager,
+		db.bufferManager,
+		db.lockTable,
+		int(db.nextTxNum.Add(1)),
+	)
+}
+
+func (db *testDatabase) mustNewTransaction(t *testing.T) *transaction.Transaction {
+	t.Helper()
+
+	tx, err := db.newTransaction()
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+
+	return tx
 }
 
 // insertTestRecords writes count records into the test table, so that measuring

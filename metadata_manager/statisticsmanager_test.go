@@ -2,7 +2,9 @@ package metadatamanager
 
 import (
 	"errors"
+	"fmt"
 	"maps"
+	"sync"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -286,6 +288,89 @@ func TestStatisticsManagerGetStatistics(t *testing.T) {
 
 		if _, err := sm.GetStatistics(tx, "no_such_table"); !errors.Is(err, ErrTableNotFound) {
 			t.Errorf("error = %v, want %v", err, ErrTableNotFound)
+		}
+	})
+}
+
+// How many callers ask at once, and how many times each of them asks. The two
+// multiply out to more than callsBetweenRefreshes, so at least one gathering
+// happens while the other callers are waiting to be let in.
+const (
+	concurrentCallers = 4
+	callsPerCaller    = callsBetweenRefreshes/concurrentCallers + 10
+)
+
+// askForStatisticsRepeatedly asks about the test table over and over on a
+// transaction of its own, and reports by returning.
+//
+// It runs on a goroutine other than the test's, where *testing.T must not be
+// failed: a Fatal there stops that goroutine and leaves the test passing.
+func askForStatisticsRepeatedly(db *testDatabase, sm *StatisticsManager) error {
+	tx, err := db.newTransaction()
+	if err != nil {
+		return err
+	}
+
+	for range callsPerCaller {
+		stats, err := sm.GetStatistics(tx, testTableName)
+		if err != nil {
+			return err
+		}
+		if got := stats.RecordsOutput(); got != testTableRecordCount {
+			return fmt.Errorf("RecordsOutput() = %d, want %d", got, testTableRecordCount)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// One statistics manager serves the whole database, so several transactions
+// reach into the same map at once. Two goroutines writing a Go map is not a
+// race to be reasoned about afterwards but a crash, which is what the lock in
+// the manager is there for, and this is what says so.
+//
+// The table does not change while this runs, so every answer has to be the same
+// one. What the case is watching for is not a wrong number but a torn map, and
+// the run under -race is where that shows.
+func TestStatisticsManagerGetStatisticsUnderConcurrentCallers(t *testing.T) {
+	t.Run("given several transactions of one database asking at once, when between them they ask often enough to set a gathering off, then each of them is answered and all the answers agree", func(t *testing.T) {
+		db := newTestDatabase(t)
+		tm := mustNewTableManager(t)
+
+		setup := db.mustNewTransaction(t)
+		if err := tm.CreateCatalogTables(setup); err != nil {
+			t.Fatalf("CreateCatalogTables() error = %v", err)
+		}
+		if err := tm.CreateTable(setup, testTableName, newTestSchema(t)); err != nil {
+			t.Fatalf("CreateTable() error = %v", err)
+		}
+		insertTestRecords(t, setup, tm, testTableRecordCount)
+
+		// The writes are committed before anyone else reads, so that the locks
+		// they took are given back. Left open, the readers below would wait on
+		// them until the lock table gave up on their behalf.
+		if err := setup.Commit(); err != nil {
+			t.Fatalf("Commit() error = %v", err)
+		}
+
+		sm := NewStatisticsManager(tm)
+
+		errs := make([]error, concurrentCallers)
+		var wg sync.WaitGroup
+		for i := range concurrentCallers {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				errs[i] = askForStatisticsRepeatedly(db, sm)
+			}()
+		}
+		wg.Wait()
+
+		for i, err := range errs {
+			if err != nil {
+				t.Errorf("caller %d: %v", i, err)
+			}
 		}
 	})
 }

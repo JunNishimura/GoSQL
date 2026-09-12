@@ -33,8 +33,9 @@ jobs:
       - name: Build
         run: go build ./...
 
-      # -race: LogManager.Append and the BufferManager wait paths have
-      # concurrent tests, so data races are worth detecting here.
+      # -race: LogManager.Append, the BufferManager wait paths and the
+      # StatisticsManager have concurrent tests, so data races are worth
+      # detecting here.
       # -shuffle=on: surfaces tests that depend on execution order.
       - name: Test
         run: go test -race -shuffle=on ./...
