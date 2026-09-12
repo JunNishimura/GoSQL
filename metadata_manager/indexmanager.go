@@ -1,5 +1,19 @@
 package metadatamanager
 
+import (
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
+)
+
+// The index catalog is a table like the others, and holds one row per index.
+const indexCatalogName = "index_catalog"
+
+// indexNameField is what an index is called. It is the only field of the index
+// catalog this package has to name for itself: a row of that catalog says an
+// index is on a field of a table, and the other two of those are the table and
+// the field, which are named here the way they are named in every catalog.
+const indexNameField = "index_name"
+
 // IndexManager is what the database knows about its indexes: which field of
 // which table each one is on, and what going through it would cost.
 //
@@ -39,4 +53,31 @@ func NewIndexManager(tableManager *TableManager, statisticsManager *StatisticsMa
 		tableManager:      tableManager,
 		statisticsManager: statisticsManager,
 	}
+}
+
+// CreateCatalogTable makes the index catalog, which is an ordinary table and so
+// is made the way any other one is.
+//
+// It is apart from NewIndexManager for the reason the other catalog calls are
+// apart from their constructors: whether the database is new is the caller's to
+// know. Calling it on a database that already has an index catalog would write
+// a second row describing it.
+func (im *IndexManager) CreateCatalogTable(tx *transaction.Transaction) error {
+	schema := recordmanager.NewSchema()
+
+	// Adding a field cannot fail here, since the three names are fixed by this
+	// package and no two of them are the same. The error is returned rather than
+	// dropped so that this stays true if AddField grows another reason to refuse
+	// a field.
+	if err := schema.AddStringField(indexNameField, maxNameLength); err != nil {
+		return err
+	}
+	if err := schema.AddStringField(tableNameField, maxNameLength); err != nil {
+		return err
+	}
+	if err := schema.AddStringField(fieldNameField, maxNameLength); err != nil {
+		return err
+	}
+
+	return im.tableManager.CreateTable(tx, indexCatalogName, schema)
 }
