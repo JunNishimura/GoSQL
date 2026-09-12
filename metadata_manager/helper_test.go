@@ -131,6 +131,51 @@ func readFieldCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManage
 	}
 }
 
+// viewCatalogRow is one row of the view catalog, read back out.
+type viewCatalogRow struct {
+	viewName   string
+	definition string
+}
+
+// readViewCatalog reads every row of the view catalog, in the order the rows
+// were written.
+//
+// Unlike the other two catalogs, this one's layout is not held anywhere: the
+// view catalog is an ordinary table, so its layout comes back out of the table
+// catalog. Asking for it the way the view manager does keeps the helper from
+// asserting through a layout the manager never used.
+func readViewCatalog(t *testing.T, tx *transaction.Transaction, vm *ViewManager) []viewCatalogRow {
+	t.Helper()
+
+	layout, err := vm.tableManager.GetLayout(tx, viewCatalogName)
+	if err != nil {
+		t.Fatalf("GetLayout(%q) error = %v", viewCatalogName, err)
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, viewCatalogName, layout)
+	if err != nil {
+		t.Fatalf("NewTableScan(%q) error = %v", viewCatalogName, err)
+	}
+	defer ts.Close()
+
+	rows := []viewCatalogRow{}
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !hasNext {
+			return rows
+		}
+
+		row := viewCatalogRow{
+			viewName:   mustGetString(t, ts, viewNameField),
+			definition: mustGetString(t, ts, viewDefinitionField),
+		}
+		rows = append(rows, row)
+	}
+}
+
 func mustGetString(t *testing.T, ts *recordmanager.TableScan, fieldName string) string {
 	t.Helper()
 

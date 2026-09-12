@@ -1,9 +1,17 @@
 package metadatamanager
 
 import (
+	"errors"
+	"fmt"
+	"unicode/utf8"
+
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
+
+// ErrViewDefinitionTooLong reports a view definition of more characters than
+// the view catalog was built to hold.
+var ErrViewDefinitionTooLong = errors.New("view definition too long")
 
 // The view catalog is a table like the two the table manager keeps, and holds
 // one row per view.
@@ -82,4 +90,61 @@ func (vm *ViewManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	}
 
 	return vm.tableManager.CreateTable(tx, viewCatalogName, schema)
+}
+
+// CreateView writes down that viewName stands for definition.
+//
+// That row is all there is to creating a view. A view holds no records of its
+// own, so there is nothing here to make beyond the name and the text: whatever
+// the view reads is read from the tables its definition names, when a query
+// that names the view is run.
+//
+// The definition is not read or checked for sense, only for length. This layer
+// knows no SQL, and a definition that turns out not to parse is the caller's to
+// find out about when it comes to use it.
+func (vm *ViewManager) CreateView(tx *transaction.Transaction, viewName string, definition string) error {
+	if err := checkViewFits(viewName, definition); err != nil {
+		return err
+	}
+
+	layout, err := vm.tableManager.GetLayout(tx, viewCatalogName)
+	if err != nil {
+		return err
+	}
+
+	ts, err := recordmanager.NewTableScan(tx, viewCatalogName, layout)
+	if err != nil {
+		return err
+	}
+	defer ts.Close()
+
+	if err := ts.MoveToNewRecord(); err != nil {
+		return err
+	}
+	if err := ts.SetString(viewNameField, viewName); err != nil {
+		return err
+	}
+
+	return ts.SetString(viewDefinitionField, definition)
+}
+
+// checkViewFits refuses a name or a definition the view catalog cannot hold.
+//
+// A record page would refuse either of them on its own, and nothing would be
+// half written even then, since a view is one row. What is gained by saying so
+// here is what the caller is told: the record page speaks of a field of the
+// view catalog, and what the caller passed was a view.
+//
+// The counts are of characters because that is what the catalog's varchar
+// fields are measured in.
+func checkViewFits(viewName string, definition string) error {
+	if count := utf8.RuneCountInString(viewName); count > maxNameLength {
+		return fmt.Errorf("create a view named %q, which is %d characters and the catalog holds %d: %w", viewName, count, maxNameLength, ErrNameTooLong)
+	}
+
+	if count := utf8.RuneCountInString(definition); count > maxViewDefinitionLength {
+		return fmt.Errorf("create the view %q, whose definition is %d characters and the catalog holds %d: %w", viewName, count, maxViewDefinitionLength, ErrViewDefinitionTooLong)
+	}
+
+	return nil
 }
