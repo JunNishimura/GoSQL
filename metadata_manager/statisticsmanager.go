@@ -7,6 +7,18 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
+// callsBetweenRefreshes is how many tables may be asked about before every
+// table is measured over again.
+//
+// It counts calls rather than time or writes, because calls are the one thing
+// this layer sees. Nothing tells it when a table has grown, so how wrong the
+// numbers are is never known; how long they have been held is all there is to
+// go on, and this says how long is long enough.
+//
+// Raising it means costing plans by older numbers. Lowering it means reading
+// every table more often, and reading them is the whole of the cost here.
+const callsBetweenRefreshes = 100
+
 // StatisticsManager keeps the statistics a planner costs tables by, one set per
 // table, and works out when they are old enough to gather again.
 //
@@ -50,6 +62,52 @@ func NewStatisticsManager(tableManager *TableManager) *StatisticsManager {
 		tableManager: tableManager,
 		statistics:   map[string]*TableStatistics{},
 	}
+}
+
+// GetStatistics returns what is known about tableName.
+//
+// What comes back may be out of date, and that is what it is for. Nothing here
+// is told when a table changes, so keeping the numbers true would mean reading
+// the table on every call, which costs more than the plan it improves saves. A
+// plan costed by numbers that have drifted is a plan that may be slower than
+// the best one, never one that gives a wrong answer.
+//
+// A table nothing is held for is measured on its own rather than by gathering
+// everything. It is a table made since the last gathering, and reading every
+// other table again would tell the caller nothing it asked for.
+//
+// The lock is held across the whole call, a gathering included. Two things
+// follow, and both are the price of holding one set of numbers for the whole
+// database. The caller whose call happens to be the one that tips the count
+// pays for reading every table, however small its own query. And while that
+// runs, every other planner in the database waits here.
+func (sm *StatisticsManager) GetStatistics(tx *transaction.Transaction, tableName string) (*TableStatistics, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	sm.callsSinceRefresh++
+	if sm.callsSinceRefresh > callsBetweenRefreshes {
+		if err := sm.refreshStatistics(tx); err != nil {
+			return nil, err
+		}
+	}
+
+	if stats, ok := sm.statistics[tableName]; ok {
+		return stats, nil
+	}
+
+	layout, err := sm.tableManager.GetLayout(tx, tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	stats, err := sm.calculateTableStatistics(tx, tableName, layout)
+	if err != nil {
+		return nil, err
+	}
+	sm.statistics[tableName] = stats
+
+	return stats, nil
 }
 
 // refreshStatistics measures every table the table catalog names and keeps what

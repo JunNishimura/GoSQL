@@ -1,6 +1,7 @@
 package metadatamanager
 
 import (
+	"errors"
 	"maps"
 	"testing"
 
@@ -192,6 +193,99 @@ func TestStatisticsManagerRefreshStatistics(t *testing.T) {
 
 		if stats, ok := sm.statistics["dropped_table"]; ok {
 			t.Errorf("the statistics still hold dropped_table as %d blocks and %d records, want it gone", stats.BlocksAccessed(), stats.RecordsOutput())
+		}
+	})
+}
+
+func TestStatisticsManagerGetStatistics(t *testing.T) {
+	t.Run("given a table the statistics do not hold yet, when it is asked about, then it is measured and kept", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		sm := newTestStatisticsManager(t, tx)
+		insertTestRecords(t, tx, sm.tableManager, testTableRecordCount)
+
+		stats, err := sm.GetStatistics(tx, testTableName)
+		if err != nil {
+			t.Fatalf("GetStatistics() error = %v", err)
+		}
+
+		if got := stats.RecordsOutput(); got != testTableRecordCount {
+			t.Errorf("RecordsOutput() = %d, want %d", got, testTableRecordCount)
+		}
+		if _, ok := sm.statistics[testTableName]; !ok {
+			t.Error("the statistics do not hold the table that was just measured, want it kept for the next caller")
+		}
+	})
+
+	// Measuring costs a read of the whole table, so what is held is handed back
+	// rather than gathered again. That the answer is out of date is the point
+	// of holding it: a plan costed by it may be slower than the best one, and
+	// is not a wrong answer.
+	t.Run("given a table already measured, when it has grown and is asked about again, then the numbers already held come back", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		sm := newTestStatisticsManager(t, tx)
+
+		if _, err := sm.GetStatistics(tx, testTableName); err != nil {
+			t.Fatalf("GetStatistics() error = %v", err)
+		}
+
+		insertTestRecords(t, tx, sm.tableManager, testTableRecordCount)
+
+		stats, err := sm.GetStatistics(tx, testTableName)
+		if err != nil {
+			t.Fatalf("GetStatistics() error = %v", err)
+		}
+
+		if got := stats.RecordsOutput(); got != 0 {
+			t.Errorf("RecordsOutput() = %d, want 0: the table was measured again rather than read from what is held", got)
+		}
+	})
+
+	t.Run("when a table is asked about, then the count of calls since the last refresh goes up by one", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		sm := newTestStatisticsManager(t, tx)
+
+		if _, err := sm.GetStatistics(tx, testTableName); err != nil {
+			t.Fatalf("GetStatistics() error = %v", err)
+		}
+
+		if sm.callsSinceRefresh != 1 {
+			t.Errorf("callsSinceRefresh = %d, want 1", sm.callsSinceRefresh)
+		}
+	})
+
+	// The held numbers are never thrown away for being wrong, since nothing
+	// here is told when a table changes. They are thrown away for being old,
+	// and how old is counted in calls.
+	t.Run("given as many calls as go between refreshes, when one more is made, then every table is measured over and the count starts again", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		sm := newTestStatisticsManager(t, tx)
+
+		if _, err := sm.GetStatistics(tx, testTableName); err != nil {
+			t.Fatalf("GetStatistics() error = %v", err)
+		}
+
+		insertTestRecords(t, tx, sm.tableManager, testTableRecordCount)
+		sm.callsSinceRefresh = callsBetweenRefreshes
+
+		stats, err := sm.GetStatistics(tx, testTableName)
+		if err != nil {
+			t.Fatalf("GetStatistics() error = %v", err)
+		}
+
+		if got := stats.RecordsOutput(); got != testTableRecordCount {
+			t.Errorf("RecordsOutput() = %d, want %d: the statistics were not gathered again", got, testTableRecordCount)
+		}
+		if sm.callsSinceRefresh != 0 {
+			t.Errorf("callsSinceRefresh = %d, want 0", sm.callsSinceRefresh)
+		}
+	})
+
+	t.Run("given a table the catalogs do not hold, when it is asked about, then it reports ErrTableNotFound", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		sm := newTestStatisticsManager(t, tx)
+
+		if _, err := sm.GetStatistics(tx, "no_such_table"); !errors.Is(err, ErrTableNotFound) {
+			t.Errorf("error = %v, want %v", err, ErrTableNotFound)
 		}
 	})
 }
