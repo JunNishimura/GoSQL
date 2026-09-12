@@ -24,15 +24,19 @@ const (
 )
 
 func TestNewIndexInfo(t *testing.T) {
-	t.Run("it carries the index name, the field it is on, the schema of the table it indexes and what is known about that table", func(t *testing.T) {
+	t.Run("it carries the transaction, the index name, the field it is on, the schema of the table it indexes and what is known about that table", func(t *testing.T) {
+		tx := newTestTransaction(t)
 		tableSchema := newTestSchema(t)
 		tableStatistics := NewTableStatistics(7, 100)
 
-		info, err := NewIndexInfo(testIndexName, testIndexFieldName, tableSchema, tableStatistics)
+		info, err := NewIndexInfo(tx, testIndexName, testIndexFieldName, tableSchema, tableStatistics)
 		if err != nil {
 			t.Fatalf("NewIndexInfo() error = %v", err)
 		}
 
+		if info.tx != tx {
+			t.Errorf("tx = %p, want %p", info.tx, tx)
+		}
 		if info.indexName != testIndexName {
 			t.Errorf("indexName = %q, want %q", info.indexName, testIndexName)
 		}
@@ -55,9 +59,10 @@ func TestNewIndexInfo(t *testing.T) {
 	// There is nothing such an index could be: it has no records to hold, and
 	// no shape for the records it does not hold.
 	t.Run("given a field the indexed table does not have, when an index on it is described, then it reports ErrFieldNotFound", func(t *testing.T) {
+		tx := newTestTransaction(t)
 		tableSchema := newTestSchema(t)
 
-		_, err := NewIndexInfo(testIndexName, "missing", tableSchema, NewTableStatistics(7, 100))
+		_, err := NewIndexInfo(tx, testIndexName, "missing", tableSchema, NewTableStatistics(7, 100))
 
 		if !errors.Is(err, recordmanager.ErrFieldNotFound) {
 			t.Errorf("error = %v, want %v", err, recordmanager.ErrFieldNotFound)

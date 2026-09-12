@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
 )
 
 // The fields of an index's own records.
@@ -36,11 +37,22 @@ const (
 // from the shape of the records it holds, which follows from the field it is
 // on.
 //
-// It holds no transaction. Every manager in this package is handed one per
-// call rather than keeping one, since what a transaction may read depends on
-// when it is asked, and an object outliving the transaction it was built with
-// would go on answering from it. The calls here that need one take one.
+// It holds a transaction, where the managers in this package take one per call.
+// They are built once and live as long as the database, so a transaction of
+// theirs would be one they had outlived. This is built for one query out of
+// what a manager read under that query's transaction, and answers only while
+// that query is being planned, so the transaction is as short-lived as it is.
+// Both of the things it has to do with one, opening the index and costing a
+// search through it, would otherwise be handed back the same transaction it was
+// described under.
+//
+// What that buys is paid for if one of these is kept past its query: it would
+// go on reading through a transaction that had ended. Nothing here stops that,
+// and nothing should hold one longer than the plan it was made for.
 type IndexInfo struct {
+	// tx is the transaction this was described under, and the one it reads
+	// through.
+	tx *transaction.Transaction
 	// indexName is what the index is called. It is the name of the table its
 	// own records are kept in, since an index is stored as a table like
 	// anything else.
@@ -72,6 +84,7 @@ type IndexInfo struct {
 // hold and no shape for the records it does not hold, and every call on it
 // would fail one at a time for the same reason.
 func NewIndexInfo(
+	tx *transaction.Transaction,
 	indexName string,
 	fieldName string,
 	tableSchema *recordmanager.Schema,
@@ -83,6 +96,7 @@ func NewIndexInfo(
 	}
 
 	return &IndexInfo{
+		tx:              tx,
 		indexName:       indexName,
 		fieldName:       fieldName,
 		tableSchema:     tableSchema,
