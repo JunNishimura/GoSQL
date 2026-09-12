@@ -110,6 +110,22 @@ func TestNewTableScan(t *testing.T) {
 	})
 }
 
+// Opening the scan is where a layout too wide for a block has to be caught,
+// because every later call assumes the scan is on a block it can hold records
+// in. MoveToNewRecord in particular would take "no free slot here" as a reason
+// to append another block, and would never stop.
+func TestNewTableScanRejectsASlotWiderThanABlock(t *testing.T) {
+	t.Run("given a layout whose slot is wider than a block, when a scan is opened on the table, then ErrSlotWiderThanBlock reaches the caller", func(t *testing.T) {
+		tx := newTestTransaction(t)
+
+		layout := newLayoutOfOneStringField(t, overwideFieldLength)
+
+		if _, err := NewTableScan(tx, testTableName, layout); !errors.Is(err, ErrSlotWiderThanBlock) {
+			t.Errorf("error = %v, want %v", err, ErrSlotWiderThanBlock)
+		}
+	})
+}
+
 func TestTableScanMoveToBlock(t *testing.T) {
 	t.Run("when the scan moves to another block, then the pin on the one it leaves is given back", func(t *testing.T) {
 		tx := newTestTransaction(t)

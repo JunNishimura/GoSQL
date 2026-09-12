@@ -122,6 +122,77 @@ const (
 	testSlotsInBlock = testBlockSize / testSlotSize
 )
 
+// The two widths either side of a block, for a layout of one varchar field:
+//
+//	varchar(98)  4 + (4 + 392) = 400 bytes, exactly one slot to a block
+//	varchar(99)  4 + (4 + 396) = 404 bytes, and no slot fits at all
+const (
+	widestFittingFieldLength = 98
+	overwideFieldLength      = 99
+)
+
+// newLayoutOfOneStringField builds a layout of a single varchar, which is what
+// lets a test put a slot at a width of its choosing.
+func newLayoutOfOneStringField(t *testing.T, length int) *Layout {
+	t.Helper()
+
+	s := NewSchema()
+	mustAddStringField(t, s, "definition", length)
+
+	return NewLayout(s)
+}
+
+// A layout whose slot does not fit in a block is refused when the record page
+// is made, rather than at the first read or write of it.
+//
+// Nothing can be done with such a layout: slot 0 already runs past the end of
+// the block, so every slot is out of range and the page holds no records at
+// all. Left to be found later it is worse than useless, because the caller that
+// finds it is TableScan.MoveToNewRecord, which reads "no free slot in this
+// block" as "append another block and look again" and does so forever, growing
+// the file until the disk fills.
+func TestNewRecordPageRejectsASlotWiderThanABlock(t *testing.T) {
+	t.Run("given a layout whose slot is wider than a block, when a record page is made on it, then it reports ErrSlotWiderThanBlock", func(t *testing.T) {
+		tx := newTestTransaction(t)
+
+		blk, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+
+		layout := newLayoutOfOneStringField(t, overwideFieldLength)
+
+		if _, err := NewRecordPage(tx, blk, layout); !errors.Is(err, ErrSlotWiderThanBlock) {
+			t.Errorf("error = %v, want %v", err, ErrSlotWiderThanBlock)
+		}
+
+		// The block is left as it was found. Pinning it and then refusing would
+		// hold a buffer for a page that was never handed out, and nothing would
+		// know to give it back.
+		if _, err := tx.GetInt(blk, 0); err == nil {
+			t.Error("GetInt() after the refused record page error = nil, want an error: the block was pinned and left that way")
+		}
+	})
+
+	t.Run("given a layout whose slot is exactly as wide as a block, when a record page is made on it, then it is made", func(t *testing.T) {
+		tx := newTestTransaction(t)
+
+		blk, err := tx.Append(testDataFile)
+		if err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+
+		layout := newLayoutOfOneStringField(t, widestFittingFieldLength)
+		if got := layout.SlotSize(); got != testBlockSize {
+			t.Fatalf("the layout has slots of %d bytes, want %d: the case is not testing the boundary", got, testBlockSize)
+		}
+
+		if _, err := NewRecordPage(tx, blk, layout); err != nil {
+			t.Errorf("NewRecordPage() error = %v, want nil: one slot of this width fits", err)
+		}
+	})
+}
+
 // newTestRecordPage builds a record page over a freshly appended block, so that
 // every slot in it starts out zeroed.
 func newTestRecordPage(t *testing.T) *RecordPage {
