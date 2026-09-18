@@ -259,7 +259,7 @@ func (ts *TableScan) MoveToRecordID(rid *recordmanager.RecordID) error {
 		return err
 	}
 
-	if !ts.rp.IsValidSlot(rid.Slot()) {
+	if !ts.rp.HasSlot(rid.Slot()) {
 		return fmt.Errorf("move to %s of %s: %w", rid, ts.fileName, recordmanager.ErrSlotOutOfRange)
 	}
 	ts.currentSlot = rid.Slot()

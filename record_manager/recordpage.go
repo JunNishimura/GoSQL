@@ -109,7 +109,7 @@ func (rp *RecordPage) BlockID() *filemanager.BlockId {
 // bounds of a write, but a read indexes the buffer directly, so without this an
 // out of range slot would be a panic rather than an error.
 func (rp *RecordPage) slotOffset(slot int) (int, error) {
-	if !rp.IsValidSlot(slot) {
+	if !rp.HasSlot(slot) {
 		return 0, fmt.Errorf("slot %d is not a slot of %s: %w", slot, rp.blk, ErrSlotOutOfRange)
 	}
 
@@ -145,7 +145,7 @@ func (rp *RecordPage) fieldPos(slot int, fieldName string, fieldType FieldType) 
 	return slotOffset + fieldOffset, nil
 }
 
-// IsValidSlot reports whether slot is one of the slots this block holds: not
+// HasSlot reports whether slot is one of the slots this block holds: not
 // before the first, and with its last byte still inside the block.
 //
 // The last byte is what settles it. A slot whose start is inside the block but
@@ -156,7 +156,7 @@ func (rp *RecordPage) fieldPos(slot int, fieldName string, fieldType FieldType) 
 // table whose records are a different size names a slot this block may not
 // have. Whoever moves to a record id asks here rather than finding out at the
 // first read of a field.
-func (rp *RecordPage) IsValidSlot(slot int) bool {
+func (rp *RecordPage) HasSlot(slot int) bool {
 	return slot >= 0 && (slot+1)*rp.layout.SlotSize() <= rp.tx.BlockSize()
 }
 
@@ -169,11 +169,11 @@ func (rp *RecordPage) IsValidSlot(slot int) bool {
 // Reaching the end of the block without a match is ErrNoSuchSlot, which is how
 // a walk finds out it is over.
 func (rp *RecordPage) searchAfter(slot int, state slotState) (int, error) {
-	for next := slot + 1; rp.IsValidSlot(next); next++ {
-		// slotOffset cannot fail here: the loop only runs on a slot
-		// IsValidSlot has accepted, which is the one thing it refuses. The
-		// error is returned rather than dropped so that this stays true if it
-		// grows another reason to.
+	for next := slot + 1; rp.HasSlot(next); next++ {
+		// slotOffset cannot fail here: the loop only runs on a slot HasSlot
+		// has accepted, which is the one thing it refuses. The error is
+		// returned rather than dropped so that this stays true if it grows
+		// another reason to.
 		offset, err := rp.slotOffset(next)
 		if err != nil {
 			return 0, err
@@ -219,7 +219,7 @@ func (rp *RecordPage) setSlotState(slot int, state slotState) error {
 func (rp *RecordPage) InitializeNewBlock() error {
 	schema := rp.layout.schema
 
-	for slot := 0; rp.IsValidSlot(slot); slot++ {
+	for slot := 0; rp.HasSlot(slot); slot++ {
 		if err := rp.setSlotState(slot, slotEmpty); err != nil {
 			return err
 		}
