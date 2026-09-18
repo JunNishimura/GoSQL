@@ -1,6 +1,7 @@
 package metadatamanager
 
 import (
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -99,7 +100,7 @@ func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName strin
 		return err
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, indexCatalogName, layout)
+	ts, err := query.NewTableScan(tx, indexCatalogName, layout)
 	if err != nil {
 		return err
 	}
@@ -159,7 +160,7 @@ func (im *IndexManager) GetIndexInfo(tx *transaction.Transaction, tableName stri
 		return nil, err
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, indexCatalogName, layout)
+	ts, err := query.NewTableScan(tx, indexCatalogName, layout)
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"unicode/utf8"
 
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -112,7 +113,7 @@ func (vm *ViewManager) CreateView(tx *transaction.Transaction, viewName string, 
 		return err
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, viewCatalogName, layout)
+	ts, err := query.NewTableScan(tx, viewCatalogName, layout)
 	if err != nil {
 		return err
 	}
@@ -145,7 +146,7 @@ func (vm *ViewManager) GetViewDefinition(tx *transaction.Transaction, viewName s
 		return "", false, err
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, viewCatalogName, layout)
+	ts, err := query.NewTableScan(tx, viewCatalogName, layout)
 	if err != nil {
 		return "", false, err
 	}

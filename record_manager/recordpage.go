@@ -91,6 +91,16 @@ func NewRecordPage(tx *transaction.Transaction, blk *filemanager.BlockId, layout
 	}, nil
 }
 
+// BlockID is the block this page stands for.
+//
+// A page is only ever read through the methods below, which take a slot and
+// need no block from the caller. What needs it is a scan over the table the
+// block belongs to: the block number is how it tells the end of one block from
+// the end of the file, and it is half of every record id it hands out.
+func (rp *RecordPage) BlockID() *filemanager.BlockId {
+	return rp.blk
+}
+
 // slotOffset is where slot begins within the block. Every slot is the same
 // size, so a slot's position is its number times that size, which is what lets
 // a record page reach a record without reading the ones before it.
@@ -99,7 +109,7 @@ func NewRecordPage(tx *transaction.Transaction, blk *filemanager.BlockId, layout
 // bounds of a write, but a read indexes the buffer directly, so without this an
 // out of range slot would be a panic rather than an error.
 func (rp *RecordPage) slotOffset(slot int) (int, error) {
-	if !rp.isValidSlot(slot) {
+	if !rp.IsValidSlot(slot) {
 		return 0, fmt.Errorf("slot %d is not a slot of %s: %w", slot, rp.blk, ErrSlotOutOfRange)
 	}
 
@@ -135,13 +145,18 @@ func (rp *RecordPage) fieldPos(slot int, fieldName string, fieldType FieldType) 
 	return slotOffset + fieldOffset, nil
 }
 
-// isValidSlot reports whether slot is one of the slots this block holds: not
+// IsValidSlot reports whether slot is one of the slots this block holds: not
 // before the first, and with its last byte still inside the block.
 //
 // The last byte is what settles it. A slot whose start is inside the block but
 // whose end is not would be read and written across the boundary, so the block
 // holds as many whole slots as fit and no part of another.
-func (rp *RecordPage) isValidSlot(slot int) bool {
+//
+// It is exported because a record id carries no layout, so one made against a
+// table whose records are a different size names a slot this block may not
+// have. Whoever moves to a record id asks here rather than finding out at the
+// first read of a field.
+func (rp *RecordPage) IsValidSlot(slot int) bool {
 	return slot >= 0 && (slot+1)*rp.layout.SlotSize() <= rp.tx.BlockSize()
 }
 
@@ -154,9 +169,9 @@ func (rp *RecordPage) isValidSlot(slot int) bool {
 // Reaching the end of the block without a match is ErrNoSuchSlot, which is how
 // a walk finds out it is over.
 func (rp *RecordPage) searchAfter(slot int, state slotState) (int, error) {
-	for next := slot + 1; rp.isValidSlot(next); next++ {
+	for next := slot + 1; rp.IsValidSlot(next); next++ {
 		// slotOffset cannot fail here: the loop only runs on a slot
-		// isValidSlot has accepted, which is the one thing it refuses. The
+		// IsValidSlot has accepted, which is the one thing it refuses. The
 		// error is returned rather than dropped so that this stays true if it
 		// grows another reason to.
 		offset, err := rp.slotOffset(next)
@@ -204,7 +219,7 @@ func (rp *RecordPage) setSlotState(slot int, state slotState) error {
 func (rp *RecordPage) InitializeNewBlock() error {
 	schema := rp.layout.schema
 
-	for slot := 0; rp.isValidSlot(slot); slot++ {
+	for slot := 0; rp.IsValidSlot(slot); slot++ {
 		if err := rp.setSlotState(slot, slotEmpty); err != nil {
 			return err
 		}

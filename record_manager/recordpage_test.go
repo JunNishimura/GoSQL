@@ -752,8 +752,8 @@ func TestRecordPageIsValidSlot(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newTestRecordPage(t).isValidSlot(tt.slot); got != tt.want {
-				t.Errorf("isValidSlot(%d) = %t, want %t", tt.slot, got, tt.want)
+			if got := newTestRecordPage(t).IsValidSlot(tt.slot); got != tt.want {
+				t.Errorf("IsValidSlot(%d) = %t, want %t", tt.slot, got, tt.want)
 			}
 		})
 	}

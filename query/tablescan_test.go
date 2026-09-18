@@ -1,4 +1,4 @@
-package recordmanager
+package query
 
 import (
 	"errors"
@@ -6,11 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
 // testTableName is the table the scan tests work on. Its file is testDataFile,
-// which is what the record page tests append to directly.
+// which is what a test that wants to reach past the scan appends to directly.
 const testTableName = "test"
 
 func TestNewTableScan(t *testing.T) {
@@ -47,7 +48,7 @@ func TestNewTableScan(t *testing.T) {
 		if ts.rp == nil {
 			t.Fatal("the scan is on no block, want block 0")
 		}
-		if got := ts.rp.blk.Number(); got != 0 {
+		if got := ts.rp.BlockID().Number(); got != 0 {
 			t.Errorf("the scan is on block %d, want 0", got)
 		}
 	})
@@ -65,9 +66,9 @@ func TestNewTableScan(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Append() error = %v", err)
 		}
-		rp, err := NewRecordPage(tx, blk, layout)
+		rp, err := recordmanager.NewRecordPage(tx, blk, layout)
 		if err != nil {
-			t.Fatalf("NewRecordPage() error = %v", err)
+			t.Fatalf("recordmanager.NewRecordPage() error = %v", err)
 		}
 		slot, err := rp.ClaimFreeSlotAfter(beforeFirstSlot)
 		if err != nil {
@@ -93,7 +94,7 @@ func TestNewTableScan(t *testing.T) {
 		if ts.rp == nil {
 			t.Fatal("the scan is on no block, want block 0")
 		}
-		if got := ts.rp.blk.Number(); got != 0 {
+		if got := ts.rp.BlockID().Number(); got != 0 {
 			t.Fatalf("the scan is on block %d, want 0", got)
 		}
 
@@ -115,13 +116,13 @@ func TestNewTableScan(t *testing.T) {
 // in. MoveToNewRecord in particular would take "no free slot here" as a reason
 // to append another block, and would never stop.
 func TestNewTableScanRejectsASlotWiderThanABlock(t *testing.T) {
-	t.Run("given a layout whose slot is wider than a block, when a scan is opened on the table, then ErrSlotWiderThanBlock reaches the caller", func(t *testing.T) {
+	t.Run("given a layout whose slot is wider than a block, when a scan is opened on the table, then recordmanager.ErrSlotWiderThanBlock reaches the caller", func(t *testing.T) {
 		tx := newTestTransaction(t)
 
 		layout := newLayoutOfOneStringField(t, overwideFieldLength)
 
-		if _, err := NewTableScan(tx, testTableName, layout); !errors.Is(err, ErrSlotWiderThanBlock) {
-			t.Errorf("error = %v, want %v", err, ErrSlotWiderThanBlock)
+		if _, err := NewTableScan(tx, testTableName, layout); !errors.Is(err, recordmanager.ErrSlotWiderThanBlock) {
+			t.Errorf("error = %v, want %v", err, recordmanager.ErrSlotWiderThanBlock)
 		}
 	})
 }
@@ -138,7 +139,7 @@ func TestTableScanMoveToBlock(t *testing.T) {
 		if ts.rp == nil {
 			t.Fatal("the scan is on no block after it was opened")
 		}
-		left := ts.rp.blk
+		left := ts.rp.BlockID()
 
 		if _, err := tx.Append(testDataFile); err != nil {
 			t.Fatalf("Append() error = %v", err)
@@ -148,7 +149,7 @@ func TestTableScanMoveToBlock(t *testing.T) {
 			t.Fatalf("moveToBlock(1) error = %v", err)
 		}
 
-		if got := ts.rp.blk.Number(); got != 1 {
+		if got := ts.rp.BlockID().Number(); got != 1 {
 			t.Errorf("the scan is on block %d, want 1", got)
 		}
 		if _, err := tx.GetInt(left, 0); !errors.Is(err, transaction.ErrBlockNotPinned) {
@@ -323,41 +324,41 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "given a varchar field, when GetInt is called on it, then the record page ErrFieldTypeMismatch reaches the caller",
+			name: "given a varchar field, when GetInt is called on it, then the record page recordmanager.ErrFieldTypeMismatch reaches the caller",
 			call: func(ts *TableScan) error {
 				_, err := ts.GetInt("name")
 				return err
 			},
-			wantErr: ErrFieldTypeMismatch,
+			wantErr: recordmanager.ErrFieldTypeMismatch,
 		},
 		{
-			name: "given an int field, when SetString is called on it, then the record page ErrFieldTypeMismatch reaches the caller",
+			name: "given an int field, when SetString is called on it, then the record page recordmanager.ErrFieldTypeMismatch reaches the caller",
 			call: func(ts *TableScan) error {
 				return ts.SetString("id", "x")
 			},
-			wantErr: ErrFieldTypeMismatch,
+			wantErr: recordmanager.ErrFieldTypeMismatch,
 		},
 		{
-			name: "given a field the schema does not have, when GetString asks for it, then ErrFieldNotFound reaches the caller",
+			name: "given a field the schema does not have, when GetString asks for it, then recordmanager.ErrFieldNotFound reaches the caller",
 			call: func(ts *TableScan) error {
 				_, err := ts.GetString("missing")
 				return err
 			},
-			wantErr: ErrFieldNotFound,
+			wantErr: recordmanager.ErrFieldNotFound,
 		},
 		{
-			name: "given a field the schema does not have, when SetInt writes to it, then ErrFieldNotFound reaches the caller",
+			name: "given a field the schema does not have, when SetInt writes to it, then recordmanager.ErrFieldNotFound reaches the caller",
 			call: func(ts *TableScan) error {
 				return ts.SetInt("missing", 1)
 			},
-			wantErr: ErrFieldNotFound,
+			wantErr: recordmanager.ErrFieldNotFound,
 		},
 		{
-			name: "given a varchar field, when a string over its limit is written, then ErrStringTooLong reaches the caller",
+			name: "given a varchar field, when a string over its limit is written, then recordmanager.ErrStringTooLong reaches the caller",
 			call: func(ts *TableScan) error {
 				return ts.SetString("name", strings.Repeat("a", testStringFieldLength+1))
 			},
-			wantErr: ErrStringTooLong,
+			wantErr: recordmanager.ErrStringTooLong,
 		},
 	}
 
@@ -393,7 +394,7 @@ func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
 			t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
 		}
 
-		if got := ts.rp.blk.Number(); got != 0 {
+		if got := ts.rp.BlockID().Number(); got != 0 {
 			t.Errorf("the scan is on block %d, want 0", got)
 		}
 		if ts.currentSlot != beforeFirstSlot {
@@ -427,7 +428,7 @@ func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
 			t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
 		}
 
-		if got := ts.rp.blk.Number(); got != 0 {
+		if got := ts.rp.BlockID().Number(); got != 0 {
 			t.Errorf("the scan is on block %d, want 0", got)
 		}
 		if ts.currentSlot != beforeFirstSlot {
@@ -441,14 +442,24 @@ func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
 }
 
 // claimTestRecord marks slot of the block the scan is on as holding a record
-// and writes id into it. Insert does not exist yet, so a test that needs
-// records in particular slots puts them there itself.
+// and writes id into it, going round the scan so that a test can put records in
+// slots of its choosing rather than in the ones MoveToNewRecord would pick.
+//
+// The claim is made from the slot before the one wanted, since a record page
+// searches past the slot it is given. Landing anywhere else means the slot was
+// already taken, which is the test setting up something other than what it
+// meant to, so it is reported here rather than left to confuse the case.
 func claimTestRecord(t *testing.T, ts *TableScan, slot int, id int32) {
 	t.Helper()
 
-	if err := ts.rp.setSlotState(slot, slotInUse); err != nil {
-		t.Fatalf("setSlotState(%d, slotInUse) error = %v", slot, err)
+	claimed, err := ts.rp.ClaimFreeSlotAfter(slot - 1)
+	if err != nil {
+		t.Fatalf("ClaimFreeSlotAfter(%d) error = %v", slot-1, err)
 	}
+	if claimed != slot {
+		t.Fatalf("ClaimFreeSlotAfter(%d) = %d, want %d: slot %d was already taken", slot-1, claimed, slot, slot)
+	}
+
 	if err := ts.rp.SetInt(slot, "id", id); err != nil {
 		t.Fatalf("SetInt(%d) error = %v", slot, err)
 	}
@@ -616,7 +627,7 @@ func TestTableScanMoveToNewRecord(t *testing.T) {
 		if ts.currentSlot != 0 {
 			t.Errorf("currentSlot = %d, want 0", ts.currentSlot)
 		}
-		if got := ts.rp.blk.Number(); got != 0 {
+		if got := ts.rp.BlockID().Number(); got != 0 {
 			t.Errorf("the scan is on block %d, want 0", got)
 		}
 
@@ -751,7 +762,7 @@ func TestTableScanClose(t *testing.T) {
 		if ts.rp == nil {
 			t.Fatal("the scan is on no block after it was opened")
 		}
-		held := ts.rp.blk
+		held := ts.rp.BlockID()
 
 		ts.Close()
 
@@ -801,7 +812,7 @@ func TestTableScanCurrentRecordID(t *testing.T) {
 			t.Fatalf("CurrentRecordID() error = %v", err)
 		}
 
-		want := NewRecordID(0, 2)
+		want := recordmanager.NewRecordID(0, 2)
 		if got == nil {
 			t.Fatalf("CurrentRecordID() = nil, want %s", want)
 		}
@@ -872,15 +883,15 @@ func TestTableScanMoveToRecordID(t *testing.T) {
 		if err := ts.MoveBeforeFirstRecord(); err != nil {
 			t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
 		}
-		if got := ts.rp.blk.Number(); got != 0 {
+		if got := ts.rp.BlockID().Number(); got != 0 {
 			t.Fatalf("the scan is on block %d, want 0 before the move", got)
 		}
 
-		if err := ts.MoveToRecordID(NewRecordID(1, 1)); err != nil {
+		if err := ts.MoveToRecordID(recordmanager.NewRecordID(1, 1)); err != nil {
 			t.Fatalf("MoveToRecordID() error = %v", err)
 		}
 
-		if got := ts.rp.blk.Number(); got != 1 {
+		if got := ts.rp.BlockID().Number(); got != 1 {
 			t.Errorf("the scan is on block %d, want 1", got)
 		}
 		got, err := ts.GetInt("id")
@@ -892,18 +903,18 @@ func TestTableScanMoveToRecordID(t *testing.T) {
 		}
 	})
 
-	t.Run("given a record id whose slot the block does not hold, it reports ErrSlotOutOfRange", func(t *testing.T) {
+	t.Run("given a record id whose slot the block does not hold, it reports recordmanager.ErrSlotOutOfRange", func(t *testing.T) {
 		tests := []struct {
 			name string
-			rid  *RecordID
+			rid  *recordmanager.RecordID
 		}{
 			{
-				name: "given a record id whose slot does not fit the block, it reports ErrSlotOutOfRange",
-				rid:  NewRecordID(0, testSlotsInBlock),
+				name: "given a record id whose slot does not fit the block, it reports recordmanager.ErrSlotOutOfRange",
+				rid:  recordmanager.NewRecordID(0, testSlotsInBlock),
 			},
 			{
-				name: "given a record id whose slot is negative, it reports ErrSlotOutOfRange",
-				rid:  NewRecordID(0, -1),
+				name: "given a record id whose slot is negative, it reports recordmanager.ErrSlotOutOfRange",
+				rid:  recordmanager.NewRecordID(0, -1),
 			},
 		}
 
@@ -911,8 +922,8 @@ func TestTableScanMoveToRecordID(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				ts := newTestTableScanAt(t, beforeFirstSlot)
 
-				if err := ts.MoveToRecordID(tt.rid); !errors.Is(err, ErrSlotOutOfRange) {
-					t.Errorf("MoveToRecordID(%s) error = %v, want %v", tt.rid, err, ErrSlotOutOfRange)
+				if err := ts.MoveToRecordID(tt.rid); !errors.Is(err, recordmanager.ErrSlotOutOfRange) {
+					t.Errorf("MoveToRecordID(%s) error = %v, want %v", tt.rid, err, recordmanager.ErrSlotOutOfRange)
 				}
 			})
 		}

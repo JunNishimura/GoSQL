@@ -10,6 +10,7 @@ import (
 	concurrencymanager "github.com/JunNishimura/GoSQL/concurrency_manager"
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -77,7 +78,7 @@ type fieldCatalogRow struct {
 func readTableCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManager) []tableCatalogRow {
 	t.Helper()
 
-	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
+	ts, err := query.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
 	if err != nil {
 		t.Fatalf("NewTableScan(%q) error = %v", tableCatalogName, err)
 	}
@@ -106,7 +107,7 @@ func readTableCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManage
 func readFieldCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManager) []fieldCatalogRow {
 	t.Helper()
 
-	ts, err := recordmanager.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
+	ts, err := query.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
 	if err != nil {
 		t.Fatalf("NewTableScan(%q) error = %v", fieldCatalogName, err)
 	}
@@ -209,7 +210,7 @@ func insertTestRecords(t *testing.T, tx *transaction.Transaction, tm *TableManag
 		t.Fatalf("GetLayout(%q) error = %v", testTableName, err)
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, testTableName, layout)
+	ts, err := query.NewTableScan(tx, testTableName, layout)
 	if err != nil {
 		t.Fatalf("NewTableScan(%q) error = %v", testTableName, err)
 	}
@@ -249,7 +250,7 @@ func readViewCatalog(t *testing.T, tx *transaction.Transaction, vm *ViewManager)
 		t.Fatalf("GetLayout(%q) error = %v", viewCatalogName, err)
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, viewCatalogName, layout)
+	ts, err := query.NewTableScan(tx, viewCatalogName, layout)
 	if err != nil {
 		t.Fatalf("NewTableScan(%q) error = %v", viewCatalogName, err)
 	}
@@ -294,7 +295,7 @@ func readIndexCatalog(t *testing.T, tx *transaction.Transaction, im *IndexManage
 		t.Fatalf("GetLayout(%q) error = %v", indexCatalogName, err)
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, indexCatalogName, layout)
+	ts, err := query.NewTableScan(tx, indexCatalogName, layout)
 	if err != nil {
 		t.Fatalf("NewTableScan(%q) error = %v", indexCatalogName, err)
 	}
@@ -319,7 +320,7 @@ func readIndexCatalog(t *testing.T, tx *transaction.Transaction, im *IndexManage
 	}
 }
 
-func mustGetString(t *testing.T, ts *recordmanager.TableScan, fieldName string) string {
+func mustGetString(t *testing.T, ts *query.TableScan, fieldName string) string {
 	t.Helper()
 
 	val, err := ts.GetString(fieldName)
@@ -330,7 +331,7 @@ func mustGetString(t *testing.T, ts *recordmanager.TableScan, fieldName string) 
 	return val
 }
 
-func mustGetInt(t *testing.T, ts *recordmanager.TableScan, fieldName string) int32 {
+func mustGetInt(t *testing.T, ts *query.TableScan, fieldName string) int32 {
 	t.Helper()
 
 	val, err := ts.GetInt(fieldName)

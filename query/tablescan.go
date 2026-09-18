@@ -1,10 +1,11 @@
-package recordmanager
+package query
 
 import (
 	"errors"
 	"fmt"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
@@ -12,10 +13,10 @@ import (
 // one that has not been moved to its first record yet, or one that has run past
 // the last.
 //
-// It is kept apart from ErrSlotOutOfRange, which the record page raises for the
-// same slot number, because the two say different things to whoever gets them.
-// Out of range means a slot that could not exist; this one means the scan has
-// not been asked to go anywhere.
+// It is kept apart from recordmanager.ErrSlotOutOfRange, which the record page
+// raises for the same slot number, because the two say different things to
+// whoever gets them. Out of range means a slot that could not exist; this one
+// means the scan has not been asked to go anywhere.
 var ErrNoCurrentRecord = errors.New("no current record")
 
 // tableFileExtension is what a table's name is turned into a file name with.
@@ -42,9 +43,9 @@ const beforeFirstSlot = -1
 // emptying the buffer pool.
 type TableScan struct {
 	tx     *transaction.Transaction
-	layout *Layout
+	layout *recordmanager.Layout
 	// rp is the block the scan is on, or nil before it has moved to one.
-	rp *RecordPage
+	rp *recordmanager.RecordPage
 	// fileName is the table's file, kept rather than the table's name because
 	// nothing below this asks for a table.
 	fileName string
@@ -66,7 +67,7 @@ type TableScan struct {
 // A table whose file has no blocks yet gets one, so that a scan always has a
 // block to work on and whoever inserts into it does not have to treat an empty
 // table as a special case.
-func NewTableScan(tx *transaction.Transaction, tableName string, layout *Layout) (*TableScan, error) {
+func NewTableScan(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) (*TableScan, error) {
 	ts := &TableScan{
 		tx:       tx,
 		layout:   layout,
@@ -113,7 +114,7 @@ func (ts *TableScan) Close() {
 		return
 	}
 
-	ts.tx.Unpin(ts.rp.blk)
+	ts.tx.Unpin(ts.rp.BlockID())
 	ts.rp = nil
 }
 
@@ -154,7 +155,7 @@ func (ts *TableScan) MoveToNextRecord() (bool, error) {
 			ts.currentSlot = slot
 			return true, nil
 		}
-		if !errors.Is(err, ErrNoSuchSlot) {
+		if !errors.Is(err, recordmanager.ErrNoSuchSlot) {
 			return false, err
 		}
 
@@ -169,7 +170,7 @@ func (ts *TableScan) MoveToNextRecord() (bool, error) {
 			return false, nil
 		}
 
-		if err := ts.moveToBlock(ts.rp.blk.Number() + 1); err != nil {
+		if err := ts.moveToBlock(ts.rp.BlockID().Number() + 1); err != nil {
 			return false, err
 		}
 	}
@@ -199,7 +200,7 @@ func (ts *TableScan) MoveToNewRecord() error {
 			ts.currentSlot = slot
 			return nil
 		}
-		if !errors.Is(err, ErrNoSuchSlot) {
+		if !errors.Is(err, recordmanager.ErrNoSuchSlot) {
 			return err
 		}
 
@@ -215,7 +216,7 @@ func (ts *TableScan) MoveToNewRecord() error {
 			continue
 		}
 
-		if err := ts.moveToBlock(ts.rp.blk.Number() + 1); err != nil {
+		if err := ts.moveToBlock(ts.rp.BlockID().Number() + 1); err != nil {
 			return err
 		}
 	}
@@ -234,12 +235,12 @@ func (ts *TableScan) DeleteCurrentRecord() error {
 
 // CurrentRecordID names the record the scan is on, so that a caller can come
 // back to it later without keeping the scan where it is.
-func (ts *TableScan) CurrentRecordID() (*RecordID, error) {
+func (ts *TableScan) CurrentRecordID() (*recordmanager.RecordID, error) {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return nil, err
 	}
 
-	return NewRecordID(ts.rp.blk.Number(), ts.currentSlot), nil
+	return recordmanager.NewRecordID(ts.rp.BlockID().Number(), ts.currentSlot), nil
 }
 
 // MoveToRecordID puts the scan straight onto the record rid names, without
@@ -253,15 +254,15 @@ func (ts *TableScan) CurrentRecordID() (*RecordID, error) {
 // read. A record id carries no file name, so one belonging to another table
 // cannot be told apart by its type, and a table whose records are a different
 // size is exactly where the number comes out wrong.
-func (ts *TableScan) MoveToRecordID(rid *RecordID) error {
-	if err := ts.moveToBlock(rid.blkNum); err != nil {
+func (ts *TableScan) MoveToRecordID(rid *recordmanager.RecordID) error {
+	if err := ts.moveToBlock(rid.BlockNumber()); err != nil {
 		return err
 	}
 
-	if !ts.rp.isValidSlot(rid.slot) {
-		return fmt.Errorf("move to %s of %s: %w", rid, ts.fileName, ErrSlotOutOfRange)
+	if !ts.rp.IsValidSlot(rid.Slot()) {
+		return fmt.Errorf("move to %s of %s: %w", rid, ts.fileName, recordmanager.ErrSlotOutOfRange)
 	}
-	ts.currentSlot = rid.slot
+	ts.currentSlot = rid.Slot()
 
 	return nil
 }
@@ -280,7 +281,7 @@ func (ts *TableScan) isOnLastBlock() (bool, error) {
 		return false, err
 	}
 
-	if ts.rp.blk.Number() < ts.blockCount-1 {
+	if ts.rp.BlockID().Number() < ts.blockCount-1 {
 		return false, nil
 	}
 
@@ -290,7 +291,7 @@ func (ts *TableScan) isOnLastBlock() (bool, error) {
 	}
 	ts.blockCount = size
 
-	return ts.rp.blk.Number() == size-1, nil
+	return ts.rp.BlockID().Number() == size-1, nil
 }
 
 // requireCurrentBlock reports that the scan is on no block, which is the state
@@ -360,7 +361,7 @@ func (ts *TableScan) SetString(fieldName string, val string) error {
 func (ts *TableScan) moveToBlock(blkNum int) error {
 	ts.Close()
 
-	rp, err := NewRecordPage(ts.tx, ts.blockID(blkNum), ts.layout)
+	rp, err := recordmanager.NewRecordPage(ts.tx, ts.blockID(blkNum), ts.layout)
 	if err != nil {
 		return err
 	}
@@ -385,7 +386,7 @@ func (ts *TableScan) moveToNewBlock() error {
 		return err
 	}
 
-	rp, err := NewRecordPage(ts.tx, blk, ts.layout)
+	rp, err := recordmanager.NewRecordPage(ts.tx, blk, ts.layout)
 	if err != nil {
 		return err
 	}
