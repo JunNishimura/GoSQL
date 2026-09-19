@@ -668,13 +668,17 @@ func claimTestRecord(t *testing.T, ts *TableScan, slot int, id int32) {
 }
 
 // walkTestRecords reads the id of every record from where the scan is to the
-// end of the table.
-func walkTestRecords(t *testing.T, ts *TableScan) []int32 {
+// end of it.
+//
+// It takes a Scan rather than a TableScan so that a scan built over another one
+// can be read the same way, which is how a select is checked against the table
+// it draws from.
+func walkTestRecords(t *testing.T, s Scan) []int32 {
 	t.Helper()
 
 	ids := []int32{}
 	for {
-		onRecord, err := ts.MoveToNextRecord()
+		onRecord, err := s.MoveToNextRecord()
 		if err != nil {
 			t.Fatalf("MoveToNextRecord() error = %v", err)
 		}
@@ -682,7 +686,7 @@ func walkTestRecords(t *testing.T, ts *TableScan) []int32 {
 			return ids
 		}
 
-		id, err := ts.GetInt("id")
+		id, err := s.GetInt("id")
 		if err != nil {
 			t.Fatalf("GetInt() error = %v", err)
 		}
