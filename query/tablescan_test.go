@@ -68,7 +68,7 @@ func TestNewTableScan(t *testing.T) {
 		}
 		rp, err := recordmanager.NewRecordPage(tx, blk, layout)
 		if err != nil {
-			t.Fatalf("recordmanager.NewRecordPage() error = %v", err)
+			t.Fatalf("NewRecordPage() error = %v", err)
 		}
 		slot, err := rp.ClaimFreeSlotAfter(beforeFirstSlot)
 		if err != nil {
@@ -324,7 +324,7 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name: "given a varchar field, when GetInt is called on it, then the record page recordmanager.ErrFieldTypeMismatch reaches the caller",
+			name: "given a varchar field, when GetInt is called on it, then the record page ErrFieldTypeMismatch reaches the caller",
 			call: func(ts *TableScan) error {
 				_, err := ts.GetInt("name")
 				return err
@@ -332,14 +332,14 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 			wantErr: recordmanager.ErrFieldTypeMismatch,
 		},
 		{
-			name: "given an int field, when SetString is called on it, then the record page recordmanager.ErrFieldTypeMismatch reaches the caller",
+			name: "given an int field, when SetString is called on it, then the record page ErrFieldTypeMismatch reaches the caller",
 			call: func(ts *TableScan) error {
 				return ts.SetString("id", "x")
 			},
 			wantErr: recordmanager.ErrFieldTypeMismatch,
 		},
 		{
-			name: "given a field the schema does not have, when GetString asks for it, then recordmanager.ErrFieldNotFound reaches the caller",
+			name: "given a field the schema does not have, when GetString asks for it, then ErrFieldNotFound reaches the caller",
 			call: func(ts *TableScan) error {
 				_, err := ts.GetString("missing")
 				return err
@@ -347,14 +347,14 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 			wantErr: recordmanager.ErrFieldNotFound,
 		},
 		{
-			name: "given a field the schema does not have, when SetInt writes to it, then recordmanager.ErrFieldNotFound reaches the caller",
+			name: "given a field the schema does not have, when SetInt writes to it, then ErrFieldNotFound reaches the caller",
 			call: func(ts *TableScan) error {
 				return ts.SetInt("missing", 1)
 			},
 			wantErr: recordmanager.ErrFieldNotFound,
 		},
 		{
-			name: "given a varchar field, when a string over its limit is written, then recordmanager.ErrStringTooLong reaches the caller",
+			name: "given a varchar field, when a string over its limit is written, then ErrStringTooLong reaches the caller",
 			call: func(ts *TableScan) error {
 				return ts.SetString("name", strings.Repeat("a", testStringFieldLength+1))
 			},
@@ -909,11 +909,11 @@ func TestTableScanMoveToRecordID(t *testing.T) {
 			rid  *recordmanager.RecordID
 		}{
 			{
-				name: "given a record id whose slot does not fit the block, it reports recordmanager.ErrSlotOutOfRange",
+				name: "given a record id whose slot does not fit the block, it reports ErrSlotOutOfRange",
 				rid:  recordmanager.NewRecordID(0, testSlotsInBlock),
 			},
 			{
-				name: "given a record id whose slot is negative, it reports recordmanager.ErrSlotOutOfRange",
+				name: "given a record id whose slot is negative, it reports ErrSlotOutOfRange",
 				rid:  recordmanager.NewRecordID(0, -1),
 			},
 		}
