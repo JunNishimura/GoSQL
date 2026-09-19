@@ -31,6 +31,12 @@ const tableFileExtension = ".tbl"
 // back and be given slot 0.
 const beforeFirstSlot = -1
 
+// A table is the scan every other one is built out of, so it is the first thing
+// UpdateScan has to fit. Nothing reads this: it is here so that a method whose
+// name or signature drifts away from the interface is a compile error in this
+// file, rather than at whichever caller first tried to use the two together.
+var _ UpdateScan = (*TableScan)(nil)
+
 // TableScan is a walk over every record of one table, block by block.
 //
 // A record page sees one block, and a table is a file of them, so this is what
@@ -354,6 +360,81 @@ func (ts *TableScan) SetString(fieldName string, val string) error {
 	}
 
 	return ts.rp.SetString(ts.currentSlot, fieldName, val)
+}
+
+// HasField reports whether the table has a field of this name.
+//
+// It answers from the schema rather than from a record, so it can be asked of a
+// scan that is on none. A query settles which of the scans it draws from a
+// field belongs to before it has read anything at all, which is where this gets
+// asked.
+func (ts *TableScan) HasField(fieldName string) bool {
+	return ts.layout.Schema().HasField(fieldName)
+}
+
+// GetValue returns the field of the record the scan is on as a constant, of
+// whichever kind the schema says the field is.
+//
+// The kind has to come from the schema because the bytes of a slot read as
+// either. A varchar holding "42" and an int holding 42 are told apart by what
+// the table says they are and by nothing else, so a scan that decided from the
+// bytes would hand back the wrong kind for one of the two.
+func (ts *TableScan) GetValue(fieldName string) (Constant, error) {
+	fieldType, err := ts.layout.Schema().Type(fieldName)
+	if err != nil {
+		return Constant{}, err
+	}
+
+	switch fieldType {
+	case recordmanager.FieldTypeInt:
+		val, err := ts.GetInt(fieldName)
+		if err != nil {
+			return Constant{}, err
+		}
+
+		return NewIntConstant(val), nil
+	case recordmanager.FieldTypeVarchar:
+		val, err := ts.GetString(fieldName)
+		if err != nil {
+			return Constant{}, err
+		}
+
+		return NewStringConstant(val), nil
+	default:
+		return Constant{}, fmt.Errorf("read field %q of %s: a %s has no value to read", fieldName, ts.fileName, fieldType)
+	}
+}
+
+// SetValue writes val to the field of the record the scan is on, as whichever
+// kind of value the constant holds.
+//
+// The kind is taken from the constant rather than from the schema, so this asks
+// the schema nothing: the record page already checks the field against the type
+// being written, and a constant of the wrong kind for the field comes back with
+// the same ErrFieldTypeMismatch a typed setter aimed at the wrong field would.
+// One error to explain rather than two, and one lookup fewer.
+func (ts *TableScan) SetValue(fieldName string, val Constant) error {
+	switch val.Type() {
+	case recordmanager.FieldTypeInt:
+		// AsInt cannot fail here, since the switch has just settled the kind.
+		// The error is returned rather than dropped so that this stays true if
+		// it grows another reason to.
+		intVal, err := val.AsInt()
+		if err != nil {
+			return err
+		}
+
+		return ts.SetInt(fieldName, intVal)
+	case recordmanager.FieldTypeVarchar:
+		strVal, err := val.AsString()
+		if err != nil {
+			return err
+		}
+
+		return ts.SetString(fieldName, strVal)
+	default:
+		return fmt.Errorf("write %s to field %q of %s: a %s is not a value a record holds", val, fieldName, ts.fileName, val.Type())
+	}
 }
 
 // moveToBlock puts the scan on a block the table already has, before its first
