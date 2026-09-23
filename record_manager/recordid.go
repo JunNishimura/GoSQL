@@ -35,6 +35,15 @@ func (r *RecordID) BlockNumber() int {
 	return r.blkNum
 }
 
+// Slot is the slot of that block the record sits in.
+//
+// It goes alongside BlockNumber because the two together are the whole of a
+// record id, and a scan being moved to one needs both: the block to open, and
+// the slot to land on once it is open.
+func (r *RecordID) Slot() int {
+	return r.slot
+}
+
 // Equals reports whether other names the same slot of the same block.
 func (r *RecordID) Equals(other *RecordID) bool {
 	return r.blkNum == other.blkNum && r.slot == other.slot

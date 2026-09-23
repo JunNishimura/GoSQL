@@ -722,7 +722,7 @@ func TestRecordPageDelete(t *testing.T) {
 	}
 }
 
-func TestRecordPageIsValidSlot(t *testing.T) {
+func TestRecordPageHasSlot(t *testing.T) {
 	tests := []struct {
 		name string
 		slot int
@@ -744,7 +744,7 @@ func TestRecordPageIsValidSlot(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "given a negative slot, it reports ErrSlotOutOfRange",
+			name: "given a negative slot, it reports the block does not hold it",
 			slot: -1,
 			want: false,
 		},
@@ -752,8 +752,8 @@ func TestRecordPageIsValidSlot(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newTestRecordPage(t).isValidSlot(tt.slot); got != tt.want {
-				t.Errorf("isValidSlot(%d) = %t, want %t", tt.slot, got, tt.want)
+			if got := newTestRecordPage(t).HasSlot(tt.slot); got != tt.want {
+				t.Errorf("HasSlot(%d) = %t, want %t", tt.slot, got, tt.want)
 			}
 		})
 	}

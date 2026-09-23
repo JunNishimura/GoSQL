@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -162,7 +163,7 @@ func checkNames(tableName string, schema *recordmanager.Schema) error {
 
 // recordTable writes the table catalog's row for this table.
 func (tm *TableManager) recordTable(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) error {
-	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
+	ts, err := query.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
 	if err != nil {
 		return err
 	}
@@ -181,7 +182,7 @@ func (tm *TableManager) recordTable(tx *transaction.Transaction, tableName strin
 // recordFields writes the field catalog's rows for this table, one per field,
 // in the order the schema lists them.
 func (tm *TableManager) recordFields(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) error {
-	ts, err := recordmanager.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
+	ts, err := query.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
 	if err != nil {
 		return err
 	}
@@ -232,7 +233,7 @@ func (tm *TableManager) recordFields(tx *transaction.Transaction, tableName stri
 // readSlotSize finds the table catalog's row for this table and returns the
 // slot size on it. A table with no row there is one the database does not have.
 func (tm *TableManager) readSlotSize(tx *transaction.Transaction, tableName string) (int, error) {
-	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
+	ts, err := query.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
 	if err != nil {
 		return 0, err
 	}
@@ -276,7 +277,7 @@ func (tm *TableManager) readSlotSize(tx *transaction.Transaction, tableName stri
 // record format, so a layout that had them in another one would not be the same
 // layout even with the same offsets.
 func (tm *TableManager) readFields(tx *transaction.Transaction, tableName string) (*recordmanager.Schema, map[string]int, error) {
-	ts, err := recordmanager.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
+	ts, err := query.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
 	if err != nil {
 		return nil, nil, err
 	}

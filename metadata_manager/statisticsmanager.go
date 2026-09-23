@@ -3,6 +3,7 @@ package metadatamanager
 import (
 	"sync"
 
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -133,7 +134,7 @@ func (sm *StatisticsManager) refreshStatistics(tx *transaction.Transaction) erro
 		return err
 	}
 
-	ts, err := recordmanager.NewTableScan(tx, tableCatalogName, layout)
+	ts, err := query.NewTableScan(tx, tableCatalogName, layout)
 	if err != nil {
 		return err
 	}
@@ -184,7 +185,7 @@ func (sm *StatisticsManager) refreshStatistics(tx *transaction.Transaction) erro
 //
 // It takes no lock, for the reason refreshStatistics gives.
 func (sm *StatisticsManager) calculateTableStatistics(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) (*TableStatistics, error) {
-	ts, err := recordmanager.NewTableScan(tx, tableName, layout)
+	ts, err := query.NewTableScan(tx, tableName, layout)
 	if err != nil {
 		return nil, err
 	}
