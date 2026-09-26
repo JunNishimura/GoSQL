@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 // newTestParser makes a parser over s, failing the test if the first token
@@ -444,6 +445,11 @@ func TestParserUpdateCmd(t *testing.T) {
 			input:    "update student set gradyear = 2020",
 			wantType: ModifyData{},
 		},
+		{
+			name:     "given a create table, then it is create table data",
+			input:    "create table student (sid int)",
+			wantType: CreateTableData{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -821,6 +827,211 @@ func TestParserModify(t *testing.T) {
 
 			if _, err := p.modify(); !errors.Is(err, ErrBadSyntax) {
 				t.Errorf("modify() error = %v, want %v", err, ErrBadSyntax)
+			}
+		})
+	}
+}
+
+// Only a table can be created yet, so the kinds of thing that are not one are
+// the ones create has no branch for.
+func TestParserCreate(t *testing.T) {
+	t.Run("given a create table, then it is create table data", func(t *testing.T) {
+		p := newTestParser(t, "create table student (sid int)")
+
+		got, err := p.create()
+		if err != nil {
+			t.Fatalf("create() error = %v", err)
+		}
+		if _, ok := got.(CreateTableData); !ok {
+			t.Errorf("create() = %T, want CreateTableData", got)
+		}
+	})
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given a statement that is not a create, then it reports ErrBadSyntax",
+			input: "delete from student",
+		},
+		{
+			name:  "given a create of nothing, then it reports ErrBadSyntax",
+			input: "create",
+		},
+		{
+			name:  "given a create of a kind of thing there is no create for, then it reports ErrBadSyntax",
+			input: "create database school",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			if _, err := p.create(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("create() error = %v, want %v", err, ErrBadSyntax)
+			}
+		})
+	}
+}
+
+// newTestParserAfterCreate makes a parser over s and eats the create it starts
+// with, which is where create leaves the parser before it hands over to the
+// method for the kind of thing created.
+func newTestParserAfterCreate(t *testing.T, s string) *Parser {
+	t.Helper()
+
+	p := newTestParser(t, s)
+	if err := p.lex.EatKeyword("create"); err != nil {
+		t.Fatalf("EatKeyword(%q) of %q error = %v", "create", s, err)
+	}
+
+	return p
+}
+
+func TestParserCreateTable(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantTable  string
+		wantFields []fieldSpec
+	}{
+		// The order of the fields is the order a layout gives them offsets
+		// in, so it is kept as written.
+		{
+			name:      "given a create table of int and varchar fields, then it is create table data of the table and a schema of the fields in the order written",
+			input:     "create table student (sid int, sname varchar(10), gradyear int)",
+			wantTable: "student",
+			wantFields: []fieldSpec{
+				{name: "sid", fieldType: recordmanager.FieldTypeInt},
+				{name: "sname", fieldType: recordmanager.FieldTypeVarchar, length: 10},
+				{name: "gradyear", fieldType: recordmanager.FieldTypeInt},
+			},
+		},
+		{
+			name:      "given a create table written in upper case, then its keywords and types are read and its names are in lower case",
+			input:     "CREATE TABLE Student (SId INT, SName VARCHAR(10))",
+			wantTable: "student",
+			wantFields: []fieldSpec{
+				{name: "sid", fieldType: recordmanager.FieldTypeInt},
+				{name: "sname", fieldType: recordmanager.FieldTypeVarchar, length: 10},
+			},
+		},
+		// A varchar of no characters holds only the empty string, which is of
+		// little use but not wrong.
+		{
+			name:      "given a create table of a varchar of length zero, then its field has length zero",
+			input:     "create table student (note varchar(0))",
+			wantTable: "student",
+			wantFields: []fieldSpec{
+				{name: "note", fieldType: recordmanager.FieldTypeVarchar, length: 0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParserAfterCreate(t, tt.input)
+
+			got, err := p.createTable()
+			if err != nil {
+				t.Fatalf("createTable() error = %v", err)
+			}
+
+			if got.TableName() != tt.wantTable {
+				t.Errorf("TableName() = %q, want %q", got.TableName(), tt.wantTable)
+			}
+
+			sch := got.Schema()
+			var gotFields []fieldSpec
+			for _, name := range sch.Fields() {
+				fieldType, err := sch.Type(name)
+				if err != nil {
+					t.Fatalf("Type(%q) error = %v", name, err)
+				}
+				length, err := sch.Length(name)
+				if err != nil {
+					t.Fatalf("Length(%q) error = %v", name, err)
+				}
+				gotFields = append(gotFields, fieldSpec{name: name, fieldType: fieldType, length: length})
+			}
+			if !slices.Equal(gotFields, tt.wantFields) {
+				t.Errorf("fields of Schema() = %+v, want %+v", gotFields, tt.wantFields)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name    string
+		input   string
+		wantErr error
+	}{
+		{
+			name:    "given a create table with no table name, then it reports ErrBadSyntax",
+			input:   "create table (sid int)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table with no parentheses around its fields, then it reports ErrBadSyntax",
+			input:   "create table student sid int",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table of no fields, then it reports ErrBadSyntax",
+			input:   "create table student ()",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table whose field has no type, then it reports ErrBadSyntax",
+			input:   "create table student (sid)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table whose field is of a type there is none of, then it reports ErrBadSyntax",
+			input:   "create table student (gpa float)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table of a varchar with no length, then it reports ErrBadSyntax",
+			input:   "create table student (sname varchar)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table of a varchar whose length is a string, then it reports ErrBadSyntax",
+			input:   "create table student (sname varchar('10'))",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table whose field list ends in a comma, then it reports ErrBadSyntax",
+			input:   "create table student (sid int,)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a create table followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
+			input:   "create table student (sid int) (sname varchar(10))",
+			wantErr: ErrBadSyntax,
+		},
+		// The grammar allows any int here, so this is not a syntax error, but
+		// no string is shorter than no characters.
+		{
+			name:    "given a create table of a varchar of negative length, then it reports ErrInvalidVarcharLength",
+			input:   "create table student (sname varchar(-1))",
+			wantErr: ErrInvalidVarcharLength,
+		},
+		{
+			name:    "given a create table of two fields of the same name, then it reports recordmanager.ErrDuplicateField",
+			input:   "create table student (sid int, sid varchar(10))",
+			wantErr: recordmanager.ErrDuplicateField,
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParserAfterCreate(t, tt.input)
+
+			if _, err := p.createTable(); !errors.Is(err, tt.wantErr) {
+				t.Errorf("createTable() error = %v, want %v", err, tt.wantErr)
 			}
 		})
 	}

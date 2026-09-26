@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 // Parser reads SQL by recursive descent, one method for each rule of the
@@ -76,8 +77,138 @@ func (p *Parser) UpdateCmd() (UpdateCommand, error) {
 		return p.delete()
 	case p.lex.MatchKeyword("update"):
 		return p.modify()
+	case p.lex.MatchKeyword("create"):
+		return p.create()
 	default:
 		return nil, p.lex.unexpected("update command")
+	}
+}
+
+// create parses a create statement, handing over to the method for the kind of
+// thing created once the create has been eaten.
+//
+// The kind is the word after the create, and the lexer sees only the token it
+// is at, so it cannot be told apart before the create is taken.
+func (p *Parser) create() (UpdateCommand, error) {
+	if err := p.lex.EatKeyword("create"); err != nil {
+		return nil, err
+	}
+
+	if p.lex.MatchKeyword("table") {
+		return p.createTable()
+	}
+
+	return nil, p.lex.unexpected("table")
+}
+
+// fieldSpec is what a create table says about one field, before it is added to
+// a schema. The length is an int, as the schema takes it, and is unused for an
+// int field.
+type fieldSpec struct {
+	name      string
+	fieldType recordmanager.FieldType
+	length    int
+}
+
+// createTable parses the rest of a create table statement, from the table that
+// follows the create.
+//
+// The fields are added to the schema only once the statement has been read to
+// its end, so that, as with an insert, a statement wrong in more than one way
+// is reported for its syntax first.
+func (p *Parser) createTable() (CreateTableData, error) {
+	if err := p.lex.EatKeyword("table"); err != nil {
+		return CreateTableData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return CreateTableData{}, err
+	}
+
+	if err := p.lex.EatDelim('('); err != nil {
+		return CreateTableData{}, err
+	}
+	specs, err := p.fieldDefs()
+	if err != nil {
+		return CreateTableData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return CreateTableData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return CreateTableData{}, err
+	}
+
+	sch := recordmanager.NewSchema()
+	for _, spec := range specs {
+		if spec.length < 0 {
+			return CreateTableData{}, fmt.Errorf("create table %s: field %s of length %d: %w", tableName, spec.name, spec.length, ErrInvalidVarcharLength)
+		}
+		if err := sch.AddField(spec.name, spec.fieldType, spec.length); err != nil {
+			return CreateTableData{}, fmt.Errorf("create table %s: %w", tableName, err)
+		}
+	}
+
+	return CreateTableData{
+		tableName: tableName,
+		schema:    sch,
+	}, nil
+}
+
+// fieldDefs parses one or more field definitions separated by commas.
+func (p *Parser) fieldDefs() ([]fieldSpec, error) {
+	var specs []fieldSpec
+	for {
+		spec, err := p.fieldDef()
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, spec)
+
+		if !p.lex.MatchDelim(',') {
+			return specs, nil
+		}
+		if err := p.lex.EatDelim(','); err != nil {
+			return nil, err
+		}
+	}
+}
+
+// fieldDef parses a field name and the type that follows it: int, or varchar
+// with its length in parentheses.
+func (p *Parser) fieldDef() (fieldSpec, error) {
+	name, err := p.field()
+	if err != nil {
+		return fieldSpec{}, err
+	}
+
+	switch {
+	case p.lex.MatchKeyword("int"):
+		if err := p.lex.EatKeyword("int"); err != nil {
+			return fieldSpec{}, err
+		}
+
+		return fieldSpec{name: name, fieldType: recordmanager.FieldTypeInt}, nil
+	case p.lex.MatchKeyword("varchar"):
+		if err := p.lex.EatKeyword("varchar"); err != nil {
+			return fieldSpec{}, err
+		}
+		if err := p.lex.EatDelim('('); err != nil {
+			return fieldSpec{}, err
+		}
+		length, err := p.lex.EatIntConstant()
+		if err != nil {
+			return fieldSpec{}, err
+		}
+		if err := p.lex.EatDelim(')'); err != nil {
+			return fieldSpec{}, err
+		}
+
+		return fieldSpec{name: name, fieldType: recordmanager.FieldTypeVarchar, length: int(length)}, nil
+	default:
+		return fieldSpec{}, p.lex.unexpected("field type")
 	}
 }
 
