@@ -99,9 +99,57 @@ func (p *Parser) create() (UpdateCommand, error) {
 		return p.createTable()
 	case p.lex.MatchKeyword("view"):
 		return p.createView()
+	case p.lex.MatchKeyword("index"):
+		return p.createIndex()
 	default:
-		return nil, p.lex.unexpected("table or view")
+		return nil, p.lex.unexpected("table, view or index")
 	}
+}
+
+// createIndex parses the rest of a create index statement, from the index that
+// follows the create.
+//
+// An index is on one field, so a second one is left where the closing
+// parenthesis should be and reported, rather than ignored.
+func (p *Parser) createIndex() (CreateIndexData, error) {
+	if err := p.lex.EatKeyword("index"); err != nil {
+		return CreateIndexData{}, err
+	}
+
+	indexName, err := p.lex.EatID()
+	if err != nil {
+		return CreateIndexData{}, err
+	}
+
+	if err := p.lex.EatKeyword("on"); err != nil {
+		return CreateIndexData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return CreateIndexData{}, err
+	}
+
+	if err := p.lex.EatDelim('('); err != nil {
+		return CreateIndexData{}, err
+	}
+	fieldName, err := p.field()
+	if err != nil {
+		return CreateIndexData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return CreateIndexData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return CreateIndexData{}, err
+	}
+
+	return CreateIndexData{
+		indexName: indexName,
+		tableName: tableName,
+		fieldName: fieldName,
+	}, nil
 }
 
 // createView parses the rest of a create view statement, from the view that

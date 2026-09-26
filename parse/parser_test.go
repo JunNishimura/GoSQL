@@ -455,6 +455,11 @@ func TestParserUpdateCmd(t *testing.T) {
 			input:    "create view mathstudents as select sname from student",
 			wantType: CreateViewData{},
 		},
+		{
+			name:     "given a create index, then it is create index data",
+			input:    "create index sidindex on student (sid)",
+			wantType: CreateIndexData{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -853,6 +858,11 @@ func TestParserCreate(t *testing.T) {
 			input:    "create view mathstudents as select sname from student",
 			wantType: CreateViewData{},
 		},
+		{
+			name:     "given a create index, then it is create index data",
+			input:    "create index sidindex on student (sid)",
+			wantType: CreateIndexData{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1130,6 +1140,99 @@ func TestParserCreateView(t *testing.T) {
 
 			if _, err := p.createView(); !errors.Is(err, ErrBadSyntax) {
 				t.Errorf("createView() error = %v, want %v", err, ErrBadSyntax)
+			}
+		})
+	}
+}
+
+func TestParserCreateIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantIndex string
+		wantTable string
+		wantField string
+	}{
+		{
+			name:      "given a create index on a field of a table, then it is create index data of the index, the table and the field",
+			input:     "create index sidindex on student (sid)",
+			wantIndex: "sidindex",
+			wantTable: "student",
+			wantField: "sid",
+		},
+		{
+			name:      "given a create index written in upper case, then its keywords are read and its names are in lower case",
+			input:     "CREATE INDEX SIdIndex ON Student (SId)",
+			wantIndex: "sidindex",
+			wantTable: "student",
+			wantField: "sid",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParserAfterCreate(t, tt.input)
+
+			got, err := p.createIndex()
+			if err != nil {
+				t.Fatalf("createIndex() error = %v", err)
+			}
+
+			if got.IndexName() != tt.wantIndex {
+				t.Errorf("IndexName() = %q, want %q", got.IndexName(), tt.wantIndex)
+			}
+			if got.TableName() != tt.wantTable {
+				t.Errorf("TableName() = %q, want %q", got.TableName(), tt.wantTable)
+			}
+			if got.FieldName() != tt.wantField {
+				t.Errorf("FieldName() = %q, want %q", got.FieldName(), tt.wantField)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given a create index with no index name, then it reports ErrBadSyntax",
+			input: "create index on student (sid)",
+		},
+		{
+			name:  "given a create index with no on, then it reports ErrBadSyntax",
+			input: "create index sidindex student (sid)",
+		},
+		{
+			name:  "given a create index with no table, then it reports ErrBadSyntax",
+			input: "create index sidindex on (sid)",
+		},
+		{
+			name:  "given a create index with no parentheses around its field, then it reports ErrBadSyntax",
+			input: "create index sidindex on student sid",
+		},
+		{
+			name:  "given a create index with no field, then it reports ErrBadSyntax",
+			input: "create index sidindex on student ()",
+		},
+		// An index is on one field, so a second one is not part of the
+		// grammar. Ignoring it would make an index on sid alone without
+		// saying so.
+		{
+			name:  "given a create index on two fields, then it reports ErrBadSyntax",
+			input: "create index sidindex on student (sid, sname)",
+		},
+		{
+			name:  "given a create index followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
+			input: "create index sidindex on student (sid) (sname)",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParserAfterCreate(t, tt.input)
+
+			if _, err := p.createIndex(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("createIndex() error = %v, want %v", err, ErrBadSyntax)
 			}
 		})
 	}
