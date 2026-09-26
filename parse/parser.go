@@ -50,16 +50,9 @@ func (p *Parser) Query() (QueryData, error) {
 		return QueryData{}, err
 	}
 
-	pred := query.NewPredicate()
-	if p.lex.MatchKeyword("where") {
-		if err := p.lex.EatKeyword("where"); err != nil {
-			return QueryData{}, err
-		}
-
-		pred, err = p.predicate()
-		if err != nil {
-			return QueryData{}, err
-		}
+	pred, err := p.optionalWhere()
+	if err != nil {
+		return QueryData{}, err
 	}
 
 	if err := p.end(); err != nil {
@@ -76,11 +69,58 @@ func (p *Parser) Query() (QueryData, error) {
 // UpdateCmd parses a statement that changes the database, which has to be the
 // whole of the input.
 func (p *Parser) UpdateCmd() (UpdateCommand, error) {
-	if p.lex.MatchKeyword("insert") {
+	switch {
+	case p.lex.MatchKeyword("insert"):
 		return p.insert()
+	case p.lex.MatchKeyword("delete"):
+		return p.delete()
+	default:
+		return nil, p.lex.unexpected("update command")
+	}
+}
+
+// delete parses a delete statement.
+func (p *Parser) delete() (DeleteData, error) {
+	if err := p.lex.EatKeyword("delete"); err != nil {
+		return DeleteData{}, err
+	}
+	if err := p.lex.EatKeyword("from"); err != nil {
+		return DeleteData{}, err
 	}
 
-	return nil, p.lex.unexpected("update command")
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return DeleteData{}, err
+	}
+
+	pred, err := p.optionalWhere()
+	if err != nil {
+		return DeleteData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return DeleteData{}, err
+	}
+
+	return DeleteData{
+		tableName: tableName,
+		pred:      pred,
+	}, nil
+}
+
+// optionalWhere parses a where clause if there is one, and returns its
+// predicate. With no where clause, it returns a predicate of no terms, which
+// every record meets, so a statement without one needs nothing apart.
+func (p *Parser) optionalWhere() (query.Predicate, error) {
+	if !p.lex.MatchKeyword("where") {
+		return query.NewPredicate(), nil
+	}
+
+	if err := p.lex.EatKeyword("where"); err != nil {
+		return query.Predicate{}, err
+	}
+
+	return p.predicate()
 }
 
 // insert parses an insert statement.

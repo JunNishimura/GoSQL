@@ -423,9 +423,64 @@ func TestParserQuery(t *testing.T) {
 	}
 }
 
-// Only an insert is parsed yet, so the statements that are not one are the ones
-// the entry point has no branch for.
 func TestParserUpdateCmd(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		wantType UpdateCommand
+	}{
+		{
+			name:     "given an insert, then it is insert data",
+			input:    "insert into student (sid) values (1)",
+			wantType: InsertData{},
+		},
+		{
+			name:     "given a delete, then it is delete data",
+			input:    "delete from student",
+			wantType: DeleteData{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			got, err := p.UpdateCmd()
+			if err != nil {
+				t.Fatalf("UpdateCmd() error = %v", err)
+			}
+			if reflect.TypeOf(got) != reflect.TypeOf(tt.wantType) {
+				t.Errorf("UpdateCmd() = %T, want %T", got, tt.wantType)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given an empty input, then it reports ErrBadSyntax",
+			input: "",
+		},
+		{
+			name:  "given a query, then it reports ErrBadSyntax",
+			input: "select sname from student",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			if _, err := p.UpdateCmd(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("UpdateCmd() error = %v, want %v", err, ErrBadSyntax)
+			}
+		})
+	}
+}
+
+func TestParserInsert(t *testing.T) {
 	tests := []struct {
 		name       string
 		input      string
@@ -458,13 +513,9 @@ func TestParserUpdateCmd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newTestParser(t, tt.input)
 
-			cmd, err := p.UpdateCmd()
+			got, err := p.insert()
 			if err != nil {
-				t.Fatalf("UpdateCmd() error = %v", err)
-			}
-			got, ok := cmd.(InsertData)
-			if !ok {
-				t.Fatalf("UpdateCmd() = %T, want InsertData", cmd)
+				t.Fatalf("insert() error = %v", err)
 			}
 
 			if got.TableName() != tt.wantTable {
@@ -485,13 +536,8 @@ func TestParserUpdateCmd(t *testing.T) {
 		wantErr error
 	}{
 		{
-			name:    "given an empty input, then it reports ErrBadSyntax",
-			input:   "",
-			wantErr: ErrBadSyntax,
-		},
-		{
-			name:    "given a query, then it reports ErrBadSyntax",
-			input:   "select sname from student",
+			name:    "given a statement that is not an insert, then it reports ErrBadSyntax",
+			input:   "delete from student",
 			wantErr: ErrBadSyntax,
 		},
 		{
@@ -542,8 +588,108 @@ func TestParserUpdateCmd(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newTestParser(t, tt.input)
 
-			if _, err := p.UpdateCmd(); !errors.Is(err, tt.wantErr) {
-				t.Errorf("UpdateCmd() error = %v, want %v", err, tt.wantErr)
+			if _, err := p.insert(); !errors.Is(err, tt.wantErr) {
+				t.Errorf("insert() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParserDelete(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantTable string
+		wantPred  query.Predicate
+	}{
+		// A delete with no where clause removes every record, which a
+		// predicate of no terms already says.
+		{
+			name:      "given a delete with no where clause, then it is delete data of the table and a predicate of no terms",
+			input:     "delete from student",
+			wantTable: "student",
+			wantPred:  query.NewPredicate(),
+		},
+		{
+			name:      "given a delete with a where clause, then it is delete data of the table and the predicate written",
+			input:     "delete from student where sid = 3 and major = 'Math'",
+			wantTable: "student",
+			wantPred: query.NewPredicate(
+				query.NewTerm(
+					query.NewFieldExpression("sid"),
+					query.NewConstantExpression(query.NewIntConstant(3)),
+				),
+				query.NewTerm(
+					query.NewFieldExpression("major"),
+					query.NewConstantExpression(query.NewStringConstant("Math")),
+				),
+			),
+		},
+		{
+			name:      "given a delete written in upper case, then its keywords are read and its names are in lower case",
+			input:     "DELETE FROM Student WHERE SId = 3",
+			wantTable: "student",
+			wantPred: query.NewPredicate(
+				query.NewTerm(
+					query.NewFieldExpression("sid"),
+					query.NewConstantExpression(query.NewIntConstant(3)),
+				),
+			),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			got, err := p.delete()
+			if err != nil {
+				t.Fatalf("delete() error = %v", err)
+			}
+
+			if got.TableName() != tt.wantTable {
+				t.Errorf("TableName() = %q, want %q", got.TableName(), tt.wantTable)
+			}
+			if !reflect.DeepEqual(got.Predicate(), tt.wantPred) {
+				t.Errorf("Predicate() = %s, want %s", got.Predicate(), tt.wantPred)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given a statement that is not a delete, then it reports ErrBadSyntax",
+			input: "insert into student (sid) values (1)",
+		},
+		{
+			name:  "given a delete with no from, then it reports ErrBadSyntax",
+			input: "delete student",
+		},
+		{
+			name:  "given a delete with no table, then it reports ErrBadSyntax",
+			input: "delete from where sid = 3",
+		},
+		{
+			name:  "given a delete whose where has no predicate, then it reports ErrBadSyntax",
+			input: "delete from student where",
+		},
+		// Ignoring what follows would delete the records where sid is 3 and
+		// leave those where it is 4, which were asked to be deleted too.
+		{
+			name:  "given a delete followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
+			input: "delete from student where sid = 3 or sid = 4",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			if _, err := p.delete(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("delete() error = %v, want %v", err, ErrBadSyntax)
 			}
 		})
 	}
