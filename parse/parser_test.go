@@ -439,6 +439,11 @@ func TestParserUpdateCmd(t *testing.T) {
 			input:    "delete from student",
 			wantType: DeleteData{},
 		},
+		{
+			name:     "given an update, then it is modify data",
+			input:    "update student set gradyear = 2020",
+			wantType: ModifyData{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -690,6 +695,132 @@ func TestParserDelete(t *testing.T) {
 
 			if _, err := p.delete(); !errors.Is(err, ErrBadSyntax) {
 				t.Errorf("delete() error = %v, want %v", err, ErrBadSyntax)
+			}
+		})
+	}
+}
+
+func TestParserModify(t *testing.T) {
+	sidIs3 := query.NewPredicate(
+		query.NewTerm(
+			query.NewFieldExpression("sid"),
+			query.NewConstantExpression(query.NewIntConstant(3)),
+		),
+	)
+
+	tests := []struct {
+		name      string
+		input     string
+		wantTable string
+		wantField string
+		wantValue query.Expression
+		wantPred  query.Predicate
+	}{
+		// An update with no where clause changes every record, which a
+		// predicate of no terms already says.
+		{
+			name:      "given an update of a field to a constant with no where clause, then it is modify data of the table, the field, the constant and a predicate of no terms",
+			input:     "update student set gradyear = 2020",
+			wantTable: "student",
+			wantField: "gradyear",
+			wantValue: query.NewConstantExpression(query.NewIntConstant(2020)),
+			wantPred:  query.NewPredicate(),
+		},
+		{
+			name:      "given an update of a field to a string with a where clause, then it is modify data of the table, the field, the string and the predicate written",
+			input:     "update student set sname = 'Joe' where sid = 3",
+			wantTable: "student",
+			wantField: "sname",
+			wantValue: query.NewConstantExpression(query.NewStringConstant("Joe")),
+			wantPred:  sidIs3,
+		},
+		// The new value is an expression, so it can be what another field of
+		// the same record holds.
+		{
+			name:      "given an update of a field to another field, then its new value is a field expression",
+			input:     "update student set majorid = minorid where sid = 3",
+			wantTable: "student",
+			wantField: "majorid",
+			wantValue: query.NewFieldExpression("minorid"),
+			wantPred:  sidIs3,
+		},
+		{
+			name:      "given an update written in upper case, then its keywords are read and its names are in lower case",
+			input:     "UPDATE Student SET GradYear = 2020 WHERE SId = 3",
+			wantTable: "student",
+			wantField: "gradyear",
+			wantValue: query.NewConstantExpression(query.NewIntConstant(2020)),
+			wantPred:  sidIs3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			got, err := p.modify()
+			if err != nil {
+				t.Fatalf("modify() error = %v", err)
+			}
+
+			if got.TableName() != tt.wantTable {
+				t.Errorf("TableName() = %q, want %q", got.TableName(), tt.wantTable)
+			}
+			if got.TargetField() != tt.wantField {
+				t.Errorf("TargetField() = %q, want %q", got.TargetField(), tt.wantField)
+			}
+			if got.NewValue() != tt.wantValue {
+				t.Errorf("NewValue() = %s (%T), want %s (%T)", got.NewValue(), got.NewValue(), tt.wantValue, tt.wantValue)
+			}
+			if !reflect.DeepEqual(got.Predicate(), tt.wantPred) {
+				t.Errorf("Predicate() = %s, want %s", got.Predicate(), tt.wantPred)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given a statement that is not an update, then it reports ErrBadSyntax",
+			input: "delete from student",
+		},
+		{
+			name:  "given an update with no set, then it reports ErrBadSyntax",
+			input: "update student gradyear = 2020",
+		},
+		{
+			name:  "given an update with no field to set, then it reports ErrBadSyntax",
+			input: "update student set = 2020",
+		},
+		{
+			name:  "given an update with no equals sign, then it reports ErrBadSyntax",
+			input: "update student set gradyear 2020",
+		},
+		{
+			name:  "given an update with no new value, then it reports ErrBadSyntax",
+			input: "update student set gradyear =",
+		},
+		{
+			name:  "given an update whose where has no predicate, then it reports ErrBadSyntax",
+			input: "update student set gradyear = 2020 where",
+		},
+		// Only one field is set per update, so a second assignment is tokens
+		// the grammar has no place for. Ignoring it would leave sname as it
+		// was without saying so.
+		{
+			name:  "given an update that sets two fields, then it reports ErrBadSyntax",
+			input: "update student set gradyear = 2020, sname = 'Joe'",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			if _, err := p.modify(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("modify() error = %v, want %v", err, ErrBadSyntax)
 			}
 		})
 	}

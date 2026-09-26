@@ -74,9 +74,60 @@ func (p *Parser) UpdateCmd() (UpdateCommand, error) {
 		return p.insert()
 	case p.lex.MatchKeyword("delete"):
 		return p.delete()
+	case p.lex.MatchKeyword("update"):
+		return p.modify()
 	default:
 		return nil, p.lex.unexpected("update command")
 	}
+}
+
+// modify parses an update statement.
+//
+// Only one field is set per statement, so a second assignment is left over
+// after it and reported by end, rather than ignored.
+func (p *Parser) modify() (ModifyData, error) {
+	if err := p.lex.EatKeyword("update"); err != nil {
+		return ModifyData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	if err := p.lex.EatKeyword("set"); err != nil {
+		return ModifyData{}, err
+	}
+
+	fieldName, err := p.field()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	if err := p.lex.EatDelim('='); err != nil {
+		return ModifyData{}, err
+	}
+
+	newValue, err := p.expression()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	pred, err := p.optionalWhere()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return ModifyData{}, err
+	}
+
+	return ModifyData{
+		tableName: tableName,
+		fieldName: fieldName,
+		newValue:  newValue,
+		pred:      pred,
+	}, nil
 }
 
 // delete parses a delete statement.
