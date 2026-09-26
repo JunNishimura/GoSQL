@@ -84,6 +84,143 @@ func (p *Parser) UpdateCmd() (UpdateCommand, error) {
 	}
 }
 
+// insert parses an insert statement.
+//
+// The counts of fields and values are compared only once the statement has
+// been read to its end, so that a statement wrong in both ways is reported for
+// its syntax first.
+func (p *Parser) insert() (InsertData, error) {
+	if err := p.lex.EatKeyword("insert"); err != nil {
+		return InsertData{}, err
+	}
+	if err := p.lex.EatKeyword("into"); err != nil {
+		return InsertData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.lex.EatDelim('('); err != nil {
+		return InsertData{}, err
+	}
+	fields, err := p.idList()
+	if err != nil {
+		return InsertData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.lex.EatKeyword("values"); err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.lex.EatDelim('('); err != nil {
+		return InsertData{}, err
+	}
+	vals, err := p.constList()
+	if err != nil {
+		return InsertData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return InsertData{}, err
+	}
+
+	if len(fields) != len(vals) {
+		return InsertData{}, fmt.Errorf("insert into %s: %d fields and %d values: %w", tableName, len(fields), len(vals), ErrFieldValueCountMismatch)
+	}
+
+	return InsertData{
+		tableName: tableName,
+		fields:    fields,
+		vals:      vals,
+	}, nil
+}
+
+// delete parses a delete statement.
+func (p *Parser) delete() (DeleteData, error) {
+	if err := p.lex.EatKeyword("delete"); err != nil {
+		return DeleteData{}, err
+	}
+	if err := p.lex.EatKeyword("from"); err != nil {
+		return DeleteData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return DeleteData{}, err
+	}
+
+	pred, err := p.optionalWhere()
+	if err != nil {
+		return DeleteData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return DeleteData{}, err
+	}
+
+	return DeleteData{
+		tableName: tableName,
+		pred:      pred,
+	}, nil
+}
+
+// modify parses an update statement.
+//
+// Only one field is set per statement, so a second assignment is left over
+// after it and reported by end, rather than ignored.
+func (p *Parser) modify() (ModifyData, error) {
+	if err := p.lex.EatKeyword("update"); err != nil {
+		return ModifyData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	if err := p.lex.EatKeyword("set"); err != nil {
+		return ModifyData{}, err
+	}
+
+	fieldName, err := p.field()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	if err := p.lex.EatDelim('='); err != nil {
+		return ModifyData{}, err
+	}
+
+	newValue, err := p.expression()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	pred, err := p.optionalWhere()
+	if err != nil {
+		return ModifyData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return ModifyData{}, err
+	}
+
+	return ModifyData{
+		tableName: tableName,
+		fieldName: fieldName,
+		newValue:  newValue,
+		pred:      pred,
+	}, nil
+}
+
 // create parses a create statement, handing over to the method for the kind of
 // thing created once the create has been eaten.
 //
@@ -104,82 +241,6 @@ func (p *Parser) create() (UpdateCommand, error) {
 	default:
 		return nil, p.lex.unexpected("table, view or index")
 	}
-}
-
-// createIndex parses the rest of a create index statement, from the index that
-// follows the create.
-//
-// An index is on one field, so a second one is left where the closing
-// parenthesis should be and reported, rather than ignored.
-func (p *Parser) createIndex() (CreateIndexData, error) {
-	if err := p.lex.EatKeyword("index"); err != nil {
-		return CreateIndexData{}, err
-	}
-
-	indexName, err := p.lex.EatID()
-	if err != nil {
-		return CreateIndexData{}, err
-	}
-
-	if err := p.lex.EatKeyword("on"); err != nil {
-		return CreateIndexData{}, err
-	}
-
-	tableName, err := p.lex.EatID()
-	if err != nil {
-		return CreateIndexData{}, err
-	}
-
-	if err := p.lex.EatDelim('('); err != nil {
-		return CreateIndexData{}, err
-	}
-	fieldName, err := p.field()
-	if err != nil {
-		return CreateIndexData{}, err
-	}
-	if err := p.lex.EatDelim(')'); err != nil {
-		return CreateIndexData{}, err
-	}
-
-	if err := p.end(); err != nil {
-		return CreateIndexData{}, err
-	}
-
-	return CreateIndexData{
-		indexName: indexName,
-		tableName: tableName,
-		fieldName: fieldName,
-	}, nil
-}
-
-// createView parses the rest of a create view statement, from the view that
-// follows the create.
-//
-// The query is the last part of the statement, so the check Query makes that
-// nothing follows it is also the check that nothing follows the statement.
-func (p *Parser) createView() (CreateViewData, error) {
-	if err := p.lex.EatKeyword("view"); err != nil {
-		return CreateViewData{}, err
-	}
-
-	viewName, err := p.lex.EatID()
-	if err != nil {
-		return CreateViewData{}, err
-	}
-
-	if err := p.lex.EatKeyword("as"); err != nil {
-		return CreateViewData{}, err
-	}
-
-	qd, err := p.Query()
-	if err != nil {
-		return CreateViewData{}, err
-	}
-
-	return CreateViewData{
-		viewName: viewName,
-		qd:       qd,
-	}, nil
 }
 
 // fieldSpec is what a create table says about one field, before it is added to
@@ -293,81 +354,79 @@ func (p *Parser) fieldDef() (fieldSpec, error) {
 	}
 }
 
-// modify parses an update statement.
+// createView parses the rest of a create view statement, from the view that
+// follows the create.
 //
-// Only one field is set per statement, so a second assignment is left over
-// after it and reported by end, rather than ignored.
-func (p *Parser) modify() (ModifyData, error) {
-	if err := p.lex.EatKeyword("update"); err != nil {
-		return ModifyData{}, err
+// The query is the last part of the statement, so the check Query makes that
+// nothing follows it is also the check that nothing follows the statement.
+func (p *Parser) createView() (CreateViewData, error) {
+	if err := p.lex.EatKeyword("view"); err != nil {
+		return CreateViewData{}, err
 	}
 
-	tableName, err := p.lex.EatID()
+	viewName, err := p.lex.EatID()
 	if err != nil {
-		return ModifyData{}, err
+		return CreateViewData{}, err
 	}
 
-	if err := p.lex.EatKeyword("set"); err != nil {
-		return ModifyData{}, err
+	if err := p.lex.EatKeyword("as"); err != nil {
+		return CreateViewData{}, err
 	}
 
-	fieldName, err := p.field()
+	qd, err := p.Query()
 	if err != nil {
-		return ModifyData{}, err
+		return CreateViewData{}, err
 	}
 
-	if err := p.lex.EatDelim('='); err != nil {
-		return ModifyData{}, err
-	}
-
-	newValue, err := p.expression()
-	if err != nil {
-		return ModifyData{}, err
-	}
-
-	pred, err := p.optionalWhere()
-	if err != nil {
-		return ModifyData{}, err
-	}
-
-	if err := p.end(); err != nil {
-		return ModifyData{}, err
-	}
-
-	return ModifyData{
-		tableName: tableName,
-		fieldName: fieldName,
-		newValue:  newValue,
-		pred:      pred,
+	return CreateViewData{
+		viewName: viewName,
+		qd:       qd,
 	}, nil
 }
 
-// delete parses a delete statement.
-func (p *Parser) delete() (DeleteData, error) {
-	if err := p.lex.EatKeyword("delete"); err != nil {
-		return DeleteData{}, err
+// createIndex parses the rest of a create index statement, from the index that
+// follows the create.
+//
+// An index is on one field, so a second one is left where the closing
+// parenthesis should be and reported, rather than ignored.
+func (p *Parser) createIndex() (CreateIndexData, error) {
+	if err := p.lex.EatKeyword("index"); err != nil {
+		return CreateIndexData{}, err
 	}
-	if err := p.lex.EatKeyword("from"); err != nil {
-		return DeleteData{}, err
+
+	indexName, err := p.lex.EatID()
+	if err != nil {
+		return CreateIndexData{}, err
+	}
+
+	if err := p.lex.EatKeyword("on"); err != nil {
+		return CreateIndexData{}, err
 	}
 
 	tableName, err := p.lex.EatID()
 	if err != nil {
-		return DeleteData{}, err
+		return CreateIndexData{}, err
 	}
 
-	pred, err := p.optionalWhere()
+	if err := p.lex.EatDelim('('); err != nil {
+		return CreateIndexData{}, err
+	}
+	fieldName, err := p.field()
 	if err != nil {
-		return DeleteData{}, err
+		return CreateIndexData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return CreateIndexData{}, err
 	}
 
 	if err := p.end(); err != nil {
-		return DeleteData{}, err
+		return CreateIndexData{}, err
 	}
 
-	return DeleteData{
+	return CreateIndexData{
+		indexName: indexName,
 		tableName: tableName,
-		pred:      pred,
+		fieldName: fieldName,
 	}, nil
 }
 
@@ -384,84 +443,6 @@ func (p *Parser) optionalWhere() (query.Predicate, error) {
 	}
 
 	return p.predicate()
-}
-
-// insert parses an insert statement.
-//
-// The counts of fields and values are compared only once the statement has
-// been read to its end, so that a statement wrong in both ways is reported for
-// its syntax first.
-func (p *Parser) insert() (InsertData, error) {
-	if err := p.lex.EatKeyword("insert"); err != nil {
-		return InsertData{}, err
-	}
-	if err := p.lex.EatKeyword("into"); err != nil {
-		return InsertData{}, err
-	}
-
-	tableName, err := p.lex.EatID()
-	if err != nil {
-		return InsertData{}, err
-	}
-
-	if err := p.lex.EatDelim('('); err != nil {
-		return InsertData{}, err
-	}
-	fields, err := p.idList()
-	if err != nil {
-		return InsertData{}, err
-	}
-	if err := p.lex.EatDelim(')'); err != nil {
-		return InsertData{}, err
-	}
-
-	if err := p.lex.EatKeyword("values"); err != nil {
-		return InsertData{}, err
-	}
-
-	if err := p.lex.EatDelim('('); err != nil {
-		return InsertData{}, err
-	}
-	vals, err := p.constList()
-	if err != nil {
-		return InsertData{}, err
-	}
-	if err := p.lex.EatDelim(')'); err != nil {
-		return InsertData{}, err
-	}
-
-	if err := p.end(); err != nil {
-		return InsertData{}, err
-	}
-
-	if len(fields) != len(vals) {
-		return InsertData{}, fmt.Errorf("insert into %s: %d fields and %d values: %w", tableName, len(fields), len(vals), ErrFieldValueCountMismatch)
-	}
-
-	return InsertData{
-		tableName: tableName,
-		fields:    fields,
-		vals:      vals,
-	}, nil
-}
-
-// constList parses one or more constants separated by commas.
-func (p *Parser) constList() ([]query.Constant, error) {
-	var vals []query.Constant
-	for {
-		val, err := p.constant()
-		if err != nil {
-			return nil, err
-		}
-		vals = append(vals, val)
-
-		if !p.lex.MatchDelim(',') {
-			return vals, nil
-		}
-		if err := p.lex.EatDelim(','); err != nil {
-			return nil, err
-		}
-	}
 }
 
 // end reports ErrBadSyntax unless the statement just parsed is the whole of the
@@ -496,66 +477,23 @@ func (p *Parser) idList() ([]string, error) {
 	}
 }
 
-// field parses a field name.
-func (p *Parser) field() (string, error) {
-	return p.lex.EatID()
-}
-
-// constant parses an int or a string constant.
-func (p *Parser) constant() (query.Constant, error) {
-	if p.lex.MatchStringConstant() {
-		s, err := p.lex.EatStringConstant()
-		if err != nil {
-			return query.Constant{}, err
-		}
-
-		return query.NewStringConstant(s), nil
-	}
-
-	n, err := p.lex.EatIntConstant()
-	if err != nil {
-		return query.Constant{}, err
-	}
-
-	return query.NewIntConstant(n), nil
-}
-
-// expression parses a field name or a constant.
-func (p *Parser) expression() (query.Expression, error) {
-	if p.lex.MatchID() {
-		name, err := p.field()
+// constList parses one or more constants separated by commas.
+func (p *Parser) constList() ([]query.Constant, error) {
+	var vals []query.Constant
+	for {
+		val, err := p.constant()
 		if err != nil {
 			return nil, err
 		}
+		vals = append(vals, val)
 
-		return query.NewFieldExpression(name), nil
+		if !p.lex.MatchDelim(',') {
+			return vals, nil
+		}
+		if err := p.lex.EatDelim(','); err != nil {
+			return nil, err
+		}
 	}
-
-	val, err := p.constant()
-	if err != nil {
-		return nil, err
-	}
-
-	return query.NewConstantExpression(val), nil
-}
-
-// term parses two expressions with an equals sign between them.
-func (p *Parser) term() (query.Term, error) {
-	lhs, err := p.expression()
-	if err != nil {
-		return query.Term{}, err
-	}
-
-	if err := p.lex.EatDelim('='); err != nil {
-		return query.Term{}, err
-	}
-
-	rhs, err := p.expression()
-	if err != nil {
-		return query.Term{}, err
-	}
-
-	return query.NewTerm(lhs, rhs), nil
 }
 
 // predicate parses one or more terms joined by "and".
@@ -580,4 +518,66 @@ func (p *Parser) predicate() (query.Predicate, error) {
 			return query.Predicate{}, err
 		}
 	}
+}
+
+// term parses two expressions with an equals sign between them.
+func (p *Parser) term() (query.Term, error) {
+	lhs, err := p.expression()
+	if err != nil {
+		return query.Term{}, err
+	}
+
+	if err := p.lex.EatDelim('='); err != nil {
+		return query.Term{}, err
+	}
+
+	rhs, err := p.expression()
+	if err != nil {
+		return query.Term{}, err
+	}
+
+	return query.NewTerm(lhs, rhs), nil
+}
+
+// expression parses a field name or a constant.
+func (p *Parser) expression() (query.Expression, error) {
+	if p.lex.MatchID() {
+		name, err := p.field()
+		if err != nil {
+			return nil, err
+		}
+
+		return query.NewFieldExpression(name), nil
+	}
+
+	val, err := p.constant()
+	if err != nil {
+		return nil, err
+	}
+
+	return query.NewConstantExpression(val), nil
+}
+
+// constant parses an int or a string constant.
+func (p *Parser) constant() (query.Constant, error) {
+	if p.lex.MatchStringConstant() {
+		s, err := p.lex.EatStringConstant()
+		if err != nil {
+			return query.Constant{}, err
+		}
+
+		return query.NewStringConstant(s), nil
+	}
+
+	n, err := p.lex.EatIntConstant()
+	if err != nil {
+		return query.Constant{}, err
+	}
+
+	return query.NewIntConstant(n), nil
+}
+
+// field parses a field name.
+func (p *Parser) field() (string, error) {
+	return p.lex.EatID()
 }
