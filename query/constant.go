@@ -94,17 +94,23 @@ func (c Constant) AsString() (string, error) {
 	return c.strVal, nil
 }
 
-// String writes an int as the number and a varchar as the text in quotes, so
-// that a message naming a constant says which of the two it was.
+// String writes an int as the number and a varchar as the text in single
+// quotes, so that a message naming a constant says which of the two it was.
 //
-// Unquoted, the int 42 and the varchar "42" read as the same thing, and telling
+// Unquoted, the int 42 and the varchar '42' read as the same thing, and telling
 // those two apart is the whole of what a type mismatch has to report.
+//
+// The quotes are single because that is how SQL writes a string, so a
+// predicate printed from these is SQL that can be parsed again, which is how a
+// view's query is stored. Nothing inside the text is escaped: SQL as parsed here
+// has no way to write a quote inside a string, so no constant parsed from it
+// holds one.
 func (c Constant) String() string {
 	switch c.fieldType {
 	case recordmanager.FieldTypeInt:
 		return fmt.Sprintf("%d", c.intVal)
 	case recordmanager.FieldTypeVarchar:
-		return fmt.Sprintf("%q", c.strVal)
+		return "'" + c.strVal + "'"
 	default:
 		return fmt.Sprintf("Constant(%s)", c.fieldType)
 	}

@@ -129,7 +129,7 @@ func TestTermString(t *testing.T) {
 		{
 			name: "given a term of a field and a varchar constant, the constant keeps its quotes, so the two sides do not read as two fields",
 			term: NewTerm(NewFieldExpression("name"), NewConstantExpression(NewStringConstant(testRecordName))),
-			want: `name = "alice"`,
+			want: `name = 'alice'`,
 		},
 	}
 

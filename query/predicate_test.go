@@ -226,7 +226,7 @@ func TestPredicateString(t *testing.T) {
 		{
 			name: "given a predicate of two terms, they are written in the order they were given with and between them",
 			pred: NewPredicate(termThatHolds, termThatAlsoHolds),
-			want: `id = 42 and name = "alice"`,
+			want: `id = 42 and name = 'alice'`,
 		},
 	}
 

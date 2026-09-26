@@ -168,7 +168,7 @@ func TestConstantExpressionString(t *testing.T) {
 		{
 			name: "given a varchar constant whose text is the name of a field, it is quoted, so it does not read as that field",
 			val:  NewStringConstant("name"),
-			want: `"name"`,
+			want: `'name'`,
 		},
 		{
 			name: "given an int constant, it is the number on its own",
