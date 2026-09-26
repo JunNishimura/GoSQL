@@ -1,6 +1,10 @@
 package parse
 
-import "github.com/JunNishimura/GoSQL/query"
+import (
+	"fmt"
+
+	"github.com/JunNishimura/GoSQL/query"
+)
 
 // Parser reads SQL by recursive descent, one method for each rule of the
 // grammar, and builds what the rules describe as it goes.
@@ -67,6 +71,94 @@ func (p *Parser) Query() (QueryData, error) {
 		tables: tables,
 		pred:   pred,
 	}, nil
+}
+
+// UpdateCmd parses a statement that changes the database, which has to be the
+// whole of the input.
+func (p *Parser) UpdateCmd() (UpdateCommand, error) {
+	if p.lex.MatchKeyword("insert") {
+		return p.insert()
+	}
+
+	return nil, p.lex.unexpected("update command")
+}
+
+// insert parses an insert statement.
+//
+// The counts of fields and values are compared only once the statement has
+// been read to its end, so that a statement wrong in both ways is reported for
+// its syntax first.
+func (p *Parser) insert() (InsertData, error) {
+	if err := p.lex.EatKeyword("insert"); err != nil {
+		return InsertData{}, err
+	}
+	if err := p.lex.EatKeyword("into"); err != nil {
+		return InsertData{}, err
+	}
+
+	tableName, err := p.lex.EatID()
+	if err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.lex.EatDelim('('); err != nil {
+		return InsertData{}, err
+	}
+	fields, err := p.idList()
+	if err != nil {
+		return InsertData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.lex.EatKeyword("values"); err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.lex.EatDelim('('); err != nil {
+		return InsertData{}, err
+	}
+	vals, err := p.constList()
+	if err != nil {
+		return InsertData{}, err
+	}
+	if err := p.lex.EatDelim(')'); err != nil {
+		return InsertData{}, err
+	}
+
+	if err := p.end(); err != nil {
+		return InsertData{}, err
+	}
+
+	if len(fields) != len(vals) {
+		return InsertData{}, fmt.Errorf("insert into %s: %d fields and %d values: %w", tableName, len(fields), len(vals), ErrFieldValueCountMismatch)
+	}
+
+	return InsertData{
+		tableName: tableName,
+		fields:    fields,
+		vals:      vals,
+	}, nil
+}
+
+// constList parses one or more constants separated by commas.
+func (p *Parser) constList() ([]query.Constant, error) {
+	var vals []query.Constant
+	for {
+		val, err := p.constant()
+		if err != nil {
+			return nil, err
+		}
+		vals = append(vals, val)
+
+		if !p.lex.MatchDelim(',') {
+			return vals, nil
+		}
+		if err := p.lex.EatDelim(','); err != nil {
+			return nil, err
+		}
+	}
 }
 
 // end reports ErrBadSyntax unless the statement just parsed is the whole of the

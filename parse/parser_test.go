@@ -422,3 +422,129 @@ func TestParserQuery(t *testing.T) {
 		})
 	}
 }
+
+// Only an insert is parsed yet, so the statements that are not one are the ones
+// the entry point has no branch for.
+func TestParserUpdateCmd(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantTable  string
+		wantFields []string
+		wantValues []query.Constant
+	}{
+		{
+			name:       "given an insert of an int and a string, then it is insert data of the table, the fields and the values in the order written",
+			input:      "insert into student (sid, sname) values (1, 'Joe')",
+			wantTable:  "student",
+			wantFields: []string{"sid", "sname"},
+			wantValues: []query.Constant{
+				query.NewIntConstant(1),
+				query.NewStringConstant("Joe"),
+			},
+		},
+		{
+			name:       "given an insert written in upper case, then its keywords are read and its names are in lower case",
+			input:      "INSERT INTO Student (SId) VALUES (-5)",
+			wantTable:  "student",
+			wantFields: []string{"sid"},
+			wantValues: []query.Constant{
+				query.NewIntConstant(-5),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			cmd, err := p.UpdateCmd()
+			if err != nil {
+				t.Fatalf("UpdateCmd() error = %v", err)
+			}
+			got, ok := cmd.(InsertData)
+			if !ok {
+				t.Fatalf("UpdateCmd() = %T, want InsertData", cmd)
+			}
+
+			if got.TableName() != tt.wantTable {
+				t.Errorf("TableName() = %q, want %q", got.TableName(), tt.wantTable)
+			}
+			if !slices.Equal(got.Fields(), tt.wantFields) {
+				t.Errorf("Fields() = %v, want %v", got.Fields(), tt.wantFields)
+			}
+			if !slices.Equal(got.Values(), tt.wantValues) {
+				t.Errorf("Values() = %v, want %v", got.Values(), tt.wantValues)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name    string
+		input   string
+		wantErr error
+	}{
+		{
+			name:    "given an empty input, then it reports ErrBadSyntax",
+			input:   "",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given a query, then it reports ErrBadSyntax",
+			input:   "select sname from student",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given an insert with no into, then it reports ErrBadSyntax",
+			input:   "insert student (sid) values (1)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given an insert with no parentheses around its fields, then it reports ErrBadSyntax",
+			input:   "insert into student sid values (1)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given an insert with no values, then it reports ErrBadSyntax",
+			input:   "insert into student (sid) (1)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given an insert whose value list ends in a comma, then it reports ErrBadSyntax",
+			input:   "insert into student (sid) values (1,)",
+			wantErr: ErrBadSyntax,
+		},
+		{
+			name:    "given an insert whose value is a field name, then it reports ErrBadSyntax",
+			input:   "insert into student (sid) values (sname)",
+			wantErr: ErrBadSyntax,
+		},
+		// Which value goes to which field is settled by position, so a value
+		// with no field, or a field with no value, has nowhere to be written.
+		{
+			name:    "given an insert of more fields than values, then it reports ErrFieldValueCountMismatch",
+			input:   "insert into student (sid, sname) values (1)",
+			wantErr: ErrFieldValueCountMismatch,
+		},
+		{
+			name:    "given an insert of more values than fields, then it reports ErrFieldValueCountMismatch",
+			input:   "insert into student (sid) values (1, 'Joe')",
+			wantErr: ErrFieldValueCountMismatch,
+		},
+		{
+			name:    "given an insert followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
+			input:   "insert into student (sid) values (1) (2)",
+			wantErr: ErrBadSyntax,
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			if _, err := p.UpdateCmd(); !errors.Is(err, tt.wantErr) {
+				t.Errorf("UpdateCmd() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
