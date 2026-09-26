@@ -301,21 +301,7 @@ func (p *Parser) createTable() (CreateTableData, error) {
 
 // fieldDefs parses one or more field definitions separated by commas.
 func (p *Parser) fieldDefs() ([]fieldSpec, error) {
-	var specs []fieldSpec
-	for {
-		spec, err := p.fieldDef()
-		if err != nil {
-			return nil, err
-		}
-		specs = append(specs, spec)
-
-		if !p.lex.MatchDelim(',') {
-			return specs, nil
-		}
-		if err := p.lex.EatDelim(','); err != nil {
-			return nil, err
-		}
-	}
+	return commaSeparated(p, p.fieldDef)
 }
 
 // fieldDef parses a field name and the type that follows it: int, or varchar
@@ -460,35 +446,31 @@ func (p *Parser) end() error {
 // The fields of a select list and the tables of a from clause are both this,
 // so one method reads either.
 func (p *Parser) idList() ([]string, error) {
-	var ids []string
-	for {
-		id, err := p.lex.EatID()
-		if err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-
-		if !p.lex.MatchDelim(',') {
-			return ids, nil
-		}
-		if err := p.lex.EatDelim(','); err != nil {
-			return nil, err
-		}
-	}
+	return commaSeparated(p, p.lex.EatID)
 }
 
 // constList parses one or more constants separated by commas.
 func (p *Parser) constList() ([]query.Constant, error) {
-	var vals []query.Constant
+	return commaSeparated(p, p.constant)
+}
+
+// commaSeparated parses one or more of what item parses, separated by commas,
+// and returns them in the order written.
+//
+// It is a function rather than a method because a method cannot take a type
+// parameter. A list ends at the first item not followed by a comma, so a comma
+// with nothing after it is an item that item fails to parse.
+func commaSeparated[T any](p *Parser, item func() (T, error)) ([]T, error) {
+	var items []T
 	for {
-		val, err := p.constant()
+		it, err := item()
 		if err != nil {
 			return nil, err
 		}
-		vals = append(vals, val)
+		items = append(items, it)
 
 		if !p.lex.MatchDelim(',') {
-			return vals, nil
+			return items, nil
 		}
 		if err := p.lex.EatDelim(','); err != nil {
 			return nil, err
