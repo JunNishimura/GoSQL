@@ -94,6 +94,14 @@ func (l *Lexer) MatchID() bool {
 	return !isKeyword
 }
 
+// MatchEnd reports whether the input has been read to its end.
+//
+// There is no Eat to go with it, since there is no token after the end to
+// move on to.
+func (l *Lexer) MatchEnd() bool {
+	return l.cur.kind == tokenEOF
+}
+
 // EatDelim takes the delimiter d.
 func (l *Lexer) EatDelim(d rune) error {
 	if !l.MatchDelim(d) {

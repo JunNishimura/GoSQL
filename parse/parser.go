@@ -22,6 +22,85 @@ func NewParser(s string) (*Parser, error) {
 	return &Parser{lex: lex}, nil
 }
 
+// Query parses a select statement, which has to be the whole of the input.
+//
+// Tokens left over after the statement are an error rather than ignored.
+// Ignoring them would run "where sid = 3 or sid = 4" as "where sid = 3", and
+// answer a query other than the one that was asked without saying so.
+func (p *Parser) Query() (QueryData, error) {
+	if err := p.lex.EatKeyword("select"); err != nil {
+		return QueryData{}, err
+	}
+
+	fields, err := p.idList()
+	if err != nil {
+		return QueryData{}, err
+	}
+
+	if err := p.lex.EatKeyword("from"); err != nil {
+		return QueryData{}, err
+	}
+
+	tables, err := p.idList()
+	if err != nil {
+		return QueryData{}, err
+	}
+
+	pred := query.NewPredicate()
+	if p.lex.MatchKeyword("where") {
+		if err := p.lex.EatKeyword("where"); err != nil {
+			return QueryData{}, err
+		}
+
+		pred, err = p.predicate()
+		if err != nil {
+			return QueryData{}, err
+		}
+	}
+
+	if err := p.end(); err != nil {
+		return QueryData{}, err
+	}
+
+	return QueryData{
+		fields: fields,
+		tables: tables,
+		pred:   pred,
+	}, nil
+}
+
+// end reports ErrBadSyntax unless the statement just parsed is the whole of the
+// input.
+func (p *Parser) end() error {
+	if !p.lex.MatchEnd() {
+		return p.lex.unexpected("end of input")
+	}
+
+	return nil
+}
+
+// idList parses one or more names separated by commas.
+//
+// The fields of a select list and the tables of a from clause are both this,
+// so one method reads either.
+func (p *Parser) idList() ([]string, error) {
+	var ids []string
+	for {
+		id, err := p.lex.EatID()
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+
+		if !p.lex.MatchDelim(',') {
+			return ids, nil
+		}
+		if err := p.lex.EatDelim(','); err != nil {
+			return nil, err
+		}
+	}
+}
+
 // field parses a field name.
 func (p *Parser) field() (string, error) {
 	return p.lex.EatID()

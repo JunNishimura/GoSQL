@@ -234,6 +234,51 @@ func TestLexerMatchID(t *testing.T) {
 	}
 }
 
+func TestLexerMatchEnd(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{
+			name:  "given a lexer over an empty input, then it matches",
+			input: "",
+			want:  true,
+		},
+		{
+			name:  "given a lexer over input of only whitespace, then it matches",
+			input: " \t\n ",
+			want:  true,
+		},
+		{
+			name:  "given a lexer at a token, then it does not match",
+			input: "or",
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := newTestLexer(t, tt.input)
+
+			if got := l.MatchEnd(); got != tt.want {
+				t.Errorf("MatchEnd() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("given a lexer at the last token, when it is eaten, then it matches", func(t *testing.T) {
+		l := newTestLexer(t, "sname")
+
+		if _, err := l.EatID(); err != nil {
+			t.Fatalf("EatID() error = %v", err)
+		}
+		if !l.MatchEnd() {
+			t.Errorf("MatchEnd() = false after the last token was eaten, want true")
+		}
+	})
+}
+
 // What follows the token being eaten is always a keyword, so that each case
 // can tell that the lexer moved on by matching it.
 func TestLexerEatDelim(t *testing.T) {

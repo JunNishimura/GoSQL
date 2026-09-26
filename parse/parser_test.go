@@ -3,6 +3,7 @@ package parse
 import (
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/query"
@@ -304,6 +305,119 @@ func TestParserPredicate(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("predicate() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParserQuery(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantFields []string
+		wantTables []string
+		wantPred   query.Predicate
+	}{
+		// A query with no where clause keeps every record, which a predicate
+		// of no terms already says, so there is no absence to stand for.
+		{
+			name:       "given a query of one field from one table, then it has that field and that table and a predicate of no terms",
+			input:      "select sname from student",
+			wantFields: []string{"sname"},
+			wantTables: []string{"student"},
+			wantPred:   query.NewPredicate(),
+		},
+		// The order of the fields is the order of the columns of the result,
+		// so it is kept as written.
+		{
+			name:       "given a query of several fields from several tables with a where clause, then it has them all in the order written",
+			input:      "select sname, sid, grade from student, enroll where sid = studentid and grade = 'A'",
+			wantFields: []string{"sname", "sid", "grade"},
+			wantTables: []string{"student", "enroll"},
+			wantPred: query.NewPredicate(
+				query.NewTerm(
+					query.NewFieldExpression("sid"),
+					query.NewFieldExpression("studentid"),
+				),
+				query.NewTerm(
+					query.NewFieldExpression("grade"),
+					query.NewConstantExpression(query.NewStringConstant("A")),
+				),
+			),
+		},
+		{
+			name:       "given a query written in upper case, then its keywords are read and its names are in lower case",
+			input:      "SELECT SName FROM Student",
+			wantFields: []string{"sname"},
+			wantTables: []string{"student"},
+			wantPred:   query.NewPredicate(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			got, err := p.Query()
+			if err != nil {
+				t.Fatalf("Query() error = %v", err)
+			}
+
+			if !slices.Equal(got.Fields(), tt.wantFields) {
+				t.Errorf("Fields() = %v, want %v", got.Fields(), tt.wantFields)
+			}
+			if !slices.Equal(got.Tables(), tt.wantTables) {
+				t.Errorf("Tables() = %v, want %v", got.Tables(), tt.wantTables)
+			}
+			if !reflect.DeepEqual(got.Predicate(), tt.wantPred) {
+				t.Errorf("Predicate() = %s, want %s", got.Predicate(), tt.wantPred)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given a statement that is not a query, then it reports ErrBadSyntax",
+			input: "delete from student",
+		},
+		{
+			name:  "given a query with no field, then it reports ErrBadSyntax",
+			input: "select from student",
+		},
+		{
+			name:  "given a query whose field list ends in a comma, then it reports ErrBadSyntax",
+			input: "select sname, from student",
+		},
+		{
+			name:  "given a query with no from, then it reports ErrBadSyntax",
+			input: "select sname student",
+		},
+		{
+			name:  "given a query with no table, then it reports ErrBadSyntax",
+			input: "select sname from",
+		},
+		{
+			name:  "given a query whose where has no predicate, then it reports ErrBadSyntax",
+			input: "select sname from student where",
+		},
+		// Stopping at the end of the grammar and ignoring the rest would run
+		// "where sid = 3 or sid = 4" as "where sid = 3", and answer a query
+		// other than the one that was asked.
+		{
+			name:  "given a query followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
+			input: "select sname from student where sid = 3 or sid = 4",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			if _, err := p.Query(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("Query() error = %v, want %v", err, ErrBadSyntax)
 			}
 		})
 	}
