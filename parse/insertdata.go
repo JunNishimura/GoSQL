@@ -16,16 +16,6 @@ import (
 // value with no field or a field with no value has nowhere to be written.
 var ErrFieldValueCountMismatch = errors.New("field and value counts differ")
 
-// UpdateCommand is a statement that changes the database rather than reading
-// from it, as returned by Parser.UpdateCmd.
-//
-// Which statement it is comes out of a type switch on the concrete type. The
-// method is unexported so that the statements this package parses are the only
-// ones there are.
-type UpdateCommand interface {
-	isUpdateCommand()
-}
-
 var _ UpdateCommand = InsertData{}
 
 // InsertData is what an insert statement asks for: a record written to a
