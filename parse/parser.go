@@ -94,11 +94,44 @@ func (p *Parser) create() (UpdateCommand, error) {
 		return nil, err
 	}
 
-	if p.lex.MatchKeyword("table") {
+	switch {
+	case p.lex.MatchKeyword("table"):
 		return p.createTable()
+	case p.lex.MatchKeyword("view"):
+		return p.createView()
+	default:
+		return nil, p.lex.unexpected("table or view")
+	}
+}
+
+// createView parses the rest of a create view statement, from the view that
+// follows the create.
+//
+// The query is the last part of the statement, so the check Query makes that
+// nothing follows it is also the check that nothing follows the statement.
+func (p *Parser) createView() (CreateViewData, error) {
+	if err := p.lex.EatKeyword("view"); err != nil {
+		return CreateViewData{}, err
 	}
 
-	return nil, p.lex.unexpected("table")
+	viewName, err := p.lex.EatID()
+	if err != nil {
+		return CreateViewData{}, err
+	}
+
+	if err := p.lex.EatKeyword("as"); err != nil {
+		return CreateViewData{}, err
+	}
+
+	qd, err := p.Query()
+	if err != nil {
+		return CreateViewData{}, err
+	}
+
+	return CreateViewData{
+		viewName: viewName,
+		qd:       qd,
+	}, nil
 }
 
 // fieldSpec is what a create table says about one field, before it is added to

@@ -450,6 +450,11 @@ func TestParserUpdateCmd(t *testing.T) {
 			input:    "create table student (sid int)",
 			wantType: CreateTableData{},
 		},
+		{
+			name:     "given a create view, then it is create view data",
+			input:    "create view mathstudents as select sname from student",
+			wantType: CreateViewData{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -832,20 +837,37 @@ func TestParserModify(t *testing.T) {
 	}
 }
 
-// Only a table can be created yet, so the kinds of thing that are not one are
-// the ones create has no branch for.
 func TestParserCreate(t *testing.T) {
-	t.Run("given a create table, then it is create table data", func(t *testing.T) {
-		p := newTestParser(t, "create table student (sid int)")
+	tests := []struct {
+		name     string
+		input    string
+		wantType UpdateCommand
+	}{
+		{
+			name:     "given a create table, then it is create table data",
+			input:    "create table student (sid int)",
+			wantType: CreateTableData{},
+		},
+		{
+			name:     "given a create view, then it is create view data",
+			input:    "create view mathstudents as select sname from student",
+			wantType: CreateViewData{},
+		},
+	}
 
-		got, err := p.create()
-		if err != nil {
-			t.Fatalf("create() error = %v", err)
-		}
-		if _, ok := got.(CreateTableData); !ok {
-			t.Errorf("create() = %T, want CreateTableData", got)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParser(t, tt.input)
+
+			got, err := p.create()
+			if err != nil {
+				t.Fatalf("create() error = %v", err)
+			}
+			if reflect.TypeOf(got) != reflect.TypeOf(tt.wantType) {
+				t.Errorf("create() = %T, want %T", got, tt.wantType)
+			}
+		})
+	}
 
 	errTests := []struct {
 		name  string
@@ -1032,6 +1054,82 @@ func TestParserCreateTable(t *testing.T) {
 
 			if _, err := p.createTable(); !errors.Is(err, tt.wantErr) {
 				t.Errorf("createTable() error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParserCreateView(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		wantView    string
+		wantViewDef string
+	}{
+		{
+			name:        "given a create view of a query with a where clause, then it is create view data of the view and the query written back out",
+			input:       "create view mathstudents as select sname, sid from student where major = 'Math'",
+			wantView:    "mathstudents",
+			wantViewDef: "select sname, sid from student where major = 'Math'",
+		},
+		{
+			name:        "given a create view written in upper case, then its names are in lower case and its query is written back out in lower case",
+			input:       "CREATE VIEW MathStudents AS SELECT SName FROM Student",
+			wantView:    "mathstudents",
+			wantViewDef: "select sname from student",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParserAfterCreate(t, tt.input)
+
+			got, err := p.createView()
+			if err != nil {
+				t.Fatalf("createView() error = %v", err)
+			}
+
+			if got.ViewName() != tt.wantView {
+				t.Errorf("ViewName() = %q, want %q", got.ViewName(), tt.wantView)
+			}
+			if got.ViewDef() != tt.wantViewDef {
+				t.Errorf("ViewDef() = %q, want %q", got.ViewDef(), tt.wantViewDef)
+			}
+		})
+	}
+
+	errTests := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "given a create view with no view name, then it reports ErrBadSyntax",
+			input: "create view as select sname from student",
+		},
+		{
+			name:  "given a create view with no as, then it reports ErrBadSyntax",
+			input: "create view mathstudents select sname from student",
+		},
+		{
+			name:  "given a create view with no query, then it reports ErrBadSyntax",
+			input: "create view mathstudents as",
+		},
+		{
+			name:  "given a create view of a statement that is not a query, then it reports ErrBadSyntax",
+			input: "create view mathstudents as delete from student",
+		},
+		{
+			name:  "given a create view followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
+			input: "create view mathstudents as select sname from student where sid = 3 or sid = 4",
+		},
+	}
+
+	for _, tt := range errTests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newTestParserAfterCreate(t, tt.input)
+
+			if _, err := p.createView(); !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("createView() error = %v, want %v", err, ErrBadSyntax)
 			}
 		})
 	}

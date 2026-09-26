@@ -2,6 +2,7 @@ package parse
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/JunNishimura/GoSQL/query"
 )
@@ -33,4 +34,22 @@ func (q QueryData) Tables() []string {
 // clause has a predicate of no terms, which every record meets.
 func (q QueryData) Predicate() query.Predicate {
 	return q.pred
+}
+
+// String writes the query back out as SQL that parses to the same query data.
+//
+// A view is stored as this text and parsed again whenever it is used, so being
+// read back is what it is for. It is written in the one form the parser leaves
+// a query in, in lower case with a space after each comma, rather than as it
+// was first typed.
+func (q QueryData) String() string {
+	s := "select " + strings.Join(q.fields, ", ") + " from " + strings.Join(q.tables, ", ")
+
+	// A predicate of no terms writes nothing, and stands for a where clause
+	// that was never written.
+	if pred := q.pred.String(); pred != "" {
+		s += " where " + pred
+	}
+
+	return s
 }
