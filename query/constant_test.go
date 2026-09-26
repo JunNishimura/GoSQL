@@ -249,12 +249,12 @@ func TestConstantString(t *testing.T) {
 		{
 			name: "given a varchar constant whose text is digits, it is quoted, so it does not read as the number",
 			c:    NewStringConstant("42"),
-			want: `"42"`,
+			want: `'42'`,
 		},
 		{
 			name: "given a varchar constant of the empty string, it is a pair of quotes rather than nothing",
 			c:    NewStringConstant(""),
-			want: `""`,
+			want: `''`,
 		},
 	}
 
