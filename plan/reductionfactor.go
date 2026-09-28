@@ -33,16 +33,16 @@ func reductionFactor(pred query.Predicate, p Plan) int {
 // guessed as one in however many values the larger of the two holds. Two
 // constants either always agree or never do.
 func termReductionFactor(term query.Term, p Plan) int {
-	lhsField, lhsIsField := term.LHS().(query.FieldExpression)
-	rhsField, rhsIsField := term.RHS().(query.FieldExpression)
+	lhsName, lhsIsField := fieldNameOf(term.LHS())
+	rhsName, rhsIsField := fieldNameOf(term.RHS())
 
 	switch {
 	case lhsIsField && rhsIsField:
-		return max(p.DistinctValues(lhsField.FieldName()), p.DistinctValues(rhsField.FieldName()))
+		return max(p.DistinctValues(lhsName), p.DistinctValues(rhsName))
 	case lhsIsField:
-		return p.DistinctValues(lhsField.FieldName())
+		return p.DistinctValues(lhsName)
 	case rhsIsField:
-		return p.DistinctValues(rhsField.FieldName())
+		return p.DistinctValues(rhsName)
 	}
 
 	lhsConstant := term.LHS().(query.ConstantExpression)
