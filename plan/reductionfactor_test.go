@@ -5,21 +5,7 @@ import (
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/query"
-	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
-
-// fakePlan is a plan that answers only how many distinct values its fields
-// hold, which is all a reduction factor asks of one. Its other answers are
-// zero, and no case below reads them.
-type fakePlan struct {
-	distinctValues map[string]int
-}
-
-func (fp fakePlan) Open() (query.Scan, error)           { return nil, nil }
-func (fp fakePlan) BlocksAccessed() int                 { return 0 }
-func (fp fakePlan) RecordsOutput() int                  { return 0 }
-func (fp fakePlan) DistinctValues(fieldName string) int { return fp.distinctValues[fieldName] }
-func (fp fakePlan) Schema() *recordmanager.Schema       { return nil }
 
 func TestReductionFactor(t *testing.T) {
 	// "a" holds 10 distinct values and "b" holds 4. They differ so that a case

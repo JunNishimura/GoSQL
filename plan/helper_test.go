@@ -148,3 +148,22 @@ func readIDs(t *testing.T, s query.Scan) []int32 {
 		ids = append(ids, id)
 	}
 }
+
+// fakePlan is a plan whose every answer is whatever the test set it to, so
+// that a plan built on top of it can be checked against numbers chosen for
+// the case rather than ones measured off a table. Opening it gives no scan;
+// a test that reads records builds on a table plan instead.
+type fakePlan struct {
+	blocksAccessed int
+	recordsOutput  int
+	distinctValues map[string]int
+	schema         *recordmanager.Schema
+}
+
+var _ Plan = fakePlan{}
+
+func (fp fakePlan) Open() (query.Scan, error)           { return nil, nil }
+func (fp fakePlan) BlocksAccessed() int                 { return fp.blocksAccessed }
+func (fp fakePlan) RecordsOutput() int                  { return fp.recordsOutput }
+func (fp fakePlan) DistinctValues(fieldName string) int { return fp.distinctValues[fieldName] }
+func (fp fakePlan) Schema() *recordmanager.Schema       { return fp.schema }
