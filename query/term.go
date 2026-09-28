@@ -29,6 +29,16 @@ func NewTerm(lhs, rhs Expression) Term {
 	}
 }
 
+// LHS is the expression on the left of the equals sign.
+func (t Term) LHS() Expression {
+	return t.lhs
+}
+
+// RHS is the expression on the right of the equals sign.
+func (t Term) RHS() Expression {
+	return t.rhs
+}
+
 // IsSatisfied reports whether the record the scan is on brings the two sides to
 // the same value.
 //

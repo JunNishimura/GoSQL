@@ -56,6 +56,11 @@ func (e FieldExpression) Evaluate(s Scan) (Constant, error) {
 	return s.GetValue(e.fieldName)
 }
 
+// FieldName is the name of the field the expression stands for.
+func (e FieldExpression) FieldName() string {
+	return e.fieldName
+}
+
 // String is the field name on its own, without quotes, so that a printed term
 // reads as the column it names rather than as text that happens to spell it.
 func (e FieldExpression) String() string {
@@ -83,6 +88,11 @@ func NewConstantExpression(val Constant) ConstantExpression {
 // there being a record to read.
 func (e ConstantExpression) Evaluate(_ Scan) (Constant, error) {
 	return e.val, nil
+}
+
+// Value is the constant the expression stands for.
+func (e ConstantExpression) Value() Constant {
+	return e.val
 }
 
 // String is the constant's own text, which leaves a varchar quoted.

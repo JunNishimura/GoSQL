@@ -185,3 +185,21 @@ func TestConstantExpressionString(t *testing.T) {
 		})
 	}
 }
+
+func TestFieldExpressionFieldName(t *testing.T) {
+	t.Run("it is the name of the field the expression was made from", func(t *testing.T) {
+		if got, want := NewFieldExpression("id").FieldName(), "id"; got != want {
+			t.Errorf("FieldName() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestConstantExpressionValue(t *testing.T) {
+	t.Run("it is the constant the expression was made from", func(t *testing.T) {
+		val := NewIntConstant(testRecordID)
+
+		if got := NewConstantExpression(val).Value(); got != val {
+			t.Errorf("Value() = %v, want %v", got, val)
+		}
+	})
+}

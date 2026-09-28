@@ -141,3 +141,25 @@ func TestTermString(t *testing.T) {
 		})
 	}
 }
+
+func TestTermLHS(t *testing.T) {
+	t.Run("it is the left-hand expression the term was made from", func(t *testing.T) {
+		lhs := NewFieldExpression("id")
+		rhs := NewConstantExpression(NewIntConstant(testRecordID))
+
+		if got := NewTerm(lhs, rhs).LHS(); got != lhs {
+			t.Errorf("LHS() = %v, want %v", got, lhs)
+		}
+	})
+}
+
+func TestTermRHS(t *testing.T) {
+	t.Run("it is the right-hand expression the term was made from", func(t *testing.T) {
+		lhs := NewFieldExpression("id")
+		rhs := NewConstantExpression(NewIntConstant(testRecordID))
+
+		if got := NewTerm(lhs, rhs).RHS(); got != rhs {
+			t.Errorf("RHS() = %v, want %v", got, rhs)
+		}
+	})
+}
