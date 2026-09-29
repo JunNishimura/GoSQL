@@ -3,6 +3,7 @@ package query
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
@@ -237,4 +238,33 @@ func TestPredicateString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPredicateTerms(t *testing.T) {
+	t.Run("given a predicate of two terms, when its terms are asked for, then they are the two it was made from, in order", func(t *testing.T) {
+		pred := NewPredicate(termThatHolds, termThatAlsoHolds)
+
+		want := []Term{termThatHolds, termThatAlsoHolds}
+		if got := pred.Terms(); !slices.Equal(got, want) {
+			t.Errorf("Terms() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("given a predicate of no terms, when its terms are asked for, then there are none", func(t *testing.T) {
+		if got := NewPredicate().Terms(); len(got) != 0 {
+			t.Errorf("Terms() = %v, want none", got)
+		}
+	})
+
+	// A planner takes a predicate apart through this, so the slice it hands out
+	// must not be the one the predicate reads from.
+	t.Run("given a predicate, when the slice of its terms is written to, then the predicate is unchanged", func(t *testing.T) {
+		pred := NewPredicate(termThatHolds)
+
+		pred.Terms()[0] = termThatDoesNotHold
+
+		if got, want := pred.String(), termThatHolds.String(); got != want {
+			t.Errorf("String() = %s, want %s: the predicate handed out the slice it reads from", got, want)
+		}
+	})
 }

@@ -66,6 +66,14 @@ func (p Predicate) ConjoinWith(other Predicate) Predicate {
 	}
 }
 
+// Terms returns the terms of the predicate, in the order they were given.
+//
+// This is how a planner takes a predicate apart. The slice is a copy, so a
+// caller that writes to it does not change the predicate it came from.
+func (p Predicate) Terms() []Term {
+	return slices.Clone(p.terms)
+}
+
 // String writes the terms in the order they were given, with "and" between
 // them.
 //

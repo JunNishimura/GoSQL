@@ -14,10 +14,11 @@ package query
 //
 // It is a Scan and not an UpdateScan, even though a record it hands out is a
 // record of a real table whenever the scan underneath is one, and so could be
-// written to. Writing through a select is what an update statement needs, and
-// the planner that runs those is not here yet. When it is, it gets a type whose
-// constructor takes an UpdateScan, rather than this one asking at every write
-// whether the scan it was handed happens to be updatable.
+// written to. The update planner, which is what writes to the records a
+// predicate keeps, opens the table's own scan and tests the predicate on each
+// record itself. That is all a select would do for it, and it spares this type
+// asking at every write whether the scan it was handed happens to be
+// updatable.
 type SelectScan struct {
 	s    Scan
 	pred Predicate
