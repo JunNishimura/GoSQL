@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -319,6 +320,54 @@ func TestArchive(t *testing.T) {
 		}
 		if got := readFirstBlock(t, fm, testFileName); got != 200 {
 			t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
+		}
+	})
+}
+
+func TestClose(t *testing.T) {
+	t.Run("given a file manager that has written to two files, when it is closed, then every handle it held is closed", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, "a.db", 100)
+		writeFirstBlock(t, fm, "b.db", 200)
+		var handles []*os.File
+		for _, file := range fm.openFiles {
+			handles = append(handles, file)
+		}
+
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		for _, file := range handles {
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Errorf("Stat() on %s error = %v, want %v", file.Name(), err, os.ErrClosed)
+			}
+		}
+	})
+
+	// Close forgets the handles as well as closing them, so a closed handle is
+	// never used again: a later read opens the file afresh.
+	t.Run("given a file manager that has been closed, when a file it wrote is read, then it reads what was written", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		if got := readFirstBlock(t, fm, testFileName); got != 100 {
+			t.Errorf("the file holds %d, want 100", got)
+		}
+	})
+
+	t.Run("given a file manager that has been closed, when it is closed again, then it reports no error", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		if err := fm.Close(); err != nil {
+			t.Errorf("Close() error = %v, want nil", err)
 		}
 	})
 }

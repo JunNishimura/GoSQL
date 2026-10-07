@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -154,6 +155,24 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 	}
 
 	return nil
+}
+
+// Close closes every file the manager has opened and forgets them, so that
+// using the manager afterwards opens each file afresh rather than going through
+// a closed handle.
+//
+// Every handle is closed and forgotten even when one fails to close, since a
+// handle that could not be closed is no more usable than one that was, and the
+// failures are reported together.
+func (f *FileManager) Close() error {
+	var errs []error
+	for fileName, file := range f.openFiles {
+		if err := file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close file %s: %w", fileName, err))
+		}
+		delete(f.openFiles, fileName)
+	}
+	return errors.Join(errs...)
 }
 
 func (f *FileManager) GetStats() Stats {
