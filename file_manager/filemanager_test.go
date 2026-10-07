@@ -50,6 +50,48 @@ func TestNewFileManager(t *testing.T) {
 	}
 }
 
+func TestIsNew(t *testing.T) {
+	tests := []struct {
+		name    string
+		dirFunc func(t *testing.T) string
+		want    bool
+	}{
+		{
+			name:    "given a database directory that does not exist, when a file manager is made on it, then it reports the database as new",
+			dirFunc: func(t *testing.T) string { return t.TempDir() + "/newdir" },
+			want:    true,
+		},
+		{
+			name:    "given a database directory that already exists, when a file manager is made on it, then it reports the database as not new",
+			dirFunc: func(t *testing.T) string { return t.TempDir() },
+			want:    false,
+		},
+		{
+			name: "given a database directory an earlier file manager created, when a second is made on it, then it reports the database as not new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir() + "/newdir"
+				if _, err := NewFileManager(dir, testBlockSize); err != nil {
+					t.Fatalf("NewFileManager() error = %v", err)
+				}
+				return dir
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, err := NewFileManager(tt.dirFunc(t), testBlockSize)
+			if err != nil {
+				t.Fatalf("NewFileManager() error = %v", err)
+			}
+			if got := fm.IsNew(); got != tt.want {
+				t.Errorf("IsNew() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteAndRead(t *testing.T) {
 	tests := []struct {
 		name              string

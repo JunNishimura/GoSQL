@@ -25,19 +25,30 @@ type FileManager struct {
 	blockSize   int
 	openFiles   map[string]*os.File
 	stats       Stats
+	isNew       bool
 }
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
+	isNew := false
 	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
 			return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
 		}
+		isNew = true
 	}
 	return &FileManager{
 		dbDirectory: dbDir,
 		blockSize:   blockSize,
 		openFiles:   make(map[string]*os.File),
+		isNew:       isNew,
 	}, nil
+}
+
+// IsNew reports whether the database directory was created by this file
+// manager, which is what tells a database starting up that it has no catalogs
+// to recover and has to make them instead.
+func (f *FileManager) IsNew() bool {
+	return f.isNew
 }
 
 func (f *FileManager) BlockSize() int {
