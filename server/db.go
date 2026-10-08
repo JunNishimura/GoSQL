@@ -3,11 +3,15 @@
 package server
 
 import (
+	"fmt"
+	"sync"
+
 	buffermanager "github.com/JunNishimura/GoSQL/buffer_manager"
 	concurrencymanager "github.com/JunNishimura/GoSQL/concurrency_manager"
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
+	"github.com/JunNishimura/GoSQL/transaction"
 )
 
 // logFile is the name of the log, kept in the database directory alongside the
@@ -23,10 +27,18 @@ type DB struct {
 	bufferManager   *buffermanager.BufferManager
 	lockTable       *concurrencymanager.LockTable
 	metadataManager *metadatamanager.MetadataManager
+
+	mu        sync.Mutex
+	lastTxNum int
 }
 
 // Open opens the database kept in dir, creating the directory if there is none,
 // with blocks of blockSize bytes and a pool of numBuffers buffers.
+//
+// A new database gets its catalogs; one that already existed is recovered, since
+// it may have been left by a crash with changes on disk that were never
+// committed. Either is done in a transaction of its own before Open returns, so
+// no other transaction sees the database before it is ready.
 func Open(dir string, blockSize, numBuffers int) (*DB, error) {
 	fm, err := filemanager.NewFileManager(dir, blockSize)
 	if err != nil {
@@ -45,13 +57,42 @@ func Open(dir string, blockSize, numBuffers int) (*DB, error) {
 		return nil, err
 	}
 
-	return &DB{
+	db := &DB{
 		fileManager:     fm,
 		logManager:      lm,
 		bufferManager:   bm,
 		lockTable:       concurrencymanager.NewLockTable(),
 		metadataManager: mm,
-	}, nil
+	}
+
+	tx, err := db.newTransaction()
+	if err != nil {
+		return nil, err
+	}
+	if fm.IsNew() {
+		if err := mm.CreateCatalogTables(tx); err != nil {
+			return nil, fmt.Errorf("open database %s: make catalogs: %w", dir, err)
+		}
+	} else {
+		if err := tx.Recover(); err != nil {
+			return nil, fmt.Errorf("open database %s: recover: %w", dir, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("open database %s: %w", dir, err)
+	}
+
+	return db, nil
+}
+
+// newTransaction starts a transaction on the database under the next number.
+func (db *DB) newTransaction() (*transaction.Transaction, error) {
+	db.mu.Lock()
+	db.lastTxNum++
+	txNum := db.lastTxNum
+	db.mu.Unlock()
+
+	return transaction.NewTransaction(db.fileManager, db.logManager, db.bufferManager, db.lockTable, txNum)
 }
 
 func (db *DB) FileManager() *filemanager.FileManager {
