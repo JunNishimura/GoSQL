@@ -3,6 +3,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -299,6 +300,105 @@ func TestDBNewTransaction(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Fatal("Pin() did not return after the writer committed")
+		}
+	})
+}
+
+// selectIDs runs sql through db's planner and reports the id of every record it
+// gives back.
+func selectIDs(t *testing.T, db *DB, tx *transaction.Transaction, sql string) []int32 {
+	t.Helper()
+
+	p, err := db.Planner().CreateQueryPlan(sql, tx)
+	if err != nil {
+		t.Fatalf("CreateQueryPlan(%q) error = %v", sql, err)
+	}
+	s, err := p.Open()
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer s.Close()
+
+	var ids []int32
+	for {
+		ok, err := s.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !ok {
+			return ids
+		}
+		id, err := s.GetInt("id")
+		if err != nil {
+			t.Fatalf("GetInt(%q) error = %v", "id", err)
+		}
+		ids = append(ids, id)
+	}
+}
+
+// executeUpdates runs every statement in sqls through db's planner in tx.
+func executeUpdates(t *testing.T, db *DB, tx *transaction.Transaction, sqls ...string) {
+	t.Helper()
+
+	for _, sql := range sqls {
+		if _, err := db.Planner().ExecuteUpdate(sql, tx); err != nil {
+			t.Fatalf("ExecuteUpdate(%q) error = %v", sql, err)
+		}
+	}
+}
+
+func TestDBPlanner(t *testing.T) {
+	t.Run("given a new database, when a table is made and a record put in through its planner, then a query through the planner reads the record back", func(t *testing.T) {
+		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		executeUpdates(t, db, tx,
+			"create table test (id int)",
+			"insert into test (id) values (7)",
+		)
+
+		if got := selectIDs(t, db, tx, "select id from test"); !slices.Equal(got, []int32{7}) {
+			t.Errorf("the query gives back ids %v, want [7]", got)
+		}
+	})
+
+	// The planner reads tables through the database's own metadata manager, so
+	// a table made before the database was opened again is one it knows about.
+	t.Run("given a database whose table and record were committed, when it is opened again, then a query through its planner reads the record back", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "db")
+		db, err := Open(dir, testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		executeUpdates(t, db, tx,
+			"create table test (id int)",
+			"insert into test (id) values (7)",
+		)
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Commit() error = %v", err)
+		}
+
+		reopened, err := Open(dir, testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err = reopened.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		if got := selectIDs(t, reopened, tx, "select id from test"); !slices.Equal(got, []int32{7}) {
+			t.Errorf("the query gives back ids %v, want [7]", got)
 		}
 	})
 }

@@ -11,6 +11,7 @@ import (
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
+	"github.com/JunNishimura/GoSQL/plan"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
@@ -27,6 +28,7 @@ type DB struct {
 	bufferManager   *buffermanager.BufferManager
 	lockTable       *concurrencymanager.LockTable
 	metadataManager *metadatamanager.MetadataManager
+	planner         *plan.Planner
 
 	mu        sync.Mutex
 	lastTxNum int
@@ -63,6 +65,7 @@ func Open(dir string, blockSize, numBuffers int) (*DB, error) {
 		bufferManager:   bm,
 		lockTable:       concurrencymanager.NewLockTable(),
 		metadataManager: mm,
+		planner:         plan.NewPlanner(plan.NewBasicQueryPlanner(mm), plan.NewBasicUpdatePlanner(mm)),
 	}
 
 	tx, err := db.NewTransaction()
@@ -115,4 +118,10 @@ func (db *DB) BufferManager() *buffermanager.BufferManager {
 
 func (db *DB) MetadataManager() *metadatamanager.MetadataManager {
 	return db.metadataManager
+}
+
+// Planner is the way SQL text is run against the database. Every caller gets
+// the same one, which plans through the database's own metadata manager.
+func (db *DB) Planner() *plan.Planner {
+	return db.planner
 }
