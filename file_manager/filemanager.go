@@ -30,24 +30,29 @@ type FileManager struct {
 }
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
-	isNew := false
-	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
-			return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
-		}
-		isNew = true
+	if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
+	}
+	entries, err := os.ReadDir(dbDir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory %s: %w", dbDir, err)
 	}
 	return &FileManager{
 		dbDirectory: dbDir,
 		blockSize:   blockSize,
 		openFiles:   make(map[string]*os.File),
-		isNew:       isNew,
+		isNew:       len(entries) == 0,
 	}, nil
 }
 
-// IsNew reports whether the database directory was created by this file
-// manager, which is what tells a database starting up that it has no catalogs
-// to recover and has to make them instead.
+// IsNew reports whether the database directory held nothing when the file
+// manager was made on it, either because it did not exist or because it was
+// empty. That is what tells a database starting up that it has no catalogs to
+// recover and has to make them instead.
+//
+// Any file at all counts, hidden ones too, since telling a database's files
+// from anything else would mean knowing their names, which is not this
+// layer's business.
 func (f *FileManager) IsNew() bool {
 	return f.isNew
 }

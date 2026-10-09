@@ -63,17 +63,43 @@ func TestIsNew(t *testing.T) {
 			want:    true,
 		},
 		{
-			name:    "given a database directory that already exists, when a file manager is made on it, then it reports the database as not new",
+			// A directory made ahead of time, by hand or by a test, holds no
+			// database yet, so it has to be set up like one that did not exist.
+			name:    "given a database directory that exists but is empty, when a file manager is made on it, then it reports the database as new",
 			dirFunc: func(t *testing.T) string { return t.TempDir() },
-			want:    false,
+			want:    true,
 		},
 		{
-			name: "given a database directory an earlier file manager created, when a second is made on it, then it reports the database as not new",
+			name: "given a database directory that holds a file, when a file manager is made on it, then it reports the database as not new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, testFileName), nil, 0666); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+				return dir
+			},
+			want: false,
+		},
+		{
+			name: "given a database directory an earlier file manager created and wrote nothing to, when a second is made on it, then it reports the database as new",
 			dirFunc: func(t *testing.T) string {
 				dir := t.TempDir() + "/newdir"
 				if _, err := NewFileManager(dir, testBlockSize); err != nil {
 					t.Fatalf("NewFileManager() error = %v", err)
 				}
+				return dir
+			},
+			want: true,
+		},
+		{
+			name: "given a database directory an earlier file manager wrote a block to, when a second is made on it, then it reports the database as not new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir() + "/newdir"
+				fm, err := NewFileManager(dir, testBlockSize)
+				if err != nil {
+					t.Fatalf("NewFileManager() error = %v", err)
+				}
+				writeFirstBlock(t, fm, testFileName, 100)
 				return dir
 			},
 			want: false,
