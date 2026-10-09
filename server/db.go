@@ -65,7 +65,7 @@ func Open(dir string, blockSize, numBuffers int) (*DB, error) {
 		metadataManager: mm,
 	}
 
-	tx, err := db.newTransaction()
+	tx, err := db.NewTransaction()
 	if err != nil {
 		return nil, err
 	}
@@ -85,8 +85,14 @@ func Open(dir string, blockSize, numBuffers int) (*DB, error) {
 	return db, nil
 }
 
-// newTransaction starts a transaction on the database under the next number.
-func (db *DB) newTransaction() (*transaction.Transaction, error) {
+// NewTransaction starts a transaction on the database under a number no other
+// transaction since Open has been given, and over the lock table every other
+// one shares. It is safe to call from more than one goroutine.
+//
+// Numbers start again from 1 each time the database is opened. That is safe
+// because Open ends recovery with a checkpoint, and recovery never reads the
+// log past one, so the numbers from before are never looked at again.
+func (db *DB) NewTransaction() (*transaction.Transaction, error) {
 	db.mu.Lock()
 	db.lastTxNum++
 	txNum := db.lastTxNum
