@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
@@ -41,11 +42,20 @@ type DB struct {
 // it may have been left by a crash with changes on disk that were never
 // committed. Either is done in a transaction of its own before Open returns, so
 // no other transaction sees the database before it is ready.
-func Open(dir string, blockSize, numBuffers int) (*DB, error) {
+//
+// A failed Open closes every file it opened before returning, since it hands
+// back no database for the caller to close.
+func Open(dir string, blockSize, numBuffers int) (_ *DB, err error) {
 	fm, err := filemanager.NewFileManager(dir, blockSize)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, fm.Close())
+		}
+	}()
+
 	lm, err := logmanager.NewLogManager(fm, logFile)
 	if err != nil {
 		return nil, err
@@ -102,6 +112,15 @@ func (db *DB) NewTransaction() (*transaction.Transaction, error) {
 	db.mu.Unlock()
 
 	return transaction.NewTransaction(db.fileManager, db.logManager, db.bufferManager, db.lockTable, txNum)
+}
+
+// Close closes every file the database has opened.
+//
+// It does not end transactions still running; whoever started them has to
+// commit or roll them back first, or what they wrote is left for the recovery
+// of the next Open to undo.
+func (db *DB) Close() error {
+	return db.fileManager.Close()
 }
 
 func (db *DB) FileManager() *filemanager.FileManager {

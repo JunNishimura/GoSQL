@@ -402,3 +402,64 @@ func TestDBPlanner(t *testing.T) {
 		}
 	})
 }
+
+// openFDs reports how many files the test process has open, skipping the test
+// where the system does not list them under /proc.
+func openFDs(t *testing.T) int {
+	t.Helper()
+
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Skipf("cannot count open files: %v", err)
+	}
+
+	return len(entries)
+}
+
+func TestDBClose(t *testing.T) {
+	t.Run("given a database that has had a table made in it, when it is closed, then every file it opened is closed", func(t *testing.T) {
+		dir := t.TempDir()
+		before := openFDs(t)
+		db, err := Open(dir, testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+		executeUpdates(t, db, tx, "create table test (id int)")
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Commit() error = %v", err)
+		}
+		// Without files open to start with, the count after Close would match
+		// whether or not Close closed anything.
+		if opened := openFDs(t); opened <= before {
+			t.Fatalf("the process has %d files open before Close, want more than the %d before Open", opened, before)
+		}
+
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		if after := openFDs(t); after != before {
+			t.Errorf("the process has %d files open, want %d as before Open", after, before)
+		}
+	})
+
+	// Open hands back no database when it fails, so nothing is left for the
+	// caller to close: the files have to be closed before it returns.
+	t.Run("given a block size too small for a catalog record, when a database is opened, then it fails and every file it opened is closed", func(t *testing.T) {
+		const tooSmallBlockSize = 100
+		dir := t.TempDir()
+		before := openFDs(t)
+
+		if _, err := Open(dir, tooSmallBlockSize, testNumBuffers); err == nil {
+			t.Fatal("Open() error = nil, want an error")
+		}
+
+		if after := openFDs(t); after != before {
+			t.Errorf("the process has %d files open, want %d as before Open", after, before)
+		}
+	})
+}
