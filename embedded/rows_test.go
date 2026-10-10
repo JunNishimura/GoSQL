@@ -173,3 +173,71 @@ func TestRowsClose(t *testing.T) {
 		executeAndCommit(t, c, "insert into test (id) values (8)")
 	})
 }
+
+func TestRowsColumnTypeDatabaseTypeName(t *testing.T) {
+	tests := []struct {
+		name  string
+		index int
+		want  string
+	}{
+		{
+			name:  "given the rows of a query selecting a varchar then an int, when the type of the varchar column is asked for, then it is VARCHAR",
+			index: 0,
+			want:  "VARCHAR",
+		},
+		{
+			name:  "given the rows of a query selecting a varchar then an int, when the type of the int column is asked for, then it is INT",
+			index: 1,
+			want:  "INT",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestConnWithTable(t)
+			executeUpdates(t, c.db, c.tx, "create table people (id int, name varchar(10))")
+			rows := newTestRows(t, c, c.tx, "select name, id from people", nil)
+			defer rows.Close()
+
+			if got := rows.ColumnTypeDatabaseTypeName(tt.index); got != tt.want {
+				t.Errorf("ColumnTypeDatabaseTypeName(%d) = %q, want %q", tt.index, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRowsColumnTypeLength(t *testing.T) {
+	tests := []struct {
+		name       string
+		index      int
+		wantLength int64
+		wantOK     bool
+	}{
+		{
+			name:       "given the rows of a query selecting a varchar(10) then an int, when the length of the varchar column is asked for, then it is 10",
+			index:      0,
+			wantLength: 10,
+			wantOK:     true,
+		},
+		{
+			name:       "given the rows of a query selecting a varchar(10) then an int, when the length of the int column is asked for, then it has none",
+			index:      1,
+			wantLength: 0,
+			wantOK:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newTestConnWithTable(t)
+			executeUpdates(t, c.db, c.tx, "create table people (id int, name varchar(10))")
+			rows := newTestRows(t, c, c.tx, "select name, id from people", nil)
+			defer rows.Close()
+
+			length, ok := rows.ColumnTypeLength(tt.index)
+			if length != tt.wantLength || ok != tt.wantOK {
+				t.Errorf("ColumnTypeLength(%d) = %d, %v, want %d, %v", tt.index, length, ok, tt.wantLength, tt.wantOK)
+			}
+		})
+	}
+}

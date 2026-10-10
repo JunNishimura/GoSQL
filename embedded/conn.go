@@ -114,6 +114,7 @@ func (c *Conn) openRows(query string, tx, autoTx *transaction.Transaction) (*Row
 	return &Rows{
 		scan:    s,
 		columns: p.Schema().Fields(),
+		schema:  p.Schema(),
 		autoTx:  autoTx,
 	}, nil
 }

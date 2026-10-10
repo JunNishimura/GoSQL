@@ -14,17 +14,51 @@ import (
 type Rows struct {
 	scan    query.Scan
 	columns []string
+	schema  *recordmanager.Schema
 	// autoTx is the transaction the query runs in when it was made outside one
 	// begun on the connection, to be committed when the rows are closed. It is
 	// nil for a query run in a transaction begun on the connection.
 	autoTx *transaction.Transaction
 }
 
-var _ driver.Rows = (*Rows)(nil)
+var (
+	_ driver.Rows                           = (*Rows)(nil)
+	_ driver.RowsColumnTypeDatabaseTypeName = (*Rows)(nil)
+	_ driver.RowsColumnTypeLength           = (*Rows)(nil)
+)
 
 // Columns names the fields of the records, in the order of the select list.
 func (r *Rows) Columns() []string {
 	return r.columns
+}
+
+// ColumnTypeDatabaseTypeName names the type of the column at index, as INT or
+// VARCHAR.
+func (r *Rows) ColumnTypeDatabaseTypeName(index int) string {
+	// The columns are the schema's own fields, so asking it about one cannot
+	// fail.
+	fieldType, _ := r.schema.Type(r.columns[index])
+	switch fieldType {
+	case recordmanager.FieldTypeInt:
+		return "INT"
+	case recordmanager.FieldTypeVarchar:
+		return "VARCHAR"
+	default:
+		return ""
+	}
+}
+
+// ColumnTypeLength reports the character limit of the column at index if it is
+// a varchar, and ok as false if it is an int, which has no length.
+func (r *Rows) ColumnTypeLength(index int) (length int64, ok bool) {
+	// The columns are the schema's own fields, so asking it about one cannot
+	// fail.
+	if fieldType, _ := r.schema.Type(r.columns[index]); fieldType != recordmanager.FieldTypeVarchar {
+		return 0, false
+	}
+	n, _ := r.schema.Length(r.columns[index])
+
+	return int64(n), true
 }
 
 // Next puts the fields of the next record into dest, an int field as an int64
