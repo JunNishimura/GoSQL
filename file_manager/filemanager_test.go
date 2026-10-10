@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,6 +46,74 @@ func TestNewFileManager(t *testing.T) {
 			}
 			if _, err := os.Stat(dir); os.IsNotExist(err) {
 				t.Error("directory does not exist after NewFileManager()")
+			}
+		})
+	}
+}
+
+func TestIsNew(t *testing.T) {
+	tests := []struct {
+		name    string
+		dirFunc func(t *testing.T) string
+		want    bool
+	}{
+		{
+			name:    "given a database directory that does not exist, when a file manager is made on it, then it reports the database as new",
+			dirFunc: func(t *testing.T) string { return t.TempDir() + "/newdir" },
+			want:    true,
+		},
+		{
+			// A directory made ahead of time, by hand or by a test, holds no
+			// database yet, so it has to be set up like one that did not exist.
+			name:    "given a database directory that exists but is empty, when a file manager is made on it, then it reports the database as new",
+			dirFunc: func(t *testing.T) string { return t.TempDir() },
+			want:    true,
+		},
+		{
+			name: "given a database directory that holds a file, when a file manager is made on it, then it reports the database as not new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, testFileName), nil, 0666); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+				return dir
+			},
+			want: false,
+		},
+		{
+			name: "given a database directory an earlier file manager created and wrote nothing to, when a second is made on it, then it reports the database as new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir() + "/newdir"
+				if _, err := NewFileManager(dir, testBlockSize); err != nil {
+					t.Fatalf("NewFileManager() error = %v", err)
+				}
+				return dir
+			},
+			want: true,
+		},
+		{
+			name: "given a database directory an earlier file manager wrote a block to, when a second is made on it, then it reports the database as not new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir() + "/newdir"
+				fm, err := NewFileManager(dir, testBlockSize)
+				if err != nil {
+					t.Fatalf("NewFileManager() error = %v", err)
+				}
+				writeFirstBlock(t, fm, testFileName, 100)
+				return dir
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, err := NewFileManager(tt.dirFunc(t), testBlockSize)
+			if err != nil {
+				t.Fatalf("NewFileManager() error = %v", err)
+			}
+			if got := fm.IsNew(); got != tt.want {
+				t.Errorf("IsNew() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -277,6 +346,54 @@ func TestArchive(t *testing.T) {
 		}
 		if got := readFirstBlock(t, fm, testFileName); got != 200 {
 			t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
+		}
+	})
+}
+
+func TestClose(t *testing.T) {
+	t.Run("given a file manager that has written to two files, when it is closed, then every handle it held is closed", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, "a.db", 100)
+		writeFirstBlock(t, fm, "b.db", 200)
+		var handles []*os.File
+		for _, file := range fm.openFiles {
+			handles = append(handles, file)
+		}
+
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		for _, file := range handles {
+			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Errorf("Stat() on %s error = %v, want %v", file.Name(), err, os.ErrClosed)
+			}
+		}
+	})
+
+	// Close forgets the handles as well as closing them, so a closed handle is
+	// never used again: a later read opens the file afresh.
+	t.Run("given a file manager that has been closed, when a file it wrote is read, then it reads what was written", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		if got := readFirstBlock(t, fm, testFileName); got != 100 {
+			t.Errorf("the file holds %d, want 100", got)
+		}
+	})
+
+	t.Run("given a file manager that has been closed, when it is closed again, then it reports no error", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		if err := fm.Close(); err != nil {
+			t.Errorf("Close() error = %v, want nil", err)
 		}
 	})
 }

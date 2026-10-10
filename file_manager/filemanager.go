@@ -1,6 +1,7 @@
 package filemanager
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,19 +26,35 @@ type FileManager struct {
 	blockSize   int
 	openFiles   map[string]*os.File
 	stats       Stats
+	isNew       bool
 }
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
-	if _, err := os.Stat(dbDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
-			return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
-		}
+	if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
+		return nil, fmt.Errorf("create directory %s: %w", dbDir, err)
+	}
+	entries, err := os.ReadDir(dbDir)
+	if err != nil {
+		return nil, fmt.Errorf("read directory %s: %w", dbDir, err)
 	}
 	return &FileManager{
 		dbDirectory: dbDir,
 		blockSize:   blockSize,
 		openFiles:   make(map[string]*os.File),
+		isNew:       len(entries) == 0,
 	}, nil
+}
+
+// IsNew reports whether the database directory held nothing when the file
+// manager was made on it, either because it did not exist or because it was
+// empty. That is what tells a database starting up that it has no catalogs to
+// recover and has to make them instead.
+//
+// Any file at all counts, hidden ones too, since telling a database's files
+// from anything else would mean knowing their names, which is not this
+// layer's business.
+func (f *FileManager) IsNew() bool {
+	return f.isNew
 }
 
 func (f *FileManager) BlockSize() int {
@@ -143,6 +160,24 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 	}
 
 	return nil
+}
+
+// Close closes every file the manager has opened and forgets them, so that
+// using the manager afterwards opens each file afresh rather than going through
+// a closed handle.
+//
+// Every handle is closed and forgotten even when one fails to close, since a
+// handle that could not be closed is no more usable than one that was, and the
+// failures are reported together.
+func (f *FileManager) Close() error {
+	var errs []error
+	for fileName, file := range f.openFiles {
+		if err := file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close file %s: %w", fileName, err))
+		}
+		delete(f.openFiles, fileName)
+	}
+	return errors.Join(errs...)
 }
 
 func (f *FileManager) GetStats() Stats {
