@@ -156,3 +156,108 @@ func TestDatabaseSQL(t *testing.T) {
 		}
 	})
 }
+
+func TestDatabaseSQLTx(t *testing.T) {
+	t.Run("given a table, when a record is put in within a transaction begun through database/sql that commits, then a query reads it", func(t *testing.T) {
+		db := openTestDB(t)
+		exec(t, db, "create table people (id int, name varchar(10))")
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+		exec(t, tx, "insert into people (id, name) values (1, 'ann')")
+
+		if err := tx.Commit(); err != nil {
+			t.Fatalf("Commit() error = %v", err)
+		}
+
+		want := []person{
+			{
+				id:   1,
+				name: "ann",
+			},
+		}
+		if got := queryPeople(t, db); !reflect.DeepEqual(got, want) {
+			t.Errorf("the query reads %v, want %v", got, want)
+		}
+	})
+
+	t.Run("given a table, when a record is put in within a transaction begun through database/sql that rolls back, then a query reads none", func(t *testing.T) {
+		db := openTestDB(t)
+		exec(t, db, "create table people (id int, name varchar(10))")
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+		exec(t, tx, "insert into people (id, name) values (1, 'ann')")
+		if got := queryPeople(t, tx); len(got) != 1 {
+			t.Fatalf("the transaction reads %v before rolling back, want the record it put in", got)
+		}
+
+		if err := tx.Rollback(); err != nil {
+			t.Fatalf("Rollback() error = %v", err)
+		}
+
+		if got := queryPeople(t, db); len(got) != 0 {
+			t.Errorf("the query reads %v, want none", got)
+		}
+	})
+}
+
+func TestDatabaseSQLReopen(t *testing.T) {
+	t.Run("given a database closed after a record was put in and committed, when it is opened again through database/sql, then a query reads the record", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := sql.Open("gosql", dir)
+		if err != nil {
+			t.Fatalf("sql.Open() error = %v", err)
+		}
+		exec(t, db, "create table people (id int, name varchar(10))")
+		exec(t, db, "insert into people (id, name) values (1, 'ann')")
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		reopened, err := sql.Open("gosql", dir)
+		if err != nil {
+			t.Fatalf("sql.Open() error = %v", err)
+		}
+		defer reopened.Close()
+
+		want := []person{
+			{
+				id:   1,
+				name: "ann",
+			},
+		}
+		if got := queryPeople(t, reopened); !reflect.DeepEqual(got, want) {
+			t.Errorf("the query reads %v, want %v", got, want)
+		}
+	})
+
+	t.Run("given a database closed while a transaction that put in a record was still open, when it is opened again through database/sql, then a query reads none", func(t *testing.T) {
+		dir := t.TempDir()
+		db, err := sql.Open("gosql", dir)
+		if err != nil {
+			t.Fatalf("sql.Open() error = %v", err)
+		}
+		exec(t, db, "create table people (id int, name varchar(10))")
+		tx, err := db.Begin()
+		if err != nil {
+			t.Fatalf("Begin() error = %v", err)
+		}
+		exec(t, tx, "insert into people (id, name) values (1, 'ann')")
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		reopened, err := sql.Open("gosql", dir)
+		if err != nil {
+			t.Fatalf("sql.Open() error = %v", err)
+		}
+		defer reopened.Close()
+
+		if got := queryPeople(t, reopened); len(got) != 0 {
+			t.Errorf("the query reads %v, want none", got)
+		}
+	})
+}
