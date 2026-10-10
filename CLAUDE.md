@@ -5,7 +5,9 @@
 Follow the TDD cycle: **List → Red → Green → Refactor**
 
 - **List**: enumerate the tasks to work on and choose which one to tackle. Skip this step if the task is already clear.
-- **Red**: write failing tests, then stop and wait for user confirmation before proceeding
+- **Red**: write failing tests, run them, and confirm they fail, then stop and wait for user confirmation before proceeding
+  - A compile error does not count as a failing test. If the tests call a function, method, or type that does not exist yet, add a stub with the final signature and an empty body that returns zero values, so the tests compile and run.
+  - Confirm each new test fails on its assertions, for the reason the test is meant to check. A test that already passes against the stub is not checking anything yet.
 - **Green**: implement the minimum code to make the tests pass
 - **Refactor**: clean up the code while keeping tests green
 
