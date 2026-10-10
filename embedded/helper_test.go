@@ -54,6 +54,37 @@ func executeUpdates(t *testing.T, db *server.DB, tx *transaction.Transaction, sq
 	}
 }
 
+// idsIn reports the id of every record of the table test, read in tx.
+func idsIn(t *testing.T, db *server.DB, tx *transaction.Transaction) []int32 {
+	t.Helper()
+
+	p, err := db.Planner().CreateQueryPlan("select id from test", tx)
+	if err != nil {
+		t.Fatalf("CreateQueryPlan() error = %v", err)
+	}
+	s, err := p.Open()
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer s.Close()
+
+	var ids []int32
+	for {
+		ok, err := s.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !ok {
+			return ids
+		}
+		id, err := s.GetInt("id")
+		if err != nil {
+			t.Fatalf("GetInt(%q) error = %v", "id", err)
+		}
+		ids = append(ids, id)
+	}
+}
+
 // committedIDs reports the id of every record of the table test, read in a
 // transaction of its own that it then commits.
 func committedIDs(t *testing.T, db *server.DB) []int32 {
@@ -63,31 +94,7 @@ func committedIDs(t *testing.T, db *server.DB) []int32 {
 	if err != nil {
 		t.Fatalf("NewTransaction() error = %v", err)
 	}
-	p, err := db.Planner().CreateQueryPlan("select id from test", tx)
-	if err != nil {
-		t.Fatalf("CreateQueryPlan() error = %v", err)
-	}
-	s, err := p.Open()
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-
-	var ids []int32
-	for {
-		ok, err := s.MoveToNextRecord()
-		if err != nil {
-			t.Fatalf("MoveToNextRecord() error = %v", err)
-		}
-		if !ok {
-			break
-		}
-		id, err := s.GetInt("id")
-		if err != nil {
-			t.Fatalf("GetInt(%q) error = %v", "id", err)
-		}
-		ids = append(ids, id)
-	}
-	s.Close()
+	ids := idsIn(t, db, tx)
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
