@@ -1,6 +1,9 @@
 package embedded
 
 import (
+	"database/sql/driver"
+	"errors"
+	"io"
 	"os"
 	"testing"
 
@@ -124,4 +127,28 @@ func newTestConnWithTable(t *testing.T) *Conn {
 	}
 
 	return &Conn{db: c.db, tx: tx}
+}
+
+// maxTestRows bounds how many records readAll reads, so that rows that never
+// report io.EOF fail the test rather than hang it.
+const maxTestRows = 100
+
+// readAll reads every record rows gives back.
+func readAll(t *testing.T, rows driver.Rows) [][]driver.Value {
+	t.Helper()
+
+	var records [][]driver.Value
+	for range maxTestRows {
+		dest := make([]driver.Value, len(rows.Columns()))
+		err := rows.Next(dest)
+		if errors.Is(err, io.EOF) {
+			return records
+		}
+		if err != nil {
+			t.Fatalf("Next() error = %v", err)
+		}
+		records = append(records, dest)
+	}
+	t.Fatalf("Next() gave more than %d records without io.EOF", maxTestRows)
+	return nil
 }

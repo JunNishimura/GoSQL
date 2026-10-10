@@ -193,3 +193,18 @@ func TestResultLastInsertId(t *testing.T) {
 		}
 	})
 }
+
+// executeAndCommit runs every statement in sqls through c's database in a
+// transaction of its own that it then commits, leaving c alone.
+func executeAndCommit(t *testing.T, c *Conn, sqls ...string) {
+	t.Helper()
+
+	tx, err := c.db.NewTransaction()
+	if err != nil {
+		t.Fatalf("NewTransaction() error = %v", err)
+	}
+	executeUpdates(t, c.db, tx, sqls...)
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+}

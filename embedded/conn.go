@@ -28,8 +28,9 @@ var ErrArgsUnsupported = errors.New("embedded: statements with arguments are not
 var ErrLastInsertIdUnsupported = errors.New("embedded: LastInsertId is not supported")
 
 var (
-	_ driver.Conn          = (*Conn)(nil)
-	_ driver.ExecerContext = (*Conn)(nil)
+	_ driver.Conn           = (*Conn)(nil)
+	_ driver.ExecerContext  = (*Conn)(nil)
+	_ driver.QueryerContext = (*Conn)(nil)
 )
 
 func (c *Conn) Prepare(query string) (driver.Stmt, error) {
@@ -65,6 +66,56 @@ func (c *Conn) ExecContext(ctx context.Context, query string, args []driver.Name
 	}
 
 	return Result{rowsAffected: int64(n)}, nil
+}
+
+// QueryContext runs a select statement. On a connection with a transaction
+// begun, it runs in that transaction; otherwise it runs in one of its own,
+// committed when the rows are closed, or rolled back if the query cannot be
+// planned or opened.
+func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if len(args) > 0 {
+		return nil, ErrArgsUnsupported
+	}
+
+	if c.tx != nil {
+		rows, err := c.openRows(query, c.tx, nil)
+		if err != nil {
+			// Returned as it is, the nil *Rows would make a driver.Rows that is
+			// not nil.
+			return nil, err
+		}
+		return rows, nil
+	}
+
+	tx, err := c.db.NewTransaction()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := c.openRows(query, tx, tx)
+	if err != nil {
+		return nil, errors.Join(err, tx.Rollback())
+	}
+
+	return rows, nil
+}
+
+// openRows plans query in tx and opens its scan, handing autoTx to the rows to
+// commit when they are closed.
+func (c *Conn) openRows(query string, tx, autoTx *transaction.Transaction) (*Rows, error) {
+	p, err := c.db.Planner().CreateQueryPlan(query, tx)
+	if err != nil {
+		return nil, err
+	}
+	s, err := p.Open()
+	if err != nil {
+		return nil, err
+	}
+
+	return &Rows{
+		scan:    s,
+		columns: p.Schema().Fields(),
+		autoTx:  autoTx,
+	}, nil
 }
 
 // Close rolls back the transaction begun on the connection, if there is one.
