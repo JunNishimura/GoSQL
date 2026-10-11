@@ -401,6 +401,18 @@ func TestArchive(t *testing.T) {
 
 		assertSynced(t, fm, map[string]bool{testFileName: true})
 	})
+
+	// Moving a file changes the database directory, which no longer names it.
+	t.Run("given a file created by a write, when it is archived, then the database directory is reported as synced", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{".": true})
+	})
 }
 
 // assertSynced checks what IsSynced reports for each file in want.
@@ -489,6 +501,14 @@ func TestSync(t *testing.T) {
 			want:     map[string]bool{"a.db": true, "b.db": false},
 		},
 		{
+			// A file synced to make a write durable has to be found after a
+			// crash too, which for a new file takes its directory entry.
+			name:     "given a file created by a write, when it is synced, then the database directory is reported as synced too",
+			written:  []string{"a.db"},
+			fileName: "a.db",
+			want:     map[string]bool{"a.db": true, ".": true},
+		},
+		{
 			name:     "given a file that has never been written, when it is synced, then it is reported as synced",
 			written:  nil,
 			fileName: "a.db",
@@ -539,6 +559,17 @@ func TestSyncAll(t *testing.T) {
 
 		assertSynced(t, fm, map[string]bool{"a.db": false, "b.db": true})
 	})
+
+	t.Run("given a file created by a write, when every file is synced, then the database directory is reported as synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, "a.db", 100)
+
+		if err := fm.SyncAll(); err != nil {
+			t.Fatalf("SyncAll() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{".": true})
+	})
 }
 
 func TestClose(t *testing.T) {
@@ -553,6 +584,17 @@ func TestClose(t *testing.T) {
 		}
 
 		assertSynced(t, fm, map[string]bool{testFileName: true})
+	})
+
+	t.Run("given a file manager that has created a file, when it is closed, then the database directory is reported as synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{".": true})
 	})
 
 	t.Run("given a file manager that has written to two files, when it is closed, then every handle it held is closed", func(t *testing.T) {

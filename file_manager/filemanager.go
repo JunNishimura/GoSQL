@@ -172,13 +172,18 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 // opened, and a handle follows the file it was opened on rather than the path,
 // so a forgotten one would keep pointing at the file that was moved away.
 //
+// Once the file is moved, every directory the move changed is synced: the
+// database directory, which no longer names the file, and each directory from
+// the destination up to the first one that already existed, which name the file
+// and the directories created to hold it.
+//
 // An existing destPath is refused rather than replaced. Archiving is done to
 // keep the old file, so quietly writing over an earlier one would defeat it.
 func (f *FileManager) Archive(fileName, destPath string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if err := f.sync(fileName); err != nil {
+	if err := f.syncFile(fileName); err != nil {
 		return err
 	}
 	if file, ok := f.openFiles[fileName]; ok {
@@ -194,14 +199,64 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 		return fmt.Errorf("stat %s: %w", destPath, err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(destPath), os.ModePerm); err != nil {
-		return fmt.Errorf("create directory %s: %w", filepath.Dir(destPath), err)
+	destDir := filepath.Dir(destPath)
+	existing, err := existingAncestor(destDir)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(destDir, os.ModePerm); err != nil {
+		return fmt.Errorf("create directory %s: %w", destDir, err)
 	}
 
 	if err := os.Rename(filepath.Join(f.dbDirectory, fileName), destPath); err != nil {
 		return fmt.Errorf("move %s to %s: %w", fileName, destPath, err)
 	}
 
+	if err := syncDir(f.dbDirectory); err != nil {
+		return err
+	}
+	f.dirUnsynced = false
+	for dir := destDir; ; dir = filepath.Dir(dir) {
+		if err := syncDir(dir); err != nil {
+			return err
+		}
+		if dir == existing {
+			break
+		}
+	}
+
+	return nil
+}
+
+// existingAncestor returns the closest of dir and its ancestors that exists.
+func existingAncestor(dir string) (string, error) {
+	for {
+		_, err := os.Stat(dir)
+		if err == nil {
+			return dir, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("stat %s: %w", dir, err)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return dir, nil
+		}
+		dir = parent
+	}
+}
+
+// syncDir puts the entries of the directory at path on disk.
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open directory %s: %w", path, err)
+	}
+	defer dir.Close()
+
+	if err := dir.Sync(); err != nil {
+		return fmt.Errorf("sync directory %s: %w", path, err)
+	}
 	return nil
 }
 
@@ -210,7 +265,8 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 // through a closed handle.
 //
 // Each file is synced before it is closed, since once its handle is forgotten
-// nothing would be left to sync it through.
+// nothing would be left to sync it through, and the database directory is
+// synced after them.
 //
 // Every handle is closed and forgotten even when one fails to sync or close,
 // since a handle that could not be closed is no more usable than one that was,
@@ -221,13 +277,16 @@ func (f *FileManager) Close() error {
 
 	var errs []error
 	for fileName, file := range f.openFiles {
-		if err := f.sync(fileName); err != nil {
+		if err := f.syncFile(fileName); err != nil {
 			errs = append(errs, err)
 		}
 		if err := file.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close file %s: %w", fileName, err))
 		}
 		delete(f.openFiles, fileName)
+	}
+	if err := f.syncDBDir(); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
@@ -252,14 +311,22 @@ func (f *FileManager) IsSynced(fileName string) bool {
 // Sync puts everything written to fileName on disk, so that it survives a crash
 // of the OS and not only of the process. A file with nothing unsynced is left
 // alone.
+//
+// The database directory is synced too if a file has been created in it, since
+// a new file that is on disk but not named in its directory cannot be found
+// after a crash.
 func (f *FileManager) Sync(fileName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.sync(fileName)
+	if err := f.syncFile(fileName); err != nil {
+		return err
+	}
+	return f.syncDBDir()
 }
 
-// SyncAll syncs every file written since it was last synced.
+// SyncAll syncs every file written since it was last synced, and the database
+// directory if a file has been created in it.
 //
 // It covers the files of every transaction, not only of the caller's: a block
 // a transaction changed may have been written out early to free its buffer, and
@@ -269,15 +336,28 @@ func (f *FileManager) SyncAll() error {
 	defer f.mu.Unlock()
 
 	for fileName := range f.unsynced {
-		if err := f.sync(fileName); err != nil {
+		if err := f.syncFile(fileName); err != nil {
 			return err
 		}
 	}
+	return f.syncDBDir()
+}
+
+// syncDBDir syncs the database directory if a file has been created in it
+// since it was last synced. The caller must hold mu.
+func (f *FileManager) syncDBDir() error {
+	if !f.dirUnsynced {
+		return nil
+	}
+	if err := syncDir(f.dbDirectory); err != nil {
+		return err
+	}
+	f.dirUnsynced = false
 	return nil
 }
 
-// sync syncs fileName if it has anything unsynced. The caller must hold mu.
-func (f *FileManager) sync(fileName string) error {
+// syncFile syncs fileName if it has anything unsynced. The caller must hold mu.
+func (f *FileManager) syncFile(fileName string) error {
 	if _, ok := f.unsynced[fileName]; !ok {
 		return nil
 	}
