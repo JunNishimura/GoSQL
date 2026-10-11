@@ -3,9 +3,9 @@ package filemanager
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type Stats struct {
@@ -21,12 +21,16 @@ func (s *Stats) BlocksWritten() int {
 	return s.blocksWritten
 }
 
+// FileManager is safe to use from several goroutines at once. The buffer
+// manager and the log manager each reach it under their own lock, so mu is
+// what keeps them from interleaving on openFiles and stats.
 type FileManager struct {
 	dbDirectory string
 	blockSize   int
 	openFiles   map[string]*os.File
 	stats       Stats
 	isNew       bool
+	mu          sync.Mutex
 }
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
@@ -62,23 +66,24 @@ func (f *FileManager) BlockSize() int {
 }
 
 func (f *FileManager) Read(blockId *BlockId, p *Page) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	file, err := f.getFile(blockId.filename)
 	if err != nil {
 		return err
 	}
 
 	offset := int64(blockId.blkNum) * int64(f.blockSize)
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return fmt.Errorf("seek block %s: %w", blockId, err)
-	}
-
-	if _, err = io.ReadFull(file, p.contents()); err != nil {
+	if _, err := file.ReadAt(p.contents(), offset); err != nil {
 		return fmt.Errorf("read block %s: %w", blockId, err)
 	}
 	f.stats.blocksRead++
 	return nil
 }
 
+// getFile returns the handle for fileName, opening it the first time. The
+// caller must hold mu.
 func (f *FileManager) getFile(fileName string) (*os.File, error) {
 	file, ok := f.openFiles[fileName]
 	if !ok {
@@ -93,6 +98,9 @@ func (f *FileManager) getFile(fileName string) (*os.File, error) {
 }
 
 func (f *FileManager) Write(blockId *BlockId, p *Page) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	file, err := f.getFile(blockId.filename)
 	if err != nil {
 		return err
@@ -107,6 +115,9 @@ func (f *FileManager) Write(blockId *BlockId, p *Page) error {
 }
 
 func (f *FileManager) Append(fileName string) (*BlockId, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	file, err := f.getFile(fileName)
 	if err != nil {
 		return nil, err
@@ -138,6 +149,9 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 // An existing destPath is refused rather than replaced. Archiving is done to
 // keep the old file, so quietly writing over an earlier one would defeat it.
 func (f *FileManager) Archive(fileName, destPath string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	if file, ok := f.openFiles[fileName]; ok {
 		if err := file.Close(); err != nil {
 			return fmt.Errorf("close file %s: %w", fileName, err)
@@ -170,6 +184,9 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 // handle that could not be closed is no more usable than one that was, and the
 // failures are reported together.
 func (f *FileManager) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	var errs []error
 	for fileName, file := range f.openFiles {
 		if err := file.Close(); err != nil {
@@ -181,10 +198,16 @@ func (f *FileManager) Close() error {
 }
 
 func (f *FileManager) GetStats() Stats {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	return f.stats
 }
 
 func (f *FileManager) Length(fileName string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
 	file, err := f.getFile(fileName)
 	if err != nil {
 		return 0, err

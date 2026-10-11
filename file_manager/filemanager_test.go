@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -172,6 +173,44 @@ func TestWriteAndRead(t *testing.T) {
 			}
 		})
 	}
+
+	// The buffer manager and the log manager each guard their own state with
+	// their own lock, so nothing outside the file manager keeps two goroutines
+	// from reaching it at once.
+	t.Run("given goroutines that each write and read back their own block of the same file at the same time, then each reads what it wrote", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		const goroutines = 8
+		const rounds = 100
+
+		var wg sync.WaitGroup
+		for i := range goroutines {
+			wg.Go(func() {
+				blk := NewBlockId(testFileName, i)
+				writePage := NewPageByBlockSize(testBlockSize)
+				readPage := NewPageByBlockSize(testBlockSize)
+				for round := range rounds {
+					want := int32(i*rounds + round)
+					if err := writePage.SetInt(0, want); err != nil {
+						t.Errorf("SetInt() error = %v", err)
+						return
+					}
+					if err := fm.Write(blk, writePage); err != nil {
+						t.Errorf("Write(%s) error = %v", blk, err)
+						return
+					}
+					if err := fm.Read(blk, readPage); err != nil {
+						t.Errorf("Read(%s) error = %v", blk, err)
+						return
+					}
+					if got := readPage.GetInt(0); got != want {
+						t.Errorf("%s holds %d, want %d", blk, got, want)
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+	})
 }
 
 func TestAppend(t *testing.T) {
