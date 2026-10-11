@@ -181,30 +181,40 @@ func TestFlush(t *testing.T) {
 		lsn              int
 		wantFlushed      bool
 		wantLastSavedLSN int
+		// wantSynced is whether the log file is synced afterwards. The log
+		// manager starts by writing its first block, so the file is unsynced
+		// unless the flush syncs it.
+		wantSynced bool
 	}{
 		{
-			name:             "given an lsn newer than what is on disk, it writes the page out",
+			// A buffer flushes the log before writing its block, and a commit
+			// before returning, and both count on the record surviving a crash
+			// of the OS, which takes a sync and not only a write.
+			name:             "given an lsn newer than what is on disk, it writes the page out and syncs the log file",
 			lastSavedLSN:     0,
 			latestLSN:        5,
 			lsn:              3,
 			wantFlushed:      true,
 			wantLastSavedLSN: 5,
+			wantSynced:       true,
 		},
 		{
-			name:             "given an lsn already on disk, it writes nothing",
+			name:             "given an lsn already on disk, it writes nothing and leaves the log file unsynced",
 			lastSavedLSN:     3,
 			latestLSN:        5,
 			lsn:              3,
 			wantFlushed:      false,
 			wantLastSavedLSN: 3,
+			wantSynced:       false,
 		},
 		{
-			name:             "given an lsn older than what is on disk, it writes nothing",
+			name:             "given an lsn older than what is on disk, it writes nothing and leaves the log file unsynced",
 			lastSavedLSN:     5,
 			latestLSN:        7,
 			lsn:              3,
 			wantFlushed:      false,
 			wantLastSavedLSN: 5,
+			wantSynced:       false,
 		},
 	}
 
@@ -237,6 +247,10 @@ func TestFlush(t *testing.T) {
 			gotFlushed := readPage.GetInt(4) == 999
 			if gotFlushed != tt.wantFlushed {
 				t.Errorf("flushed to disk = %v, want %v", gotFlushed, tt.wantFlushed)
+			}
+
+			if got := fm.IsSynced(testLogFile); got != tt.wantSynced {
+				t.Errorf("IsSynced(%q) = %v, want %v", testLogFile, got, tt.wantSynced)
 			}
 		})
 	}
