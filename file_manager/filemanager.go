@@ -32,10 +32,18 @@ type FileManager struct {
 	// only reaches the OS's page cache, so these are the files whose latest
 	// blocks a crash of the OS could still lose.
 	unsynced map[string]struct{}
-	stats    Stats
-	isNew    bool
-	mu       sync.Mutex
+	// dirUnsynced reports whether a file has been created in the database
+	// directory since the directory was last synced. Syncing a new file puts
+	// its contents on disk but not the directory entry that names it.
+	dirUnsynced bool
+	stats       Stats
+	isNew       bool
+	mu          sync.Mutex
 }
+
+// dirName is the name IsSynced takes for the database directory itself: the
+// directory as a path relative to itself.
+const dirName = "."
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 	if err := os.MkdirAll(dbDir, os.ModePerm); err != nil {
@@ -87,17 +95,27 @@ func (f *FileManager) Read(blockId *BlockId, p *Page) error {
 	return nil
 }
 
-// getFile returns the handle for fileName, opening it the first time. The
-// caller must hold mu.
+// getFile returns the handle for fileName, opening it the first time and
+// creating it if it does not exist. The caller must hold mu.
 func (f *FileManager) getFile(fileName string) (*os.File, error) {
-	file, ok := f.openFiles[fileName]
-	if !ok {
-		var err error
-		file, err = os.OpenFile(filepath.Join(f.dbDirectory, fileName), os.O_RDWR|os.O_CREATE, 0666)
-		if err != nil {
-			return nil, fmt.Errorf("open file %s: %w", filepath.Join(f.dbDirectory, fileName), err)
-		}
-		f.openFiles[fileName] = file
+	if file, ok := f.openFiles[fileName]; ok {
+		return file, nil
+	}
+
+	path := filepath.Join(f.dbDirectory, fileName)
+	_, err := os.Stat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("stat file %s: %w", path, err)
+	}
+	created := os.IsNotExist(err)
+
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		return nil, fmt.Errorf("open file %s: %w", path, err)
+	}
+	f.openFiles[fileName] = file
+	if created {
+		f.dirUnsynced = true
 	}
 	return file, nil
 }
@@ -149,7 +167,8 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 // the directories leading up to it. The name is then free: reading or writing
 // it again starts an empty file.
 //
-// The handle is closed and forgotten first. The manager keeps every file it has
+// The file is synced first, so that the archive is whole on disk, and its
+// handle is then closed and forgotten. The manager keeps every file it has
 // opened, and a handle follows the file it was opened on rather than the path,
 // so a forgotten one would keep pointing at the file that was moved away.
 //
@@ -159,6 +178,9 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if err := f.sync(fileName); err != nil {
+		return err
+	}
 	if file, ok := f.openFiles[fileName]; ok {
 		if err := file.Close(); err != nil {
 			return fmt.Errorf("close file %s: %w", fileName, err)
@@ -213,10 +235,16 @@ func (f *FileManager) Close() error {
 // IsSynced reports whether everything written to fileName has been synced to
 // disk. A file that has never been written counts as synced, since there is
 // nothing of it a crash could lose.
+//
+// Given ".", it reports on the database directory instead: whether every file
+// created in it is named on disk.
 func (f *FileManager) IsSynced(fileName string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if fileName == dirName {
+		return !f.dirUnsynced
+	}
 	_, ok := f.unsynced[fileName]
 	return !ok
 }

@@ -387,6 +387,20 @@ func TestArchive(t *testing.T) {
 			t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
 		}
 	})
+
+	// The archived file is synced before it is moved, so that it is whole on
+	// disk. Its name then refers to no file at all, so nothing under that name
+	// is left to sync.
+	t.Run("given a file that has been written, when it is archived, then its name is reported as synced", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{testFileName: true})
+	})
 }
 
 // assertSynced checks what IsSynced reports for each file in want.
@@ -427,6 +441,26 @@ func TestIsSynced(t *testing.T) {
 				}
 			},
 			want: map[string]bool{"a.db": false, "b.db": true},
+		},
+		{
+			// A new file is an entry in the directory, and syncing the file
+			// does not put that entry on disk.
+			name: "given a file manager, when a block is written to a file that did not exist, then the database directory is reported as not synced",
+			act: func(t *testing.T, fm *FileManager) {
+				if err := fm.Write(NewBlockId("a.db", 0), NewPageByBlockSize(testBlockSize)); err != nil {
+					t.Fatalf("Write() error = %v", err)
+				}
+			},
+			want: map[string]bool{".": false},
+		},
+		{
+			name: "given a file manager, when the length of a file that did not exist is asked for, then the database directory is reported as not synced",
+			act: func(t *testing.T, fm *FileManager) {
+				if _, err := fm.Length("a.db"); err != nil {
+					t.Fatalf("Length() error = %v", err)
+				}
+			},
+			want: map[string]bool{".": false},
 		},
 	}
 
