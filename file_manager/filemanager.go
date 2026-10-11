@@ -23,14 +23,18 @@ func (s *Stats) BlocksWritten() int {
 
 // FileManager is safe to use from several goroutines at once. The buffer
 // manager and the log manager each reach it under their own lock, so mu is
-// what keeps them from interleaving on openFiles and stats.
+// what keeps them from interleaving on openFiles, unsynced and stats.
 type FileManager struct {
 	dbDirectory string
 	blockSize   int
 	openFiles   map[string]*os.File
-	stats       Stats
-	isNew       bool
-	mu          sync.Mutex
+	// unsynced names the files written since they were last synced. A write
+	// only reaches the OS's page cache, so these are the files whose latest
+	// blocks a crash of the OS could still lose.
+	unsynced map[string]struct{}
+	stats    Stats
+	isNew    bool
+	mu       sync.Mutex
 }
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
@@ -45,6 +49,7 @@ func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 		dbDirectory: dbDir,
 		blockSize:   blockSize,
 		openFiles:   make(map[string]*os.File),
+		unsynced:    make(map[string]struct{}),
 		isNew:       len(entries) == 0,
 	}, nil
 }
@@ -110,6 +115,7 @@ func (f *FileManager) Write(blockId *BlockId, p *Page) error {
 	if _, err := file.WriteAt(p.contents(), offset); err != nil {
 		return fmt.Errorf("write block %s: %w", blockId, err)
 	}
+	f.unsynced[blockId.filename] = struct{}{}
 	f.stats.blocksWritten++
 	return nil
 }
@@ -134,6 +140,7 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 	if _, err := file.WriteAt(newBytes, offset); err != nil {
 		return nil, fmt.Errorf("append block to %s: %w", fileName, err)
 	}
+	f.unsynced[fileName] = struct{}{}
 
 	return NewBlockId(fileName, newBlockNum), nil
 }
@@ -176,25 +183,86 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 	return nil
 }
 
-// Close closes every file the manager has opened and forgets them, so that
-// using the manager afterwards opens each file afresh rather than going through
-// a closed handle.
+// Close syncs and closes every file the manager has opened and forgets them, so
+// that using the manager afterwards opens each file afresh rather than going
+// through a closed handle.
 //
-// Every handle is closed and forgotten even when one fails to close, since a
-// handle that could not be closed is no more usable than one that was, and the
-// failures are reported together.
+// Each file is synced before it is closed, since once its handle is forgotten
+// nothing would be left to sync it through.
+//
+// Every handle is closed and forgotten even when one fails to sync or close,
+// since a handle that could not be closed is no more usable than one that was,
+// and the failures are reported together.
 func (f *FileManager) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	var errs []error
 	for fileName, file := range f.openFiles {
+		if err := f.sync(fileName); err != nil {
+			errs = append(errs, err)
+		}
 		if err := file.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("close file %s: %w", fileName, err))
 		}
 		delete(f.openFiles, fileName)
 	}
 	return errors.Join(errs...)
+}
+
+// IsSynced reports whether everything written to fileName has been synced to
+// disk. A file that has never been written counts as synced, since there is
+// nothing of it a crash could lose.
+func (f *FileManager) IsSynced(fileName string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	_, ok := f.unsynced[fileName]
+	return !ok
+}
+
+// Sync puts everything written to fileName on disk, so that it survives a crash
+// of the OS and not only of the process. A file with nothing unsynced is left
+// alone.
+func (f *FileManager) Sync(fileName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.sync(fileName)
+}
+
+// SyncAll syncs every file written since it was last synced.
+//
+// It covers the files of every transaction, not only of the caller's: a block
+// a transaction changed may have been written out early to free its buffer, and
+// nothing remembers which transaction that block belonged to.
+func (f *FileManager) SyncAll() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for fileName := range f.unsynced {
+		if err := f.sync(fileName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sync syncs fileName if it has anything unsynced. The caller must hold mu.
+func (f *FileManager) sync(fileName string) error {
+	if _, ok := f.unsynced[fileName]; !ok {
+		return nil
+	}
+
+	file, err := f.getFile(fileName)
+	if err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync file %s: %w", fileName, err)
+	}
+	delete(f.unsynced, fileName)
+	return nil
 }
 
 func (f *FileManager) GetStats() Stats {
