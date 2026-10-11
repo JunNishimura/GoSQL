@@ -43,7 +43,8 @@ func (s Stats) Flushes() int {
 }
 
 type BufferManager struct {
-	bufferPool []*Buffer
+	fileManager *filemanager.FileManager
+	bufferPool  []*Buffer
 	// bufferByBlock indexes the pool by the block each buffer holds, so that a pin
 	// does not have to scan every buffer to find one.
 	bufferByBlock map[filemanager.BlockId]*Buffer
@@ -83,6 +84,7 @@ func NewBufferManagerWithPolicy(fm *filemanager.FileManager, lm *logmanager.LogM
 	}
 
 	bm := &BufferManager{
+		fileManager:   fm,
 		bufferPool:    bufferPool,
 		bufferByBlock: make(map[filemanager.BlockId]*Buffer, numBuffers),
 		numAvailable:  numBuffers,
@@ -148,6 +150,14 @@ func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 	return bm.bufferByBlock[*blk]
 }
 
+// FlushAll writes out every buffer txNum modified and then syncs every file
+// with unsynced writes, so that the transaction's changes survive a crash of the
+// OS. A commit, a rollback and a checkpoint call this before writing their
+// record, which must not reach the disk ahead of the data it describes.
+//
+// The sync covers more than the buffers written here: a block the transaction
+// modified may have been written out earlier to free its buffer, which leaves
+// that buffer no longer carrying txNum.
 func (bm *BufferManager) FlushAll(txNum int) error {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
@@ -162,7 +172,7 @@ func (bm *BufferManager) FlushAll(txNum int) error {
 			}
 		}
 	}
-	return nil
+	return bm.fileManager.SyncAll()
 }
 
 func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {

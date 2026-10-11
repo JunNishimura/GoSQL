@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -172,6 +173,44 @@ func TestWriteAndRead(t *testing.T) {
 			}
 		})
 	}
+
+	// The buffer manager and the log manager each guard their own state with
+	// their own lock, so nothing outside the file manager keeps two goroutines
+	// from reaching it at once.
+	t.Run("given goroutines that each write and read back their own block of the same file at the same time, then each reads what it wrote", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		const goroutines = 8
+		const rounds = 100
+
+		var wg sync.WaitGroup
+		for i := range goroutines {
+			wg.Go(func() {
+				blk := NewBlockId(testFileName, i)
+				writePage := NewPageByBlockSize(testBlockSize)
+				readPage := NewPageByBlockSize(testBlockSize)
+				for round := range rounds {
+					want := int32(i*rounds + round)
+					if err := writePage.SetInt(0, want); err != nil {
+						t.Errorf("SetInt() error = %v", err)
+						return
+					}
+					if err := fm.Write(blk, writePage); err != nil {
+						t.Errorf("Write(%s) error = %v", blk, err)
+						return
+					}
+					if err := fm.Read(blk, readPage); err != nil {
+						t.Errorf("Read(%s) error = %v", blk, err)
+						return
+					}
+					if got := readPage.GetInt(0); got != want {
+						t.Errorf("%s holds %d, want %d", blk, got, want)
+						return
+					}
+				}
+			})
+		}
+		wg.Wait()
+	})
 }
 
 func TestAppend(t *testing.T) {
@@ -348,9 +387,216 @@ func TestArchive(t *testing.T) {
 			t.Errorf("the file holds %d, want 200 (a refused archive must leave it alone)", got)
 		}
 	})
+
+	// The archived file is synced before it is moved, so that it is whole on
+	// disk. Its name then refers to no file at all, so nothing under that name
+	// is left to sync.
+	t.Run("given a file that has been written, when it is archived, then its name is reported as synced", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{testFileName: true})
+	})
+
+	// Moving a file changes the database directory, which no longer names it.
+	t.Run("given a file created by a write, when it is archived, then the database directory is reported as synced", func(t *testing.T) {
+		fm, dir := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Archive(testFileName, filepath.Join(dir, "archive", "old.db")); err != nil {
+			t.Fatalf("Archive() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{".": true})
+	})
+}
+
+// assertSynced checks what IsSynced reports for each file in want.
+func assertSynced(t *testing.T, fm *FileManager, want map[string]bool) {
+	t.Helper()
+	for fileName, wantSynced := range want {
+		if got := fm.IsSynced(fileName); got != wantSynced {
+			t.Errorf("IsSynced(%q) = %v, want %v", fileName, got, wantSynced)
+		}
+	}
+}
+
+func TestIsSynced(t *testing.T) {
+	tests := []struct {
+		name string
+		act  func(t *testing.T, fm *FileManager)
+		want map[string]bool
+	}{
+		{
+			name: "given a file manager that has written nothing, then it reports a file as synced",
+			act:  func(t *testing.T, fm *FileManager) {},
+			want: map[string]bool{"a.db": true},
+		},
+		{
+			name: "given a file manager, when a block of one file is written, then that file is reported as not synced and another file as synced",
+			act: func(t *testing.T, fm *FileManager) {
+				if err := fm.Write(NewBlockId("a.db", 0), NewPageByBlockSize(testBlockSize)); err != nil {
+					t.Fatalf("Write() error = %v", err)
+				}
+			},
+			want: map[string]bool{"a.db": false, "b.db": true},
+		},
+		{
+			name: "given a file manager, when a block is appended to one file, then that file is reported as not synced and another file as synced",
+			act: func(t *testing.T, fm *FileManager) {
+				if _, err := fm.Append("a.db"); err != nil {
+					t.Fatalf("Append() error = %v", err)
+				}
+			},
+			want: map[string]bool{"a.db": false, "b.db": true},
+		},
+		{
+			// A new file is an entry in the directory, and syncing the file
+			// does not put that entry on disk.
+			name: "given a file manager, when a block is written to a file that did not exist, then the database directory is reported as not synced",
+			act: func(t *testing.T, fm *FileManager) {
+				if err := fm.Write(NewBlockId("a.db", 0), NewPageByBlockSize(testBlockSize)); err != nil {
+					t.Fatalf("Write() error = %v", err)
+				}
+			},
+			want: map[string]bool{".": false},
+		},
+		{
+			name: "given a file manager, when the length of a file that did not exist is asked for, then the database directory is reported as not synced",
+			act: func(t *testing.T, fm *FileManager) {
+				if _, err := fm.Length("a.db"); err != nil {
+					t.Fatalf("Length() error = %v", err)
+				}
+			},
+			want: map[string]bool{".": false},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, _ := newTestFileManager(t)
+
+			tt.act(t, fm)
+
+			assertSynced(t, fm, tt.want)
+		})
+	}
+}
+
+func TestSync(t *testing.T) {
+	tests := []struct {
+		name     string
+		written  []string
+		fileName string
+		want     map[string]bool
+	}{
+		{
+			name:     "given two files that have been written, when one is synced, then only that one is reported as synced",
+			written:  []string{"a.db", "b.db"},
+			fileName: "a.db",
+			want:     map[string]bool{"a.db": true, "b.db": false},
+		},
+		{
+			// A file synced to make a write durable has to be found after a
+			// crash too, which for a new file takes its directory entry.
+			name:     "given a file created by a write, when it is synced, then the database directory is reported as synced too",
+			written:  []string{"a.db"},
+			fileName: "a.db",
+			want:     map[string]bool{"a.db": true, ".": true},
+		},
+		{
+			name:     "given a file that has never been written, when it is synced, then it is reported as synced",
+			written:  nil,
+			fileName: "a.db",
+			want:     map[string]bool{"a.db": true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, _ := newTestFileManager(t)
+			for _, fileName := range tt.written {
+				writeFirstBlock(t, fm, fileName, 100)
+			}
+
+			if err := fm.Sync(tt.fileName); err != nil {
+				t.Fatalf("Sync(%q) error = %v", tt.fileName, err)
+			}
+
+			assertSynced(t, fm, tt.want)
+		})
+	}
+}
+
+func TestSyncAll(t *testing.T) {
+	t.Run("given two files that have been written, when every file is synced, then both are reported as synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, "a.db", 100)
+		writeFirstBlock(t, fm, "b.db", 200)
+
+		if err := fm.SyncAll(); err != nil {
+			t.Fatalf("SyncAll() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{"a.db": true, "b.db": true})
+	})
+
+	t.Run("given two files that have been written and synced, when one is written again, then only that one is reported as not synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, "a.db", 100)
+		writeFirstBlock(t, fm, "b.db", 200)
+		if err := fm.SyncAll(); err != nil {
+			t.Fatalf("SyncAll() error = %v", err)
+		}
+
+		if err := fm.Write(NewBlockId("a.db", 0), NewPageByBlockSize(testBlockSize)); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{"a.db": false, "b.db": true})
+	})
+
+	t.Run("given a file created by a write, when every file is synced, then the database directory is reported as synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, "a.db", 100)
+
+		if err := fm.SyncAll(); err != nil {
+			t.Fatalf("SyncAll() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{".": true})
+	})
 }
 
 func TestClose(t *testing.T) {
+	// Close forgets the handles, so a file it left unsynced could not be synced
+	// through the manager afterwards.
+	t.Run("given a file manager that has written to a file, when it is closed, then the file is reported as synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{testFileName: true})
+	})
+
+	t.Run("given a file manager that has created a file, when it is closed, then the database directory is reported as synced", func(t *testing.T) {
+		fm, _ := newTestFileManager(t)
+		writeFirstBlock(t, fm, testFileName, 100)
+
+		if err := fm.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+
+		assertSynced(t, fm, map[string]bool{".": true})
+	})
+
 	t.Run("given a file manager that has written to two files, when it is closed, then every handle it held is closed", func(t *testing.T) {
 		fm, _ := newTestFileManager(t)
 		writeFirstBlock(t, fm, "a.db", 100)

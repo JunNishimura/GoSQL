@@ -7,6 +7,7 @@ import (
 	"time"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
+	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
 // unassigned marks a pool slot that holds no block in the findExistingBuffer tests.
@@ -709,6 +710,78 @@ func TestFlushAll(t *testing.T) {
 			}
 		})
 	}
+
+	// A commit flushes the transaction's buffers before writing its commit
+	// record, and the record must not reach the disk ahead of the data it
+	// commits. Writing the blocks only puts them in the OS's page cache.
+	t.Run("given a buffer the transaction modified, when its buffers are flushed, then the data file is synced", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, onDisk)
+		if err := fm.SyncAll(); err != nil {
+			t.Fatalf("SyncAll() error = %v", err)
+		}
+		bm, err := NewBufferManager(fm, lm, 1)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
+		modifyBlock(t, bm, lm, 0, 1)
+
+		if err := bm.FlushAll(1); err != nil {
+			t.Fatalf("FlushAll() error = %v", err)
+		}
+
+		if !fm.IsSynced(testDataFile) {
+			t.Errorf("IsSynced(%q) = false, want true", testDataFile)
+		}
+	})
+
+	// A block written out early to free its buffer no longer carries the
+	// transaction's number, so flushing the transaction's buffers does not
+	// write it again, yet it still has to be on disk before the commit record.
+	t.Run("given a block the transaction modified that was written out to free its buffer, when its buffers are flushed, then the data file is synced", func(t *testing.T) {
+		fm, lm := newTestManagers(t, testBlockSize)
+		prepareDataFile(t, fm, onDisk)
+		if err := fm.SyncAll(); err != nil {
+			t.Fatalf("SyncAll() error = %v", err)
+		}
+		bm, err := NewBufferManager(fm, lm, 1)
+		if err != nil {
+			t.Fatalf("NewBufferManager() error = %v", err)
+		}
+		modifyBlock(t, bm, lm, 0, 1)
+		other, err := bm.Pin(filemanager.NewBlockId(testDataFile, 1))
+		if err != nil {
+			t.Fatalf("Pin() error = %v", err)
+		}
+		bm.Unpin(other)
+
+		if err := bm.FlushAll(1); err != nil {
+			t.Fatalf("FlushAll() error = %v", err)
+		}
+
+		if !fm.IsSynced(testDataFile) {
+			t.Errorf("IsSynced(%q) = false, want true", testDataFile)
+		}
+	})
+}
+
+// modifyBlock has transaction txNum change block blkNum of the data file
+// through the buffer manager, logging the change first as a transaction does,
+// and leaves the buffer unpinned.
+func modifyBlock(t *testing.T, bm *BufferManager, lm *logmanager.LogManager, blkNum, txNum int) {
+	t.Helper()
+
+	buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, blkNum))
+	if err != nil {
+		t.Fatalf("Pin() error = %v", err)
+	}
+	defer bm.Unpin(buf)
+
+	lsn := appendLogRecord(t, lm)
+	if err := buf.Contents().SetInt(0, 999); err != nil {
+		t.Fatalf("SetInt() error = %v", err)
+	}
+	buf.SetModified(txNum, lsn)
 }
 
 func TestNewBufferManagerWithPolicy(t *testing.T) {

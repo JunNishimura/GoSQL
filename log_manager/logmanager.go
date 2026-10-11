@@ -63,18 +63,25 @@ func (lm *LogManager) appendNewBlock() (*filemanager.BlockId, error) {
 // Flush writes the log out far enough that the record with the given LSN is on
 // disk. A buffer calls this before writing its block, so that the record
 // describing a change is durable before the change itself.
+//
+// The log file is synced after the write, since a write alone reaches only the
+// OS's page cache and the OS is free to put the buffer's block on disk first.
 func (lm *LogManager) Flush(lsn int) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
 
-	if lsn > lm.lastSavedLSN {
-		return lm.flush()
+	if lsn <= lm.lastSavedLSN {
+		return nil
 	}
-	return nil
+	if err := lm.flush(); err != nil {
+		return err
+	}
+	return lm.fileManager.Sync(lm.logFile)
 }
 
-// flush writes the page out unconditionally. The caller must hold mu: it reads
-// and writes the page and the saved LSN, which Append changes as it goes.
+// flush writes the page out unconditionally, without syncing it. The caller
+// must hold mu: it reads and writes the page and the saved LSN, which Append
+// changes as it goes.
 func (lm *LogManager) flush() error {
 	if err := lm.fileManager.Write(lm.currentBlock, lm.logPage); err != nil {
 		return err
