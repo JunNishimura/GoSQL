@@ -1,10 +1,60 @@
 package index
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
+
+func TestHashIndexMoveToNextMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		entries   []entry
+		searchKey query.Constant
+		want      []string
+	}{
+		{
+			name: "given entries filed under 7 and under 8, when 7 is searched for, then the record ids filed under 7 come back in the order they were filed",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(1, 2)},
+			},
+			searchKey: query.NewIntConstant(7),
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(1, 2).String(),
+			},
+		},
+		{
+			name: "given entries filed under 7 and under 107, which share a bucket, when 7 is searched for, then only the record ids filed under 7 come back",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(7 + numBuckets), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 2)},
+			},
+			searchKey: query.NewIntConstant(7),
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(0, 2).String(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := NewHashIndex(newTestTransaction(t), testIndexName, newTestIndexLayout(t))
+			defer idx.Close()
+
+			insertEntries(t, idx, tt.entries)
+
+			if got := searchRecordIDs(t, idx, tt.searchKey); !slices.Equal(got, tt.want) {
+				t.Errorf("record ids filed under %s = %v, want %v", tt.searchKey, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestBucketOf(t *testing.T) {
 	tests := []struct {
