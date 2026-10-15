@@ -17,6 +17,10 @@ import (
 // reported rather than passed over, so that it is found where it shows.
 var ErrEntryNotFound = errors.New("index entry not found")
 
+// ErrNoSearch reports reading an index that is not in the middle of a search:
+// one that has not been searched yet, or has been closed since.
+var ErrNoSearch = errors.New("index has no search under way")
+
 // HashIndex is an index that spreads its entries over a fixed number of
 // buckets by a hash of the value they are filed under.
 //
@@ -71,6 +75,10 @@ func (hi *HashIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
 // the search key, passing over the entries of other values that hash to the
 // same bucket.
 func (hi *HashIndex) MoveToNextMatch() (bool, error) {
+	if err := hi.requireSearch(); err != nil {
+		return false, err
+	}
+
 	for {
 		ok, err := hi.ts.MoveToNextRecord()
 		if err != nil {
@@ -93,6 +101,10 @@ func (hi *HashIndex) MoveToNextMatch() (bool, error) {
 // DataRecordID puts the record id of the current entry back together from the
 // two fields it was taken apart into.
 func (hi *HashIndex) DataRecordID() (*recordmanager.RecordID, error) {
+	if err := hi.requireSearch(); err != nil {
+		return nil, err
+	}
+
 	blkNum, err := hi.ts.GetInt(BlockNumberField)
 	if err != nil {
 		return nil, err
@@ -153,6 +165,16 @@ func (hi *HashIndex) Delete(value query.Constant, rid *recordmanager.RecordID) e
 			return hi.ts.DeleteCurrentRecord()
 		}
 	}
+}
+
+// requireSearch reports ErrNoSearch unless a bucket is open, which it is from
+// a search until the index is closed.
+func (hi *HashIndex) requireSearch() error {
+	if hi.ts == nil {
+		return fmt.Errorf("read index %s: %w", hi.indexName, ErrNoSearch)
+	}
+
+	return nil
 }
 
 // Close gives back the block of whichever bucket is open.

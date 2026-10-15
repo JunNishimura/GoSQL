@@ -55,6 +55,41 @@ func TestHashIndexMoveToNextMatch(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("given a hash index that has not been searched, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := NewHashIndex(newTestTransaction(t), testIndexName, newTestIndexLayout(t))
+		defer idx.Close()
+
+		if _, err := idx.MoveToNextMatch(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("MoveToNextMatch() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+
+	t.Run("given a hash index that was searched and then closed, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := NewHashIndex(newTestTransaction(t), testIndexName, newTestIndexLayout(t))
+		insertEntries(t, idx, []entry{
+			{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+		})
+		if err := idx.MoveBeforeFirstMatch(query.NewIntConstant(7)); err != nil {
+			t.Fatalf("MoveBeforeFirstMatch(7) error = %v", err)
+		}
+		idx.Close()
+
+		if _, err := idx.MoveToNextMatch(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("MoveToNextMatch() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+}
+
+func TestHashIndexDataRecordID(t *testing.T) {
+	t.Run("given a hash index that has not been searched, when the record id is asked for, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := NewHashIndex(newTestTransaction(t), testIndexName, newTestIndexLayout(t))
+		defer idx.Close()
+
+		if _, err := idx.DataRecordID(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("DataRecordID() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
 }
 
 func TestHashIndexDelete(t *testing.T) {
