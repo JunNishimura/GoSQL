@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"hash/fnv"
 
@@ -8,6 +9,13 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
+
+// ErrEntryNotFound reports deleting an entry the index does not hold.
+//
+// An entry is only deleted alongside the record it points to, so one that is
+// not there means the index and its table have already come apart. That is
+// reported rather than passed over, so that it is found where it shows.
+var ErrEntryNotFound = errors.New("index entry not found")
 
 // HashIndex is an index that spreads its entries over a fixed number of
 // buckets by a hash of the value they are filed under.
@@ -118,8 +126,33 @@ func (hi *HashIndex) Insert(value query.Constant, rid *recordmanager.RecordID) e
 	return hi.ts.SetValue(IndexedValueField, value)
 }
 
+// Delete takes out the entry filing rid under value.
+//
+// It searches for value to find the entry, so whatever search was under way is
+// dropped. Both halves have to match: the same record id filed under another
+// value in the same bucket is a different entry, and is left alone.
 func (hi *HashIndex) Delete(value query.Constant, rid *recordmanager.RecordID) error {
-	return nil
+	if err := hi.MoveBeforeFirstMatch(value); err != nil {
+		return err
+	}
+
+	for {
+		ok, err := hi.MoveToNextMatch()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("delete %s filed under %s from index %s: %w", rid, value, hi.indexName, ErrEntryNotFound)
+		}
+
+		current, err := hi.DataRecordID()
+		if err != nil {
+			return err
+		}
+		if current.Equals(rid) {
+			return hi.ts.DeleteCurrentRecord()
+		}
+	}
 }
 
 // Close gives back the block of whichever bucket is open.

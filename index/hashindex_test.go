@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -51,6 +52,82 @@ func TestHashIndexMoveToNextMatch(t *testing.T) {
 
 			if got := searchRecordIDs(t, idx, tt.searchKey); !slices.Equal(got, tt.want) {
 				t.Errorf("record ids filed under %s = %v, want %v", tt.searchKey, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHashIndexDelete(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []entry
+		deleted entry
+		wantErr error
+		// want is the record ids each value is searched for afterwards, and
+		// should give back.
+		want map[query.Constant][]string
+	}{
+		{
+			name: "given two record ids filed under 7, when one of them is deleted, then the other is still filed under 7",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+			},
+			deleted: entry{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7): {recordmanager.NewRecordID(0, 0).String()},
+			},
+		},
+		{
+			name: "given one record id filed under both 7 and 107, which share a bucket, when it is deleted from under 107, then it is filed under 7 and no longer under 107",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(7 + numBuckets), rid: recordmanager.NewRecordID(0, 0)},
+			},
+			deleted: entry{value: query.NewIntConstant(7 + numBuckets), rid: recordmanager.NewRecordID(0, 0)},
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7):              {recordmanager.NewRecordID(0, 0).String()},
+				query.NewIntConstant(7 + numBuckets): nil,
+			},
+		},
+		{
+			name: "given a record id filed under 7, when another record id is deleted from under 7, then it reports ErrEntryNotFound and the one filed is still there",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+			},
+			deleted: entry{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+			wantErr: ErrEntryNotFound,
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7): {recordmanager.NewRecordID(0, 0).String()},
+			},
+		},
+		{
+			name: "given a record id filed under 107, when it is deleted from under 7, which shares the bucket, then it reports ErrEntryNotFound and it is still filed under 107",
+			entries: []entry{
+				{value: query.NewIntConstant(7 + numBuckets), rid: recordmanager.NewRecordID(0, 0)},
+			},
+			deleted: entry{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+			wantErr: ErrEntryNotFound,
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7 + numBuckets): {recordmanager.NewRecordID(0, 0).String()},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := NewHashIndex(newTestTransaction(t), testIndexName, newTestIndexLayout(t))
+			defer idx.Close()
+
+			insertEntries(t, idx, tt.entries)
+
+			if err := idx.Delete(tt.deleted.value, tt.deleted.rid); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Delete(%s, %s) error = %v, want %v", tt.deleted.value, tt.deleted.rid, err, tt.wantErr)
+			}
+
+			for searchKey, want := range tt.want {
+				if got := searchRecordIDs(t, idx, searchKey); !slices.Equal(got, want) {
+					t.Errorf("record ids filed under %s = %v, want %v", searchKey, got, want)
+				}
 			}
 		})
 	}
