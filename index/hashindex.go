@@ -190,6 +190,24 @@ func (hi *HashIndex) Close() {
 // numBuckets is how many buckets a hash index spreads its entries over.
 const numBuckets = 100
 
+// HashIndexSearchCost is how many blocks a search through a hash index of
+// numBlocks blocks reads, each block holding recordsPerBlock entries.
+//
+// A search reads the one bucket its value hashes to, and the buckets share the
+// blocks between them, so it reads one bucket's share. That supposes the
+// values spread evenly, which is what a hash is for; a value many records are
+// filed under makes its bucket bigger than the share, and this does not see it.
+//
+// The share is rounded up. A bucket whose entries fill one block and start
+// another is in two, and a bucket with any entries at all is in at least one.
+//
+// recordsPerBlock plays no part here. It is taken because what a search costs
+// through a B-tree turns on it, and the planner should not have to know which
+// kind of index it is asking about to know what to pass.
+func HashIndexSearchCost(numBlocks int, recordsPerBlock int) int {
+	return (numBlocks + numBuckets - 1) / numBuckets
+}
+
 // bucketOf is the number of the bucket the entries filed under value go in.
 //
 // The bucket a value goes in is written to disk as part of a file name, so the
@@ -210,8 +228,7 @@ func bucketOf(value query.Constant) int {
 	// AsString cannot fail either, a constant being one of the two kinds.
 	s, _ := value.AsString()
 	h := fnv.New32a()
-	// Writing to a hash never fails.
-	_, _ = h.Write([]byte(s))
+	h.Write([]byte(s))
 
 	return int(h.Sum32() % numBuckets)
 }

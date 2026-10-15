@@ -168,6 +168,41 @@ func TestHashIndexDelete(t *testing.T) {
 	}
 }
 
+func TestHashIndexSearchCost(t *testing.T) {
+	tests := []struct {
+		name            string
+		numBlocks       int
+		recordsPerBlock int
+		want            int
+	}{
+		{
+			name:            "when an index whose blocks divide evenly among the buckets is costed, then a search reads one bucket's share of them",
+			numBlocks:       10 * numBuckets,
+			recordsPerBlock: 4,
+			want:            10,
+		},
+		{
+			name:            "when an index whose blocks do not divide evenly among the buckets is costed, then a search reads one bucket's share rounded up",
+			numBlocks:       2*numBuckets + 50,
+			recordsPerBlock: 4,
+			want:            3,
+		},
+		{
+			name:            "when an index of fewer blocks than buckets is costed, then a search reads one block",
+			numBlocks:       numBuckets / 2,
+			recordsPerBlock: 4,
+			want:            1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HashIndexSearchCost(tt.numBlocks, tt.recordsPerBlock); got != tt.want {
+				t.Errorf("HashIndexSearchCost(%d, %d) = %d, want %d", tt.numBlocks, tt.recordsPerBlock, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBucketOf(t *testing.T) {
 	tests := []struct {
 		name  string
