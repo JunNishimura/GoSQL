@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JunNishimura/GoSQL/index"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
@@ -91,19 +92,19 @@ func TestCreateIndexLayout(t *testing.T) {
 				slotSize: intIndexSlotSize,
 				fields: []layoutField{
 					{
-						name:      indexBlockNumberField,
+						name:      index.BlockNumberField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    4,
 					},
 					{
-						name:      indexSlotField,
+						name:      index.SlotField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    8,
 					},
 					{
-						name:      indexedValueField,
+						name:      index.IndexedValueField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    12,
@@ -118,19 +119,19 @@ func TestCreateIndexLayout(t *testing.T) {
 				slotSize: varcharIndexSlotSize,
 				fields: []layoutField{
 					{
-						name:      indexBlockNumberField,
+						name:      index.BlockNumberField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    4,
 					},
 					{
-						name:      indexSlotField,
+						name:      index.SlotField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    8,
 					},
 					{
-						name:      indexedValueField,
+						name:      index.IndexedValueField,
 						fieldType: recordmanager.FieldTypeVarchar,
 						length:    testStringFieldLength,
 						offset:    12,

@@ -5,6 +5,27 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
+// The fields of an index's own records.
+//
+// An index is kept as a table like anything else, and one of its records says
+// that a value is held somewhere: the first two fields are a record id taken
+// apart, and the third is the value that record is filed under.
+//
+// They are named here, where they are read and written, and are exported for
+// the catalog, which lays the records out from them before any index is open.
+const (
+	// BlockNumberField is the block of the indexed table the record sits in.
+	BlockNumberField = "block_number"
+	// SlotField is the slot of that block. Together with the block number it is
+	// a record id, which is how a table is read from an index without reading
+	// the records before the one wanted.
+	SlotField = "slot"
+	// IndexedValueField is a copy of what the indexed field holds in that
+	// record. It is what the index is searched by, so it is kept here rather
+	// than read from the table, which is the whole point of having the index.
+	IndexedValueField = "indexed_value"
+)
+
 // Index is a lookup from a value of one field to the records of a table that
 // hold it.
 //
