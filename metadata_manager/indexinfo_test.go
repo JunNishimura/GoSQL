@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/JunNishimura/GoSQL/index"
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
@@ -91,19 +93,19 @@ func TestCreateIndexLayout(t *testing.T) {
 				slotSize: intIndexSlotSize,
 				fields: []layoutField{
 					{
-						name:      indexBlockNumberField,
+						name:      index.BlockNumberField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    4,
 					},
 					{
-						name:      indexSlotField,
+						name:      index.SlotField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    8,
 					},
 					{
-						name:      indexedValueField,
+						name:      index.IndexedValueField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    12,
@@ -118,19 +120,19 @@ func TestCreateIndexLayout(t *testing.T) {
 				slotSize: varcharIndexSlotSize,
 				fields: []layoutField{
 					{
-						name:      indexBlockNumberField,
+						name:      index.BlockNumberField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    4,
 					},
 					{
-						name:      indexSlotField,
+						name:      index.SlotField,
 						fieldType: recordmanager.FieldTypeInt,
 						length:    0,
 						offset:    8,
 					},
 					{
-						name:      indexedValueField,
+						name:      index.IndexedValueField,
 						fieldType: recordmanager.FieldTypeVarchar,
 						length:    testStringFieldLength,
 						offset:    12,
@@ -223,9 +225,16 @@ const (
 //	an index on an int         16 byte slots, 800/16 = 50 to a block
 //	an index on a varchar(20)  96 byte slots, 800/96 =  8 to a block
 //
-// The division rounds up. A hundred index records at fifty to a block fill two
-// blocks exactly, but at eight to a block they fill twelve and start a
-// thirteenth, and that thirteenth is read like any other.
+// A hash index spreads those blocks over its buckets and a search reads one
+// bucket, so the cost is the index's blocks over the number of buckets. The
+// tables here are big enough for the index to take more blocks than there are
+// buckets, since below that every index costs the same one block:
+//
+//	15000 records on an int         15000/50 =  300 blocks, 300/100  =  3
+//	15000 records on a varchar(20)  15000/8  = 1875 blocks, 1875/100 = 19
+//
+// Both divisions round up. Records that fill a block and start another are in
+// two, and a bucket whose entries do the same is read across both.
 func TestIndexInfoBlocksAccessed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -234,19 +243,25 @@ func TestIndexInfoBlocksAccessed(t *testing.T) {
 		want       int
 	}{
 		{
-			name:       "given an index on an int field, when the blocks a search would touch are asked for, then it is the index's records over what fits in a block",
+			name:       "given a hash index on an int field, when the blocks a search would touch are asked for, then it is one bucket's share of the index's blocks",
+			fieldName:  "id",
+			numRecords: 15000,
+			want:       3,
+		},
+		{
+			name:       "given a hash index on a varchar field, whose records are wider and so fewer to a block, when the blocks a search would touch are asked for, then it is more of them",
+			fieldName:  "name",
+			numRecords: 15000,
+			want:       19,
+		},
+		{
+			name:       "given a hash index of more than one block but fewer blocks than buckets, when the blocks a search would touch are asked for, then it is one block",
 			fieldName:  "id",
 			numRecords: testIndexedTableRecords,
-			want:       2,
+			want:       1,
 		},
 		{
-			name:       "given an index on a varchar field, whose records are wider and so fewer to a block, when the blocks a search would touch are asked for, then it is more of them",
-			fieldName:  "name",
-			numRecords: testIndexedTableRecords,
-			want:       13,
-		},
-		{
-			name:       "given an index with fewer records than fill a block, when the blocks a search would touch are asked for, then it is the one block they are in",
+			name:       "given a hash index with fewer records than fill a block, when the blocks a search would touch are asked for, then it is the one block they are in",
 			fieldName:  "id",
 			numRecords: 10,
 			want:       1,
@@ -271,6 +286,42 @@ func TestIndexInfoBlocksAccessed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIndexInfoOpen(t *testing.T) {
+	t.Run("given an index described on a field, when it is opened, then an entry inserted through it is found by searching it", func(t *testing.T) {
+		info := newTestIndexInfo(t, testIndexFieldName)
+
+		idx, err := info.Open()
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		defer idx.Close()
+
+		value := query.NewIntConstant(7)
+		rid := recordmanager.NewRecordID(3, 1)
+		if err := idx.Insert(value, rid); err != nil {
+			t.Fatalf("Insert(%s, %s) error = %v", value, rid, err)
+		}
+
+		if err := idx.MoveBeforeFirstMatch(value); err != nil {
+			t.Fatalf("MoveBeforeFirstMatch(%s) error = %v", value, err)
+		}
+		ok, err := idx.MoveToNextMatch()
+		if err != nil {
+			t.Fatalf("MoveToNextMatch() error = %v", err)
+		}
+		if !ok {
+			t.Fatalf("MoveToNextMatch() = false, want the entry filed under %s", value)
+		}
+		got, err := idx.DataRecordID()
+		if err != nil {
+			t.Fatalf("DataRecordID() error = %v", err)
+		}
+		if !got.Equals(rid) {
+			t.Errorf("DataRecordID() = %s, want %s", got, rid)
+		}
+	})
 }
 
 // A search through an index gives back the records filed under one value, not

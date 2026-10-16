@@ -3,27 +3,9 @@ package metadatamanager
 import (
 	"fmt"
 
+	"github.com/JunNishimura/GoSQL/index"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
-)
-
-// The fields of an index's own records.
-//
-// An index is kept as a table like anything else, and one of its records says
-// that a value is held somewhere: the first two fields are a record id taken
-// apart, and the third is the value that record is filed under.
-const (
-	// indexBlockNumberField is the block of the indexed table the record sits
-	// in.
-	indexBlockNumberField = "block_number"
-	// indexSlotField is the slot of that block. Together with the block number
-	// it is a record id, which is how a table is read from an index without
-	// reading the records before the one wanted.
-	indexSlotField = "slot"
-	// indexedValueField is a copy of what the indexed field holds in that
-	// record. It is what the index is searched by, so it is kept here rather
-	// than read from the table, which is the whole point of having the index.
-	indexedValueField = "indexed_value"
 )
 
 // IndexInfo is what is known about one index: which field of which table it is
@@ -148,41 +130,53 @@ func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*re
 
 	// Adding a field cannot fail here either, since the three names are fixed
 	// by this package and no two of them are the same.
-	if err := schema.AddIntField(indexBlockNumberField); err != nil {
+	if err := schema.AddIntField(index.BlockNumberField); err != nil {
 		return nil, err
 	}
-	if err := schema.AddIntField(indexSlotField); err != nil {
+	if err := schema.AddIntField(index.SlotField); err != nil {
 		return nil, err
 	}
 	// The length is passed whatever the type is, since a schema ignores it for
 	// an int and holds 0 for one, which is what the indexed field gives back.
-	if err := schema.AddField(indexedValueField, fieldType, length); err != nil {
+	if err := schema.AddField(index.IndexedValueField, fieldType, length); err != nil {
 		return nil, err
 	}
 
 	return recordmanager.NewLayout(schema), nil
 }
 
+// Open opens the index described here, through the transaction it was
+// described under. Every index is a hash index for now.
+//
+// It returns an error though a hash index cannot fail to open, since it opens
+// nothing until it is searched. A B-tree reads its root when it is opened, and
+// that can fail; the error is here so that the callers do not have to change
+// when one can be asked for.
+func (info *IndexInfo) Open() (index.Index, error) {
+	return index.NewHashIndex(info.tx, info.indexName, info.indexLayout), nil
+}
+
 // BlocksAccessed is how many blocks a search through this index touches.
 //
-// It is the size of the index in blocks: one index record stands for one record
-// of the table, so how many blocks they take follows from how many of them go
-// in one. That is worked out from the index's own records rather than the
-// table's, and those are three fields against however many the table has, which
-// is the whole reason a search through an index beats reading the table.
+// It starts from the size of the index in blocks: one index record stands for
+// one record of the table, so how many blocks they take follows from how many
+// of them go in one. That is worked out from the index's own records rather
+// than the table's, and those are three fields against however many the table
+// has, which is the whole reason a search through an index beats reading the
+// table.
 //
-// Reading all of it is the most a search could cost. What a real index charges
-// is less, and by how much is its own business: a hash index reads the one
-// bucket a key falls in, a B-tree the one path down to it. Until there is an
-// index to ask, this stands in for the answer, and it errs towards saying an
-// index costs more than it does.
+// A search does not read all of it, and how much it does read is the index's
+// own business, so the answer is handed to the index. Every index is a hash
+// index for now, as it is in Open, and one of those reads the one bucket a
+// key falls in.
 //
 // The division rounds up, since records that fill a block and start another are
 // in two blocks, and the second is read like the first.
 func (info *IndexInfo) BlocksAccessed() int {
 	recordsPerBlock := info.tx.BlockSize() / info.indexLayout.SlotSize()
+	numBlocks := ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
 
-	return ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
+	return index.HashIndexSearchCost(numBlocks, recordsPerBlock)
 }
 
 // RecordsOutput is how many records a search through this index gives back.
