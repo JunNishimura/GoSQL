@@ -145,26 +145,38 @@ func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*re
 	return recordmanager.NewLayout(schema), nil
 }
 
+// Open opens the index described here, through the transaction it was
+// described under. Every index is a hash index for now.
+//
+// It returns an error though a hash index cannot fail to open, since it opens
+// nothing until it is searched. A B-tree reads its root when it is opened, and
+// that can fail; the error is here so that the callers do not have to change
+// when one can be asked for.
+func (info *IndexInfo) Open() (index.Index, error) {
+	return index.NewHashIndex(info.tx, info.indexName, info.indexLayout), nil
+}
+
 // BlocksAccessed is how many blocks a search through this index touches.
 //
-// It is the size of the index in blocks: one index record stands for one record
-// of the table, so how many blocks they take follows from how many of them go
-// in one. That is worked out from the index's own records rather than the
-// table's, and those are three fields against however many the table has, which
-// is the whole reason a search through an index beats reading the table.
+// It starts from the size of the index in blocks: one index record stands for
+// one record of the table, so how many blocks they take follows from how many
+// of them go in one. That is worked out from the index's own records rather
+// than the table's, and those are three fields against however many the table
+// has, which is the whole reason a search through an index beats reading the
+// table.
 //
-// Reading all of it is the most a search could cost. What a real index charges
-// is less, and by how much is its own business: a hash index reads the one
-// bucket a key falls in, a B-tree the one path down to it. Until there is an
-// index to ask, this stands in for the answer, and it errs towards saying an
-// index costs more than it does.
+// A search does not read all of it, and how much it does read is the index's
+// own business, so the answer is handed to the index. Every index is a hash
+// index for now, as it is in Open, and one of those reads the one bucket a
+// key falls in.
 //
 // The division rounds up, since records that fill a block and start another are
 // in two blocks, and the second is read like the first.
 func (info *IndexInfo) BlocksAccessed() int {
 	recordsPerBlock := info.tx.BlockSize() / info.indexLayout.SlotSize()
+	numBlocks := ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
 
-	return ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
+	return index.HashIndexSearchCost(numBlocks, recordsPerBlock)
 }
 
 // RecordsOutput is how many records a search through this index gives back.
