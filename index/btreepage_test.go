@@ -1,9 +1,11 @@
 package index
 
 import (
+	"slices"
 	"testing"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -68,6 +70,160 @@ func TestBTreePageSetFlag(t *testing.T) {
 
 		assertHeader(t, tx, blk, layout, 5, 0)
 	})
+}
+
+func TestBTreePageInsertLeaf(t *testing.T) {
+	tests := []struct {
+		name     string
+		layout   func(t *testing.T) *recordmanager.Layout
+		existing []entry
+		slot     int
+		inserted entry
+		want     []string
+	}{
+		{
+			name:     "given an empty leaf page, when an entry is inserted at slot 0, then the page holds that one entry",
+			layout:   newTestIndexLayout,
+			slot:     0,
+			inserted: entry{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(1, 2)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(1, 2).String(),
+			},
+		},
+		{
+			name:   "given a leaf page holding entries for 20 and 30, when an entry for 10 is inserted at slot 0, then the entries read 10, 20, 30",
+			layout: newTestIndexLayout,
+			existing: []entry{
+				{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+				{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 3)},
+			},
+			slot:     0,
+			inserted: entry{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:   "given a leaf page holding entries for 10 and 30, when an entry for 20 is inserted at slot 1, then the entries read 10, 20, 30",
+			layout: newTestIndexLayout,
+			existing: []entry{
+				{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 3)},
+			},
+			slot:     1,
+			inserted: entry{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:   "given a leaf page holding entries for 10 and 20, when an entry for 30 is inserted at slot 2, then the entries read 10, 20, 30",
+			layout: newTestIndexLayout,
+			existing: []entry{
+				{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+			},
+			slot:     2,
+			inserted: entry{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 3)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:   "given a leaf page on a varchar field holding an entry for 'bob', when an entry for 'alice' is inserted at slot 0, then the entries read 'alice', 'bob'",
+			layout: newTestVarcharIndexLayout,
+			existing: []entry{
+				{value: query.NewStringConstant("bob"), rid: recordmanager.NewRecordID(0, 2)},
+			},
+			slot:     0,
+			inserted: entry{value: query.NewStringConstant("alice"), rid: recordmanager.NewRecordID(0, 1)},
+			want: []string{
+				"'alice' " + recordmanager.NewRecordID(0, 1).String(),
+				"'bob' " + recordmanager.NewRecordID(0, 2).String(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := tt.layout(t)
+
+			blk, err := appendBTreeBlock(tx, testBTreeFile, layout, -1)
+			if err != nil {
+				t.Fatalf("appendBTreeBlock() error = %v", err)
+			}
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			for i, e := range tt.existing {
+				if err := page.insertLeaf(i, e.value, e.rid); err != nil {
+					t.Fatalf("insertLeaf(%d, %s, %s) error = %v", i, e.value, e.rid, err)
+				}
+			}
+
+			if err := page.insertLeaf(tt.slot, tt.inserted.value, tt.inserted.rid); err != nil {
+				t.Fatalf("insertLeaf(%d, %s, %s) error = %v", tt.slot, tt.inserted.value, tt.inserted.rid, err)
+			}
+
+			if got := leafEntries(t, page); !slices.Equal(got, tt.want) {
+				t.Errorf("entries = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// newTestVarcharIndexLayout builds the layout of an index on a varchar field
+// of 10 characters, laid out the way the catalog lays one out.
+func newTestVarcharIndexLayout(t *testing.T) *recordmanager.Layout {
+	t.Helper()
+
+	s := recordmanager.NewSchema()
+	if err := s.AddIntField(BlockNumberField); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", BlockNumberField, err)
+	}
+	if err := s.AddIntField(SlotField); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", SlotField, err)
+	}
+	if err := s.AddStringField(IndexedValueField, 10); err != nil {
+		t.Fatalf("AddStringField(%q) error = %v", IndexedValueField, err)
+	}
+
+	return recordmanager.NewLayout(s)
+}
+
+// leafEntries reads every record of a leaf page in slot order, each written
+// out as its value and its record id so that they compare with ==.
+func leafEntries(t *testing.T, page *btreePage) []string {
+	t.Helper()
+
+	n, err := page.numRecords()
+	if err != nil {
+		t.Fatalf("numRecords() error = %v", err)
+	}
+
+	got := make([]string, 0, n)
+	for slot := range n {
+		value, err := page.dataValue(slot)
+		if err != nil {
+			t.Fatalf("dataValue(%d) error = %v", slot, err)
+		}
+		rid, err := page.dataRecordID(slot)
+		if err != nil {
+			t.Fatalf("dataRecordID(%d) error = %v", slot, err)
+		}
+		got = append(got, value.String()+" "+rid.String())
+	}
+
+	return got
 }
 
 // assertHeader opens a page on blk afresh and checks the flag and the number of

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -105,6 +106,155 @@ func (p *btreePage) numRecords() (int, error) {
 // holds.
 func (p *btreePage) setNumRecords(n int) error {
 	return p.tx.SetInt(p.blk, numRecordsOffset, int32(n))
+}
+
+// insertLeaf puts an entry filing rid under value at slot, moving the records
+// from slot on back by one to make room.
+//
+// Where it goes is the caller's to work out, from findSlotBefore: the page
+// keeps its records in order only because every insert is made at the place
+// that keeps them so.
+func (p *btreePage) insertLeaf(slot int, value query.Constant, rid *recordmanager.RecordID) error {
+	if err := p.makeRoom(slot); err != nil {
+		return err
+	}
+
+	if err := p.setValue(slot, IndexedValueField, value); err != nil {
+		return err
+	}
+	if err := p.setValue(slot, BlockNumberField, query.NewIntConstant(int32(rid.BlockNumber()))); err != nil {
+		return err
+	}
+
+	return p.setValue(slot, SlotField, query.NewIntConstant(int32(rid.Slot())))
+}
+
+// dataValue is the value the record at slot is filed under.
+func (p *btreePage) dataValue(slot int) (query.Constant, error) {
+	return p.value(slot, IndexedValueField)
+}
+
+// dataRecordID is the record id of the indexed table that the leaf record at
+// slot points to.
+func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
+	blkNum, err := p.value(slot, BlockNumberField)
+	if err != nil {
+		return nil, err
+	}
+	recordSlot, err := p.value(slot, SlotField)
+	if err != nil {
+		return nil, err
+	}
+
+	// AsInt cannot fail on either: both fields are ints in every layout an
+	// index is opened with.
+	n, _ := blkNum.AsInt()
+	s, _ := recordSlot.AsInt()
+
+	return recordmanager.NewRecordID(int(n), int(s)), nil
+}
+
+// makeRoom moves the records from slot to the last back by one slot, leaving
+// slot free to be written, and counts the record about to be written there.
+//
+// The records are moved from the last one forward, so that each is copied into
+// a slot whose own record has already been moved out of it.
+func (p *btreePage) makeRoom(slot int) error {
+	n, err := p.numRecords()
+	if err != nil {
+		return err
+	}
+
+	for i := n; i > slot; i-- {
+		if err := p.copyRecord(i-1, i); err != nil {
+			return err
+		}
+	}
+
+	return p.setNumRecords(n + 1)
+}
+
+// copyRecord writes every field of the record at from over the record at to.
+func (p *btreePage) copyRecord(from, to int) error {
+	for _, fieldName := range p.layout.Schema().Fields() {
+		v, err := p.value(from, fieldName)
+		if err != nil {
+			return err
+		}
+		if err := p.setValue(to, fieldName, v); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// headerBytes is how much of the block the header takes, which is where the
+// first slot begins.
+const headerBytes = numRecordsOffset + filemanager.IntBytes
+
+// fieldPos is where fieldName of the record at slot sits within the block.
+//
+// Every slot is the same size, so a slot is found by its number alone. The
+// layout leaves room at the front of each slot for the in-use flag a record
+// page keeps there; a B-tree page has no use for it, since numRecords says
+// which slots hold a record, and leaves those bytes alone.
+func (p *btreePage) fieldPos(slot int, fieldName string) (int, error) {
+	offset, err := p.layout.Offset(fieldName)
+	if err != nil {
+		return 0, err
+	}
+
+	return headerBytes + slot*p.layout.SlotSize() + offset, nil
+}
+
+// value reads fieldName of the record at slot as whichever kind of value the
+// layout says the field holds.
+func (p *btreePage) value(slot int, fieldName string) (query.Constant, error) {
+	pos, err := p.fieldPos(slot, fieldName)
+	if err != nil {
+		return query.Constant{}, err
+	}
+	fieldType, err := p.layout.Schema().Type(fieldName)
+	if err != nil {
+		return query.Constant{}, err
+	}
+
+	if fieldType == recordmanager.FieldTypeInt {
+		n, err := p.tx.GetInt(p.blk, pos)
+		if err != nil {
+			return query.Constant{}, err
+		}
+
+		return query.NewIntConstant(n), nil
+	}
+
+	s, err := p.tx.GetString(p.blk, pos)
+	if err != nil {
+		return query.Constant{}, err
+	}
+
+	return query.NewStringConstant(s), nil
+}
+
+// setValue writes v to fieldName of the record at slot.
+func (p *btreePage) setValue(slot int, fieldName string, v query.Constant) error {
+	pos, err := p.fieldPos(slot, fieldName)
+	if err != nil {
+		return err
+	}
+
+	if v.Type() == recordmanager.FieldTypeInt {
+		// AsInt cannot fail here: the type has just been checked.
+		n, _ := v.AsInt()
+
+		return p.tx.SetInt(p.blk, pos, n)
+	}
+
+	// AsString cannot fail either, a constant being one of the two kinds.
+	s, _ := v.AsString()
+
+	return p.tx.SetString(p.blk, pos, s)
 }
 
 // close gives back the pin taken when the page was opened.
