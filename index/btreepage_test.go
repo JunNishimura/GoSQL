@@ -412,6 +412,110 @@ func TestBTreePageInsertDir(t *testing.T) {
 	})
 }
 
+func TestBTreePageFindSlotBefore(t *testing.T) {
+	entries := []entry{
+		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 3)},
+		{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 4)},
+	}
+
+	tests := []struct {
+		name      string
+		existing  []entry
+		searchKey query.Constant
+		want      int
+		wantErr   error
+	}{
+		{
+			name:      "given an empty leaf page, when a slot is found before 10, then it is -1",
+			searchKey: query.NewIntConstant(10),
+			want:      -1,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before 5, which is less than all of them, then it is -1",
+			existing:  entries,
+			searchKey: query.NewIntConstant(5),
+			want:      -1,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before 10, the value of the first, then it is -1",
+			existing:  entries,
+			searchKey: query.NewIntConstant(10),
+			want:      -1,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before 15, which falls between 10 and 20, then it is the slot of 10",
+			existing:  entries,
+			searchKey: query.NewIntConstant(15),
+			want:      0,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before 20, which two of them are filed under, then it is the slot ahead of the first 20",
+			existing:  entries,
+			searchKey: query.NewIntConstant(20),
+			want:      0,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before 25, then it is the slot of the second 20",
+			existing:  entries,
+			searchKey: query.NewIntConstant(25),
+			want:      2,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before 40, which is greater than all of them, then it is the last slot",
+			existing:  entries,
+			searchKey: query.NewIntConstant(40),
+			want:      3,
+		},
+		{
+			name:      "given a leaf page holding entries for 10, 20, 20 and 30, when a slot is found before the varchar '20', then it reports ErrConstantTypeMismatch",
+			existing:  entries,
+			searchKey: query.NewStringConstant("20"),
+			wantErr:   query.ErrConstantTypeMismatch,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+
+			blk, err := appendBTreeBlock(tx, testBTreeFile, layout, -1)
+			if err != nil {
+				t.Fatalf("appendBTreeBlock() error = %v", err)
+			}
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			for i, e := range tt.existing {
+				if err := page.insertLeaf(i, e.value, e.rid); err != nil {
+					t.Fatalf("insertLeaf(%d, %s, %s) error = %v", i, e.value, e.rid, err)
+				}
+			}
+
+			got, err := page.findSlotBefore(tt.searchKey)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("findSlotBefore(%s) error = %v, want %v", tt.searchKey, err, tt.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("findSlotBefore(%s) error = %v", tt.searchKey, err)
+			}
+			if got != tt.want {
+				t.Errorf("findSlotBefore(%s) = %d, want %d", tt.searchKey, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBTreePageDelete(t *testing.T) {
 	entries := []entry{
 		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},

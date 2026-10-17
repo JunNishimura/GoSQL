@@ -176,6 +176,41 @@ func (p *btreePage) childBlockNumber(slot int) (int, error) {
 	return p.intValue(slot, BlockNumberField)
 }
 
+// findSlotBefore is the last slot whose record is filed under a value less
+// than searchKey, or -1 if there is none.
+//
+// It is the slot before where the records for searchKey start, or would start
+// if there were any: a search moves forward from it to the first of them, and
+// an insert goes in the slot after it, ahead of any already filed under the
+// same value. Records equal to searchKey are not "before" it, so with several
+// filed under the same value, the answer is the slot ahead of the first.
+//
+// A searchKey of the other kind from the page's values reports
+// ErrConstantTypeMismatch, since the two have no order to find a place by.
+func (p *btreePage) findSlotBefore(searchKey query.Constant) (int, error) {
+	n, err := p.numRecords()
+	if err != nil {
+		return 0, err
+	}
+
+	for slot := range n {
+		v, err := p.dataValue(slot)
+		if err != nil {
+			return 0, err
+		}
+
+		c, err := v.Compare(searchKey)
+		if err != nil {
+			return 0, fmt.Errorf("find the slot before %s in %s: %w", searchKey, p.blk, err)
+		}
+		if c >= 0 {
+			return slot - 1, nil
+		}
+	}
+
+	return n - 1, nil
+}
+
 // delete takes out the record at slot, moving the records after it forward by
 // one so that the records left still take up the first slots in order.
 //
