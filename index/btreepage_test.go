@@ -598,6 +598,142 @@ func TestBTreePageIsFull(t *testing.T) {
 	}
 }
 
+func TestBTreePageSplit(t *testing.T) {
+	entries := []entry{
+		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+		{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 3)},
+		{value: query.NewIntConstant(40), rid: recordmanager.NewRecordID(0, 4)},
+	}
+
+	tests := []struct {
+		name     string
+		splitPos int
+		flag     int32
+		wantLeft []string
+		wantNew  []string
+	}{
+		{
+			name:     "given a leaf page flagged 7 holding entries for 10, 20, 30 and 40, when it is split at slot 2 with flag 5, then it keeps 10, 20 and flag 7, and a new block flagged 5 holds 30, 40",
+			splitPos: 2,
+			flag:     5,
+			wantLeft: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+			},
+			wantNew: []string{
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+				"40 " + recordmanager.NewRecordID(0, 4).String(),
+			},
+		},
+		{
+			name:     "given a leaf page flagged 7 holding entries for 10, 20, 30 and 40, when it is split at slot 0 with flag 5, then it keeps no entries and flag 7, and a new block flagged 5 holds all four",
+			splitPos: 0,
+			flag:     5,
+			wantLeft: []string{},
+			wantNew: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+				"40 " + recordmanager.NewRecordID(0, 4).String(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+
+			blk, err := appendBTreeBlock(tx, testBTreeFile, layout, 7)
+			if err != nil {
+				t.Fatalf("appendBTreeBlock() error = %v", err)
+			}
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+
+			for i, e := range entries {
+				if err := page.insertLeaf(i, e.value, e.rid); err != nil {
+					t.Fatalf("insertLeaf(%d, %s, %s) error = %v", i, e.value, e.rid, err)
+				}
+			}
+
+			newBlk, err := page.split(tt.splitPos, tt.flag)
+			if err != nil {
+				t.Fatalf("split(%d, %d) error = %v", tt.splitPos, tt.flag, err)
+			}
+			if want := filemanager.NewBlockId(testBTreeFile, 1); newBlk == nil || !newBlk.Equals(want) {
+				t.Fatalf("split(%d, %d) = %v, want %v", tt.splitPos, tt.flag, newBlk, want)
+			}
+
+			if got := leafEntries(t, page); !slices.Equal(got, tt.wantLeft) {
+				t.Errorf("entries left in %v = %v, want %v", blk, got, tt.wantLeft)
+			}
+			page.close()
+
+			newPage, err := newBTreePage(tx, newBlk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage(%v) error = %v", newBlk, err)
+			}
+			if got := leafEntries(t, newPage); !slices.Equal(got, tt.wantNew) {
+				t.Errorf("entries moved to %v = %v, want %v", newBlk, got, tt.wantNew)
+			}
+			newPage.close()
+
+			assertHeader(t, tx, blk, layout, 7, len(tt.wantLeft))
+			assertHeader(t, tx, newBlk, layout, tt.flag, len(tt.wantNew))
+		})
+	}
+
+	t.Run("given a directory page flagged 1 holding records for 10, 20 and 30, when it is split at slot 1 with flag 1, then it keeps 10 and a new block holds 20, 30 with their child blocks", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestDirLayout(t)
+
+		blk, err := appendBTreeBlock(tx, testBTreeFile, layout, 1)
+		if err != nil {
+			t.Fatalf("appendBTreeBlock() error = %v", err)
+		}
+		page, err := newBTreePage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage() error = %v", err)
+		}
+
+		for i, e := range []dirEntry{
+			{value: query.NewIntConstant(10), childBlockNumber: 1},
+			{value: query.NewIntConstant(20), childBlockNumber: 2},
+			{value: query.NewIntConstant(30), childBlockNumber: 3},
+		} {
+			if err := page.insertDir(i, e.value, e.childBlockNumber); err != nil {
+				t.Fatalf("insertDir(%d, %s, %d) error = %v", i, e.value, e.childBlockNumber, err)
+			}
+		}
+
+		newBlk, err := page.split(1, 1)
+		if err != nil {
+			t.Fatalf("split(1, 1) error = %v", err)
+		}
+		if newBlk == nil {
+			t.Fatalf("split(1, 1) = nil, want a block")
+		}
+
+		if got, want := dirEntries(t, page), []string{"10 -> 1"}; !slices.Equal(got, want) {
+			t.Errorf("records left in %v = %v, want %v", blk, got, want)
+		}
+		page.close()
+
+		newPage, err := newBTreePage(tx, newBlk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage(%v) error = %v", newBlk, err)
+		}
+		defer newPage.close()
+
+		if got, want := dirEntries(t, newPage), []string{"20 -> 2", "30 -> 3"}; !slices.Equal(got, want) {
+			t.Errorf("records moved to %v = %v, want %v", newBlk, got, want)
+		}
+	})
+}
+
 func TestBTreePageDelete(t *testing.T) {
 	entries := []entry{
 		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},

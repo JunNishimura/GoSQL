@@ -228,6 +228,49 @@ func (p *btreePage) isFull() (bool, error) {
 	return p.slotPos(n+1) > p.tx.BlockSize(), nil
 }
 
+// split moves the records from splitPos on into a block appended to the same
+// file, flagged with flag, and returns that block.
+//
+// The records keep their order: the ones before splitPos stay where they are,
+// and the ones moved take up the new block from its first slot. Every value
+// left here is then no greater than every value moved, which is what lets the
+// caller file the new block in the directory under the first value it holds.
+func (p *btreePage) split(splitPos int, flag int32) (*filemanager.BlockId, error) {
+	newBlk, err := appendBTreeBlock(p.tx, p.blk.FileName(), p.layout, flag)
+	if err != nil {
+		return nil, err
+	}
+
+	newPage, err := newBTreePage(p.tx, newBlk, p.layout)
+	if err != nil {
+		return nil, err
+	}
+	defer newPage.close()
+
+	n, err := p.numRecords()
+	if err != nil {
+		return nil, err
+	}
+
+	for slot := splitPos; slot < n; slot++ {
+		if err := p.copyRecordTo(slot, newPage, slot-splitPos); err != nil {
+			return nil, err
+		}
+	}
+
+	// The moved records are counted in the new block only once they are all
+	// in it, and the ones left here are counted afresh, so that neither block
+	// counts a slot that does not yet, or no longer, hold one of its records.
+	if err := newPage.setNumRecords(n - splitPos); err != nil {
+		return nil, err
+	}
+	if err := p.setNumRecords(splitPos); err != nil {
+		return nil, err
+	}
+
+	return newBlk, nil
+}
+
 // delete takes out the record at slot, moving the records after it forward by
 // one so that the records left still take up the first slots in order.
 //
@@ -242,7 +285,7 @@ func (p *btreePage) delete(slot int) error {
 	}
 
 	for i := slot + 1; i < n; i++ {
-		if err := p.copyRecord(i, i-1); err != nil {
+		if err := p.copyRecordTo(i, p, i-1); err != nil {
 			return err
 		}
 	}
@@ -316,7 +359,7 @@ func (p *btreePage) makeRoom(slot int) error {
 	}
 
 	for i := n; i > slot; i-- {
-		if err := p.copyRecord(i-1, i); err != nil {
+		if err := p.copyRecordTo(i-1, p, i); err != nil {
 			return err
 		}
 	}
@@ -324,14 +367,16 @@ func (p *btreePage) makeRoom(slot int) error {
 	return p.setNumRecords(n + 1)
 }
 
-// copyRecord writes every field of the record at from over the record at to.
-func (p *btreePage) copyRecord(from, to int) error {
+// copyRecordTo writes every field of the record at from over the record at to
+// in dst, which is laid out as this page is. dst may be this page itself, which
+// is how records are moved along within one block.
+func (p *btreePage) copyRecordTo(from int, dst *btreePage, to int) error {
 	for _, fieldName := range p.layout.Schema().Fields() {
 		v, err := p.value(from, fieldName)
 		if err != nil {
 			return err
 		}
-		if err := p.setValue(to, fieldName, v); err != nil {
+		if err := dst.setValue(to, fieldName, v); err != nil {
 			return err
 		}
 	}
