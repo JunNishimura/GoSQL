@@ -176,6 +176,28 @@ func (p *btreePage) childBlockNumber(slot int) (int, error) {
 	return p.intValue(slot, BlockNumberField)
 }
 
+// delete takes out the record at slot, moving the records after it forward by
+// one so that the records left still take up the first slots in order.
+//
+// The records are moved from the one after slot onward, so that each is copied
+// into a slot whose own record has already been moved out of it or deleted.
+// The last slot is left holding the record just copied out of it, which nothing
+// reads once it is no longer counted.
+func (p *btreePage) delete(slot int) error {
+	n, err := p.numRecords()
+	if err != nil {
+		return err
+	}
+
+	for i := slot + 1; i < n; i++ {
+		if err := p.copyRecord(i, i-1); err != nil {
+			return err
+		}
+	}
+
+	return p.setNumRecords(n - 1)
+}
+
 // checkValue reports whether value fits the field the page's records are filed
 // under: ErrFieldTypeMismatch if it is of the other kind, and ErrStringTooLong
 // if it is a varchar of more characters than the field was declared to hold.

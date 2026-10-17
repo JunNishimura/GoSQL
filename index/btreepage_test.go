@@ -412,6 +412,122 @@ func TestBTreePageInsertDir(t *testing.T) {
 	})
 }
 
+func TestBTreePageDelete(t *testing.T) {
+	entries := []entry{
+		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+		{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 3)},
+	}
+
+	tests := []struct {
+		name     string
+		existing []entry
+		slot     int
+		want     []string
+	}{
+		{
+			name:     "given a leaf page holding entries for 10, 20 and 30, when slot 0 is deleted, then the entries read 20, 30",
+			existing: entries,
+			slot:     0,
+			want: []string{
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:     "given a leaf page holding entries for 10, 20 and 30, when slot 1 is deleted, then the entries read 10, 30",
+			existing: entries,
+			slot:     1,
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:     "given a leaf page holding entries for 10, 20 and 30, when slot 2 is deleted, then the entries read 10, 20",
+			existing: entries,
+			slot:     2,
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+			},
+		},
+		{
+			name:     "given a leaf page holding only an entry for 10, when slot 0 is deleted, then the page holds no entries",
+			existing: entries[:1],
+			slot:     0,
+			want:     []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+
+			blk, err := appendBTreeBlock(tx, testBTreeFile, layout, -1)
+			if err != nil {
+				t.Fatalf("appendBTreeBlock() error = %v", err)
+			}
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			for i, e := range tt.existing {
+				if err := page.insertLeaf(i, e.value, e.rid); err != nil {
+					t.Fatalf("insertLeaf(%d, %s, %s) error = %v", i, e.value, e.rid, err)
+				}
+			}
+
+			if err := page.delete(tt.slot); err != nil {
+				t.Fatalf("delete(%d) error = %v", tt.slot, err)
+			}
+
+			if got := leafEntries(t, page); !slices.Equal(got, tt.want) {
+				t.Errorf("entries = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("given a directory page holding records for 10, 20 and 30, when slot 1 is deleted, then the records read 10, 30 with their child blocks", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestDirLayout(t)
+
+		blk, err := appendBTreeBlock(tx, testBTreeFile, layout, 0)
+		if err != nil {
+			t.Fatalf("appendBTreeBlock() error = %v", err)
+		}
+		page, err := newBTreePage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage() error = %v", err)
+		}
+		defer page.close()
+
+		for i, e := range []dirEntry{
+			{value: query.NewIntConstant(10), childBlockNumber: 1},
+			{value: query.NewIntConstant(20), childBlockNumber: 2},
+			{value: query.NewIntConstant(30), childBlockNumber: 3},
+		} {
+			if err := page.insertDir(i, e.value, e.childBlockNumber); err != nil {
+				t.Fatalf("insertDir(%d, %s, %d) error = %v", i, e.value, e.childBlockNumber, err)
+			}
+		}
+
+		if err := page.delete(1); err != nil {
+			t.Fatalf("delete(1) error = %v", err)
+		}
+
+		want := []string{
+			"10 -> 1",
+			"30 -> 3",
+		}
+		if got := dirEntries(t, page); !slices.Equal(got, want) {
+			t.Errorf("records = %v, want %v", got, want)
+		}
+	})
+}
+
 // newTestVarcharDirLayout builds the layout of the directory records of a
 // B-tree on a varchar field of 10 characters.
 func newTestVarcharDirLayout(t *testing.T) *recordmanager.Layout {
