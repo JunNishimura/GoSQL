@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -180,6 +181,37 @@ func TestBTreePageInsertLeaf(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("given a leaf page on an int field holding an entry for 10, when an entry filed under the varchar '20' is inserted, then it reports ErrFieldTypeMismatch and the page still holds only the entry for 10", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestIndexLayout(t)
+
+		blk, err := appendBTreeBlock(tx, testBTreeFile, layout, -1)
+		if err != nil {
+			t.Fatalf("appendBTreeBlock() error = %v", err)
+		}
+		page, err := newBTreePage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage() error = %v", err)
+		}
+		defer page.close()
+
+		if err := page.insertLeaf(0, query.NewIntConstant(10), recordmanager.NewRecordID(0, 1)); err != nil {
+			t.Fatalf("insertLeaf(0, 10) error = %v", err)
+		}
+
+		err = page.insertLeaf(0, query.NewStringConstant("20"), recordmanager.NewRecordID(0, 2))
+		if !errors.Is(err, recordmanager.ErrFieldTypeMismatch) {
+			t.Errorf("insertLeaf(0, '20') error = %v, want %v", err, recordmanager.ErrFieldTypeMismatch)
+		}
+
+		want := []string{
+			"10 " + recordmanager.NewRecordID(0, 1).String(),
+		}
+		if got := leafEntries(t, page); !slices.Equal(got, want) {
+			t.Errorf("entries = %v, want %v", got, want)
+		}
+	})
 }
 
 // dirEntry is one directory record as a test inserts it: a value and the child
@@ -264,6 +296,37 @@ func TestBTreePageInsertDir(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("given a directory page on an int field holding a record for 10, when a record for the varchar '20' is inserted, then it reports ErrFieldTypeMismatch and the page still holds only the record for 10", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestDirLayout(t)
+
+		blk, err := appendBTreeBlock(tx, testBTreeFile, layout, 0)
+		if err != nil {
+			t.Fatalf("appendBTreeBlock() error = %v", err)
+		}
+		page, err := newBTreePage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage() error = %v", err)
+		}
+		defer page.close()
+
+		if err := page.insertDir(0, query.NewIntConstant(10), 1); err != nil {
+			t.Fatalf("insertDir(0, 10, 1) error = %v", err)
+		}
+
+		err = page.insertDir(0, query.NewStringConstant("20"), 2)
+		if !errors.Is(err, recordmanager.ErrFieldTypeMismatch) {
+			t.Errorf("insertDir(0, '20', 2) error = %v, want %v", err, recordmanager.ErrFieldTypeMismatch)
+		}
+
+		want := []string{
+			"10 -> 1",
+		}
+		if got := dirEntries(t, page); !slices.Equal(got, want) {
+			t.Errorf("records = %v, want %v", got, want)
+		}
+	})
 }
 
 // newTestDirLayout builds the layout of the directory records of a B-tree on an

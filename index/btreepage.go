@@ -115,6 +115,9 @@ func (p *btreePage) setNumRecords(n int) error {
 // keeps its records in order only because every insert is made at the place
 // that keeps them so.
 func (p *btreePage) insertLeaf(slot int, value query.Constant, rid *recordmanager.RecordID) error {
+	if err := p.checkValueType(value); err != nil {
+		return err
+	}
 	if err := p.makeRoom(slot); err != nil {
 		return err
 	}
@@ -153,6 +156,9 @@ func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
 // on are reached through the child block numbered childBlockNumber. The records
 // from slot on are moved back by one to make room.
 func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber int) error {
+	if err := p.checkValueType(value); err != nil {
+		return err
+	}
 	if err := p.makeRoom(slot); err != nil {
 		return err
 	}
@@ -167,6 +173,32 @@ func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber i
 // childBlockNumber is the block the directory record at slot points down to.
 func (p *btreePage) childBlockNumber(slot int) (int, error) {
 	return p.intValue(slot, BlockNumberField)
+}
+
+// checkValueType reports ErrFieldTypeMismatch unless value is of the kind the
+// page's records are filed under.
+//
+// Nothing below would catch it. A varchar written over an int field is its
+// length followed by its bytes, and reads back as the length: the page would
+// file the entry under a number nobody inserted, and say nothing.
+//
+// It is checked before anything is written rather than as the value is,
+// because an insert moves the records after slot and counts the new one before
+// it writes it. Refused at that point, it would leave a gap holding whatever
+// the record moved out of it held, counted as a record of its own.
+func (p *btreePage) checkValueType(value query.Constant) error {
+	fieldType, err := p.layout.Schema().Type(IndexedValueField)
+	if err != nil {
+		return err
+	}
+	if value.Type() != fieldType {
+		return fmt.Errorf(
+			"file an entry under %s in %s, whose records are filed under a %s: %w",
+			value, p.blk, fieldType, recordmanager.ErrFieldTypeMismatch,
+		)
+	}
+
+	return nil
 }
 
 // makeRoom moves the records from slot to the last back by one slot, leaving
