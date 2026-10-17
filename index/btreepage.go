@@ -122,11 +122,11 @@ func (p *btreePage) insertLeaf(slot int, value query.Constant, rid *recordmanage
 	if err := p.setValue(slot, IndexedValueField, value); err != nil {
 		return err
 	}
-	if err := p.setValue(slot, BlockNumberField, query.NewIntConstant(int32(rid.BlockNumber()))); err != nil {
+	if err := p.setIntValue(slot, BlockNumberField, rid.BlockNumber()); err != nil {
 		return err
 	}
 
-	return p.setValue(slot, SlotField, query.NewIntConstant(int32(rid.Slot())))
+	return p.setIntValue(slot, SlotField, rid.Slot())
 }
 
 // dataValue is the value the record at slot is filed under.
@@ -137,21 +137,16 @@ func (p *btreePage) dataValue(slot int) (query.Constant, error) {
 // dataRecordID is the record id of the indexed table that the leaf record at
 // slot points to.
 func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
-	blkNum, err := p.value(slot, BlockNumberField)
+	blkNum, err := p.intValue(slot, BlockNumberField)
 	if err != nil {
 		return nil, err
 	}
-	recordSlot, err := p.value(slot, SlotField)
+	recordSlot, err := p.intValue(slot, SlotField)
 	if err != nil {
 		return nil, err
 	}
 
-	// AsInt cannot fail on either: both fields are ints in every layout an
-	// index is opened with.
-	n, _ := blkNum.AsInt()
-	s, _ := recordSlot.AsInt()
-
-	return recordmanager.NewRecordID(int(n), int(s)), nil
+	return recordmanager.NewRecordID(blkNum, recordSlot), nil
 }
 
 // insertDir puts a directory record at slot, saying that the entries from value
@@ -166,21 +161,12 @@ func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber i
 		return err
 	}
 
-	return p.setValue(slot, BlockNumberField, query.NewIntConstant(int32(childBlockNumber)))
+	return p.setIntValue(slot, BlockNumberField, childBlockNumber)
 }
 
 // childBlockNumber is the block the directory record at slot points down to.
 func (p *btreePage) childBlockNumber(slot int) (int, error) {
-	v, err := p.value(slot, BlockNumberField)
-	if err != nil {
-		return 0, err
-	}
-
-	// AsInt cannot fail here: the block number is an int in every layout an
-	// index is opened with.
-	n, _ := v.AsInt()
-
-	return int(n), nil
+	return p.intValue(slot, BlockNumberField)
 }
 
 // makeRoom moves the records from slot to the last back by one slot, leaving
@@ -264,6 +250,36 @@ func (p *btreePage) value(slot int, fieldName string) (query.Constant, error) {
 	}
 
 	return query.NewStringConstant(s), nil
+}
+
+// intValue reads fieldName of the record at slot as an int.
+//
+// It is for the fields every index lays out as ints, the block numbers and the
+// slot, which are read as numbers to go somewhere rather than as values to
+// compare. Reading them through value would make a constant only to take the
+// int back out of it.
+func (p *btreePage) intValue(slot int, fieldName string) (int, error) {
+	pos, err := p.fieldPos(slot, fieldName)
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := p.tx.GetInt(p.blk, pos)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(n), nil
+}
+
+// setIntValue writes n to the int field fieldName of the record at slot.
+func (p *btreePage) setIntValue(slot int, fieldName string, n int) error {
+	pos, err := p.fieldPos(slot, fieldName)
+	if err != nil {
+		return err
+	}
+
+	return p.tx.SetInt(p.blk, pos, int32(n))
 }
 
 // setValue writes v to fieldName of the record at slot.
