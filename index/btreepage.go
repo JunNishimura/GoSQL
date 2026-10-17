@@ -154,6 +154,35 @@ func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
 	return recordmanager.NewRecordID(int(n), int(s)), nil
 }
 
+// insertDir puts a directory record at slot, saying that the entries from value
+// on are reached through the child block numbered childBlockNumber. The records
+// from slot on are moved back by one to make room.
+func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber int) error {
+	if err := p.makeRoom(slot); err != nil {
+		return err
+	}
+
+	if err := p.setValue(slot, IndexedValueField, value); err != nil {
+		return err
+	}
+
+	return p.setValue(slot, BlockNumberField, query.NewIntConstant(int32(childBlockNumber)))
+}
+
+// childBlockNumber is the block the directory record at slot points down to.
+func (p *btreePage) childBlockNumber(slot int) (int, error) {
+	v, err := p.value(slot, BlockNumberField)
+	if err != nil {
+		return 0, err
+	}
+
+	// AsInt cannot fail here: the block number is an int in every layout an
+	// index is opened with.
+	n, _ := v.AsInt()
+
+	return int(n), nil
+}
+
 // makeRoom moves the records from slot to the last back by one slot, leaving
 // slot free to be written, and counts the record about to be written there.
 //

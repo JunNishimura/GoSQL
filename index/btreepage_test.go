@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -179,6 +180,132 @@ func TestBTreePageInsertLeaf(t *testing.T) {
 			}
 		})
 	}
+}
+
+// dirEntry is one directory record as a test inserts it: a value and the child
+// block the entries from that value on are reached through.
+type dirEntry struct {
+	value            query.Constant
+	childBlockNumber int
+}
+
+func TestBTreePageInsertDir(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing []dirEntry
+		slot     int
+		inserted dirEntry
+		want     []string
+	}{
+		{
+			name:     "given an empty directory page, when a record is inserted at slot 0, then the page holds that one record",
+			slot:     0,
+			inserted: dirEntry{value: query.NewIntConstant(10), childBlockNumber: 3},
+			want: []string{
+				"10 -> 3",
+			},
+		},
+		{
+			name: "given a directory page holding records for 20 and 30, when a record for 10 is inserted at slot 0, then the records read 10, 20, 30 with their child blocks",
+			existing: []dirEntry{
+				{value: query.NewIntConstant(20), childBlockNumber: 2},
+				{value: query.NewIntConstant(30), childBlockNumber: 3},
+			},
+			slot:     0,
+			inserted: dirEntry{value: query.NewIntConstant(10), childBlockNumber: 1},
+			want: []string{
+				"10 -> 1",
+				"20 -> 2",
+				"30 -> 3",
+			},
+		},
+		{
+			name: "given a directory page holding records for 10 and 30, when a record for 20 is inserted at slot 1, then the records read 10, 20, 30 with their child blocks",
+			existing: []dirEntry{
+				{value: query.NewIntConstant(10), childBlockNumber: 1},
+				{value: query.NewIntConstant(30), childBlockNumber: 3},
+			},
+			slot:     1,
+			inserted: dirEntry{value: query.NewIntConstant(20), childBlockNumber: 2},
+			want: []string{
+				"10 -> 1",
+				"20 -> 2",
+				"30 -> 3",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestDirLayout(t)
+
+			blk, err := appendBTreeBlock(tx, testBTreeFile, layout, 0)
+			if err != nil {
+				t.Fatalf("appendBTreeBlock() error = %v", err)
+			}
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			for i, e := range tt.existing {
+				if err := page.insertDir(i, e.value, e.childBlockNumber); err != nil {
+					t.Fatalf("insertDir(%d, %s, %d) error = %v", i, e.value, e.childBlockNumber, err)
+				}
+			}
+
+			if err := page.insertDir(tt.slot, tt.inserted.value, tt.inserted.childBlockNumber); err != nil {
+				t.Fatalf("insertDir(%d, %s, %d) error = %v", tt.slot, tt.inserted.value, tt.inserted.childBlockNumber, err)
+			}
+
+			if got := dirEntries(t, page); !slices.Equal(got, tt.want) {
+				t.Errorf("records = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// newTestDirLayout builds the layout of the directory records of a B-tree on an
+// int field: the child block, and the value the entries under it start from.
+func newTestDirLayout(t *testing.T) *recordmanager.Layout {
+	t.Helper()
+
+	s := recordmanager.NewSchema()
+	if err := s.AddIntField(BlockNumberField); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", BlockNumberField, err)
+	}
+	if err := s.AddIntField(IndexedValueField); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", IndexedValueField, err)
+	}
+
+	return recordmanager.NewLayout(s)
+}
+
+// dirEntries reads every record of a directory page in slot order, each
+// written out as its value and its child block so that they compare with ==.
+func dirEntries(t *testing.T, page *btreePage) []string {
+	t.Helper()
+
+	n, err := page.numRecords()
+	if err != nil {
+		t.Fatalf("numRecords() error = %v", err)
+	}
+
+	got := make([]string, 0, n)
+	for slot := range n {
+		value, err := page.dataValue(slot)
+		if err != nil {
+			t.Fatalf("dataValue(%d) error = %v", slot, err)
+		}
+		child, err := page.childBlockNumber(slot)
+		if err != nil {
+			t.Fatalf("childBlockNumber(%d) error = %v", slot, err)
+		}
+		got = append(got, fmt.Sprintf("%s -> %d", value, child))
+	}
+
+	return got
 }
 
 // newTestVarcharIndexLayout builds the layout of an index on a varchar field
