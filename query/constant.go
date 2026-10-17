@@ -1,8 +1,10 @@
 package query
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"strings"
 
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
@@ -92,6 +94,33 @@ func (c Constant) AsString() (string, error) {
 	}
 
 	return c.strVal, nil
+}
+
+// Compare reports whether c comes before other, after it or with it, as -1, +1
+// or 0, the way cmp.Compare does.
+//
+// It is what a B-tree keeps its entries in order by. Equality is still ==, and
+// this agrees with it: 0 comes back for exactly the pairs == holds for.
+//
+// An int is ordered as a signed number, and a varchar byte by byte, which for
+// text made of ASCII is the order of the characters' codes and puts every
+// upper-case letter before every lower-case one. The empty string comes before
+// every other, which is what lets it stand for the least value of a varchar.
+//
+// Constants of the two kinds have no order between them, so comparing one with
+// the other reports ErrConstantTypeMismatch rather than putting either kind
+// first. An index holds values of one field, so they are all of one kind, and a
+// pair that is not means the caller has taken a value from the wrong field.
+func (c Constant) Compare(other Constant) (int, error) {
+	if c.fieldType != other.fieldType {
+		return 0, fmt.Errorf("compare %s with %s: %w", c, other, ErrConstantTypeMismatch)
+	}
+
+	if c.fieldType == recordmanager.FieldTypeInt {
+		return cmp.Compare(c.intVal, other.intVal), nil
+	}
+
+	return strings.Compare(c.strVal, other.strVal), nil
 }
 
 // String writes an int as the number and a varchar as the text in single

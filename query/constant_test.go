@@ -232,6 +232,111 @@ func TestConstantEquality(t *testing.T) {
 	}
 }
 
+func TestConstantCompare(t *testing.T) {
+	tests := []struct {
+		name    string
+		left    Constant
+		right   Constant
+		want    int
+		wantErr error
+	}{
+		{
+			name:  "given two int constants, when the left holds the smaller value, then it is -1",
+			left:  NewIntConstant(7),
+			right: NewIntConstant(42),
+			want:  -1,
+		},
+		{
+			name:  "given two int constants, when the left holds the larger value, then it is +1",
+			left:  NewIntConstant(42),
+			right: NewIntConstant(7),
+			want:  1,
+		},
+		{
+			name:  "given two int constants of the same value, then it is 0",
+			left:  NewIntConstant(42),
+			right: NewIntConstant(42),
+			want:  0,
+		},
+		// Ordered as unsigned, -1 would be the largest int there is.
+		{
+			name:  "given a negative and a positive int constant, then the negative one comes first",
+			left:  NewIntConstant(-1),
+			right: NewIntConstant(1),
+			want:  -1,
+		},
+		{
+			name:  "given two varchar constants, when the left text comes first in the alphabet, then it is -1",
+			left:  NewStringConstant("alice"),
+			right: NewStringConstant("bob"),
+			want:  -1,
+		},
+		{
+			name:  "given two varchar constants, when the left text comes later in the alphabet, then it is +1",
+			left:  NewStringConstant("bob"),
+			right: NewStringConstant("alice"),
+			want:  1,
+		},
+		{
+			name:  "given two varchar constants of the same text, then it is 0",
+			left:  NewStringConstant("alice"),
+			right: NewStringConstant("alice"),
+			want:  0,
+		},
+		{
+			name:  "given two varchar constants, when the left text is a prefix of the right, then the left comes first",
+			left:  NewStringConstant("al"),
+			right: NewStringConstant("alice"),
+			want:  -1,
+		},
+		{
+			name:  "given two varchar constants, when the left starts with an upper-case letter later in the alphabet than the right's lower-case one, then the left still comes first",
+			left:  NewStringConstant("Bob"),
+			right: NewStringConstant("alice"),
+			want:  -1,
+		},
+		{
+			name:  "given the varchar constant of the empty string and another varchar, then the empty string comes first",
+			left:  NewStringConstant(""),
+			right: NewStringConstant("a"),
+			want:  -1,
+		},
+		{
+			name:    "given an int constant and a varchar constant, then it reports ErrConstantTypeMismatch",
+			left:    NewIntConstant(42),
+			right:   NewStringConstant("42"),
+			wantErr: ErrConstantTypeMismatch,
+		},
+		{
+			name:    "given a varchar constant and an int constant, then it reports ErrConstantTypeMismatch",
+			left:    NewStringConstant("42"),
+			right:   NewIntConstant(42),
+			wantErr: ErrConstantTypeMismatch,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.left.Compare(tt.right)
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("%s.Compare(%s) error = %v, want %v", tt.left, tt.right, err, tt.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("%s.Compare(%s) error = %v", tt.left, tt.right, err)
+			}
+			if got != tt.want {
+				t.Errorf("%s.Compare(%s) = %d, want %d", tt.left, tt.right, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConstantString(t *testing.T) {
 	tests := []struct {
 		name string
