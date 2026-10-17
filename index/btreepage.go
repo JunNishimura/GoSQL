@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	"github.com/JunNishimura/GoSQL/query"
@@ -115,7 +116,7 @@ func (p *btreePage) setNumRecords(n int) error {
 // keeps its records in order only because every insert is made at the place
 // that keeps them so.
 func (p *btreePage) insertLeaf(slot int, value query.Constant, rid *recordmanager.RecordID) error {
-	if err := p.checkValueType(value); err != nil {
+	if err := p.checkValue(value); err != nil {
 		return err
 	}
 	if err := p.makeRoom(slot); err != nil {
@@ -156,7 +157,7 @@ func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
 // on are reached through the child block numbered childBlockNumber. The records
 // from slot on are moved back by one to make room.
 func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber int) error {
-	if err := p.checkValueType(value); err != nil {
+	if err := p.checkValue(value); err != nil {
 		return err
 	}
 	if err := p.makeRoom(slot); err != nil {
@@ -175,19 +176,26 @@ func (p *btreePage) childBlockNumber(slot int) (int, error) {
 	return p.intValue(slot, BlockNumberField)
 }
 
-// checkValueType reports ErrFieldTypeMismatch unless value is of the kind the
-// page's records are filed under.
+// checkValue reports whether value fits the field the page's records are filed
+// under: ErrFieldTypeMismatch if it is of the other kind, and ErrStringTooLong
+// if it is a varchar of more characters than the field was declared to hold.
 //
-// Nothing below would catch it. A varchar written over an int field is its
+// Nothing below would catch either. A varchar written over an int field is its
 // length followed by its bytes, and reads back as the length: the page would
-// file the entry under a number nobody inserted, and say nothing.
+// file the entry under a number nobody inserted, and say nothing. A varchar
+// over its limit is written whole, since the field has room for its limit in
+// the widest encoding; a little over, it reads back intact, and far enough
+// over, it runs into the next slot. Either way it breaks the width the schema
+// declared, which a record page refuses for the same reason.
 //
 // It is checked before anything is written rather than as the value is,
 // because an insert moves the records after slot and counts the new one before
 // it writes it. Refused at that point, it would leave a gap holding whatever
 // the record moved out of it held, counted as a record of its own.
-func (p *btreePage) checkValueType(value query.Constant) error {
-	fieldType, err := p.layout.Schema().Type(IndexedValueField)
+func (p *btreePage) checkValue(value query.Constant) error {
+	schema := p.layout.Schema()
+
+	fieldType, err := schema.Type(IndexedValueField)
 	if err != nil {
 		return err
 	}
@@ -195,6 +203,27 @@ func (p *btreePage) checkValueType(value query.Constant) error {
 		return fmt.Errorf(
 			"file an entry under %s in %s, whose records are filed under a %s: %w",
 			value, p.blk, fieldType, recordmanager.ErrFieldTypeMismatch,
+		)
+	}
+
+	if fieldType != recordmanager.FieldTypeVarchar {
+		return nil
+	}
+
+	// Neither can fail here: Type has just found the field, and value has
+	// just been found to be a varchar.
+	length, err := schema.Length(IndexedValueField)
+	if err != nil {
+		return err
+	}
+	s, _ := value.AsString()
+
+	// Characters are counted rather than bytes, as a record page counts them,
+	// because that is what a varchar's length means.
+	if count := utf8.RuneCountInString(s); count > length {
+		return fmt.Errorf(
+			"file an entry under %s of %d characters in %s, whose records hold %d: %w",
+			value, count, p.blk, length, recordmanager.ErrStringTooLong,
 		)
 	}
 

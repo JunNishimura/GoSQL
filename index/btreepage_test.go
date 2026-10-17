@@ -150,6 +150,27 @@ func TestBTreePageInsertLeaf(t *testing.T) {
 				"'bob' " + recordmanager.NewRecordID(0, 2).String(),
 			},
 		},
+		{
+			name:     "given an empty leaf page on a varchar field of 10 characters, when an entry for a string of exactly 10 characters is inserted, then the page holds it",
+			layout:   newTestVarcharIndexLayout,
+			slot:     0,
+			inserted: entry{value: query.NewStringConstant("abcdefghij"), rid: recordmanager.NewRecordID(0, 1)},
+			want: []string{
+				"'abcdefghij' " + recordmanager.NewRecordID(0, 1).String(),
+			},
+		},
+		// Ten characters of three bytes each are thirty bytes, well over ten, so
+		// a limit counted in bytes would refuse what the field was declared to
+		// hold.
+		{
+			name:     "given an empty leaf page on a varchar field of 10 characters, when an entry for 10 multi-byte characters is inserted, then the page holds it",
+			layout:   newTestVarcharIndexLayout,
+			slot:     0,
+			inserted: entry{value: query.NewStringConstant("あいうえおかきくけこ"), rid: recordmanager.NewRecordID(0, 1)},
+			want: []string{
+				"'あいうえおかきくけこ' " + recordmanager.NewRecordID(0, 1).String(),
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -207,6 +228,37 @@ func TestBTreePageInsertLeaf(t *testing.T) {
 
 		want := []string{
 			"10 " + recordmanager.NewRecordID(0, 1).String(),
+		}
+		if got := leafEntries(t, page); !slices.Equal(got, want) {
+			t.Errorf("entries = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("given a leaf page on a varchar field of 10 characters holding an entry for 'bob', when an entry for a string of 11 characters is inserted, then it reports ErrStringTooLong and the page still holds only the entry for 'bob'", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestVarcharIndexLayout(t)
+
+		blk, err := appendBTreeBlock(tx, testBTreeFile, layout, -1)
+		if err != nil {
+			t.Fatalf("appendBTreeBlock() error = %v", err)
+		}
+		page, err := newBTreePage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage() error = %v", err)
+		}
+		defer page.close()
+
+		if err := page.insertLeaf(0, query.NewStringConstant("bob"), recordmanager.NewRecordID(0, 1)); err != nil {
+			t.Fatalf("insertLeaf(0, 'bob') error = %v", err)
+		}
+
+		err = page.insertLeaf(0, query.NewStringConstant("abcdefghijk"), recordmanager.NewRecordID(0, 2))
+		if !errors.Is(err, recordmanager.ErrStringTooLong) {
+			t.Errorf("insertLeaf(0, 'abcdefghijk') error = %v, want %v", err, recordmanager.ErrStringTooLong)
+		}
+
+		want := []string{
+			"'bob' " + recordmanager.NewRecordID(0, 1).String(),
 		}
 		if got := leafEntries(t, page); !slices.Equal(got, want) {
 			t.Errorf("entries = %v, want %v", got, want)
@@ -327,6 +379,53 @@ func TestBTreePageInsertDir(t *testing.T) {
 			t.Errorf("records = %v, want %v", got, want)
 		}
 	})
+
+	t.Run("given a directory page on a varchar field of 10 characters holding a record for 'bob', when a record for a string of 11 characters is inserted, then it reports ErrStringTooLong and the page still holds only the record for 'bob'", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestVarcharDirLayout(t)
+
+		blk, err := appendBTreeBlock(tx, testBTreeFile, layout, 0)
+		if err != nil {
+			t.Fatalf("appendBTreeBlock() error = %v", err)
+		}
+		page, err := newBTreePage(tx, blk, layout)
+		if err != nil {
+			t.Fatalf("newBTreePage() error = %v", err)
+		}
+		defer page.close()
+
+		if err := page.insertDir(0, query.NewStringConstant("bob"), 1); err != nil {
+			t.Fatalf("insertDir(0, 'bob', 1) error = %v", err)
+		}
+
+		err = page.insertDir(0, query.NewStringConstant("abcdefghijk"), 2)
+		if !errors.Is(err, recordmanager.ErrStringTooLong) {
+			t.Errorf("insertDir(0, 'abcdefghijk', 2) error = %v, want %v", err, recordmanager.ErrStringTooLong)
+		}
+
+		want := []string{
+			"'bob' -> 1",
+		}
+		if got := dirEntries(t, page); !slices.Equal(got, want) {
+			t.Errorf("records = %v, want %v", got, want)
+		}
+	})
+}
+
+// newTestVarcharDirLayout builds the layout of the directory records of a
+// B-tree on a varchar field of 10 characters.
+func newTestVarcharDirLayout(t *testing.T) *recordmanager.Layout {
+	t.Helper()
+
+	s := recordmanager.NewSchema()
+	if err := s.AddIntField(BlockNumberField); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", BlockNumberField, err)
+	}
+	if err := s.AddStringField(IndexedValueField, 10); err != nil {
+		t.Fatalf("AddStringField(%q) error = %v", IndexedValueField, err)
+	}
+
+	return recordmanager.NewLayout(s)
 }
 
 // newTestDirLayout builds the layout of the directory records of a B-tree on an
