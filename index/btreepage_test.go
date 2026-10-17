@@ -516,6 +516,88 @@ func TestBTreePageFindSlotBefore(t *testing.T) {
 	}
 }
 
+// A block of testBlockSize bytes starts with a header of 8. A record of an
+// index on an int field is 16 bytes, so 24 of them fit in the 392 left and a
+// 25th does not; one on a varchar field of 10 characters is 56 bytes, and 7 fit.
+func TestBTreePageIsFull(t *testing.T) {
+	tests := []struct {
+		name       string
+		layout     func(t *testing.T) *recordmanager.Layout
+		numRecords int
+		want       bool
+	}{
+		{
+			name:       "given an empty leaf page, then it is not full",
+			layout:     newTestIndexLayout,
+			numRecords: 0,
+			want:       false,
+		},
+		{
+			name:       "given a leaf page on an int field holding 23 records, one fewer than its block holds, then it is not full",
+			layout:     newTestIndexLayout,
+			numRecords: 23,
+			want:       false,
+		},
+		{
+			name:       "given a leaf page on an int field holding 24 records, as many as its block holds, then it is full",
+			layout:     newTestIndexLayout,
+			numRecords: 24,
+			want:       true,
+		},
+		{
+			name:       "given a leaf page on a varchar field holding 6 records, one fewer than its block holds, then it is not full",
+			layout:     newTestVarcharIndexLayout,
+			numRecords: 6,
+			want:       false,
+		},
+		{
+			name:       "given a leaf page on a varchar field holding 7 records, as many as its block holds, then it is full",
+			layout:     newTestVarcharIndexLayout,
+			numRecords: 7,
+			want:       true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := tt.layout(t)
+
+			blk, err := appendBTreeBlock(tx, testBTreeFile, layout, -1)
+			if err != nil {
+				t.Fatalf("appendBTreeBlock() error = %v", err)
+			}
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			fieldType, err := layout.Schema().Type(IndexedValueField)
+			if err != nil {
+				t.Fatalf("Type(%q) error = %v", IndexedValueField, err)
+			}
+			for i := range tt.numRecords {
+				value := query.NewIntConstant(int32(i))
+				if fieldType == recordmanager.FieldTypeVarchar {
+					value = query.NewStringConstant(fmt.Sprintf("%02d", i))
+				}
+
+				if err := page.insertLeaf(i, value, recordmanager.NewRecordID(0, i)); err != nil {
+					t.Fatalf("insertLeaf(%d, %s) error = %v", i, value, err)
+				}
+			}
+
+			got, err := page.isFull()
+			if err != nil {
+				t.Fatalf("isFull() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("isFull() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBTreePageDelete(t *testing.T) {
 	entries := []entry{
 		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},

@@ -211,6 +211,23 @@ func (p *btreePage) findSlotBefore(searchKey query.Constant) (int, error) {
 	return n - 1, nil
 }
 
+// isFull reports whether the block has no room for another record.
+//
+// A record is put in a page before the page is asked about, so a page found
+// full has just taken its last record and is split there and then. That is
+// what lets an insert go ahead without asking first: the page it lands in was
+// split the last time it filled, so there is always room for one more.
+func (p *btreePage) isFull() (bool, error) {
+	n, err := p.numRecords()
+	if err != nil {
+		return false, err
+	}
+
+	// The next record would take the slot numbered n, which ends where slot
+	// n+1 would begin.
+	return p.slotPos(n+1) > p.tx.BlockSize(), nil
+}
+
 // delete takes out the record at slot, moving the records after it forward by
 // one so that the records left still take up the first slots in order.
 //
@@ -326,10 +343,15 @@ func (p *btreePage) copyRecord(from, to int) error {
 // first slot begins.
 const headerBytes = numRecordsOffset + filemanager.IntBytes
 
+// slotPos is where slot begins within the block. Every slot is the same size,
+// so a slot is found by its number alone.
+func (p *btreePage) slotPos(slot int) int {
+	return headerBytes + slot*p.layout.SlotSize()
+}
+
 // fieldPos is where fieldName of the record at slot sits within the block.
 //
-// Every slot is the same size, so a slot is found by its number alone. The
-// layout leaves room at the front of each slot for the in-use flag a record
+// The layout leaves room at the front of each slot for the in-use flag a record
 // page keeps there; a B-tree page has no use for it, since numRecords says
 // which slots hold a record, and leaves those bytes alone.
 func (p *btreePage) fieldPos(slot int, fieldName string) (int, error) {
@@ -338,7 +360,7 @@ func (p *btreePage) fieldPos(slot int, fieldName string) (int, error) {
 		return 0, err
 	}
 
-	return headerBytes + slot*p.layout.SlotSize() + offset, nil
+	return p.slotPos(slot) + offset, nil
 }
 
 // value reads fieldName of the record at slot as whichever kind of value the
