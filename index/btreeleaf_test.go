@@ -179,6 +179,104 @@ func TestBTreeLeafNext(t *testing.T) {
 	}
 }
 
+func TestBTreeLeafInsert(t *testing.T) {
+	entries := []entry{
+		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+		{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 3)},
+	}
+
+	tests := []struct {
+		name     string
+		existing []entry
+		inserted entry
+		want     []string
+	}{
+		{
+			name:     "given an empty leaf, when an entry for 10 is inserted, then the leaf holds it and nothing comes back for the directory",
+			inserted: entry{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(1, 1)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(1, 1).String(),
+			},
+		},
+		{
+			name:     "given a leaf holding entries for 10, 20 and 30, when an entry for 15 is inserted, then it goes between 10 and 20 and nothing comes back for the directory",
+			existing: entries,
+			inserted: entry{value: query.NewIntConstant(15), rid: recordmanager.NewRecordID(1, 5)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"15 " + recordmanager.NewRecordID(1, 5).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:     "given a leaf holding entries for 10, 20 and 30, when an entry for 5 is inserted, then it goes first and nothing comes back for the directory",
+			existing: entries,
+			inserted: entry{value: query.NewIntConstant(5), rid: recordmanager.NewRecordID(1, 5)},
+			want: []string{
+				"5 " + recordmanager.NewRecordID(1, 5).String(),
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name:     "given a leaf holding entries for 10, 20 and 30, when an entry for 40 is inserted, then it goes last and nothing comes back for the directory",
+			existing: entries,
+			inserted: entry{value: query.NewIntConstant(40), rid: recordmanager.NewRecordID(1, 5)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+				"40 " + recordmanager.NewRecordID(1, 5).String(),
+			},
+		},
+		{
+			name:     "given a leaf holding entries for 10, 20 and 30, when another entry for 20 is inserted, then it goes ahead of the one already there and nothing comes back for the directory",
+			existing: entries,
+			inserted: entry{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(1, 5)},
+			want: []string{
+				"10 " + recordmanager.NewRecordID(0, 1).String(),
+				"20 " + recordmanager.NewRecordID(1, 5).String(),
+				"20 " + recordmanager.NewRecordID(0, 2).String(),
+				"30 " + recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+			blk := newTestLeafBlock(t, tx, layout, tt.existing)
+
+			leaf, err := newBTreeLeaf(tx, blk, layout, tt.inserted.value)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", tt.inserted.value, err)
+			}
+
+			got, err := leaf.insert(tt.inserted.rid)
+			leaf.close()
+			if err != nil {
+				t.Fatalf("insert(%s) error = %v", tt.inserted.rid, err)
+			}
+			if got != nil {
+				t.Errorf("insert(%s) = %+v, want nil", tt.inserted.rid, got)
+			}
+
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			if entries := leafEntries(t, page); !slices.Equal(entries, tt.want) {
+				t.Errorf("entries = %v, want %v", entries, tt.want)
+			}
+		})
+	}
+}
+
 // newTestLeafChain appends one leaf block per element of chain to
 // testBTreeFile, each flagged to overflow into the next and the last into
 // none, and returns the first.

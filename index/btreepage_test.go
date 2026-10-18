@@ -266,13 +266,6 @@ func TestBTreePageInsertLeaf(t *testing.T) {
 	})
 }
 
-// dirEntry is one directory record as a test inserts it: a value and the child
-// block the entries from that value on are reached through.
-type dirEntry struct {
-	value            query.Constant
-	childBlockNumber int
-}
-
 func TestBTreePageInsertDir(t *testing.T) {
 	tests := []struct {
 		name     string

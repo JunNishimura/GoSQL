@@ -7,6 +7,16 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
+// dirEntry is one directory record: a value, and the child block the entries
+// from that value on are reached through.
+//
+// It is what a block that has just been split hands up to the directory above
+// it, which files the new block under the first value it holds.
+type dirEntry struct {
+	value            query.Constant
+	childBlockNumber int
+}
+
 // btreeLeaf is a leaf block of a B-tree, opened to read or change the entries
 // filed under one value.
 //
@@ -132,6 +142,25 @@ func (l *btreeLeaf) moveToOverflow() (bool, error) {
 // to.
 func (l *btreeLeaf) dataRecordID() (*recordmanager.RecordID, error) {
 	return l.contents.dataRecordID(l.currentSlot)
+}
+
+// insert files rid under the search key, ahead of any entries already filed
+// under it.
+//
+// It is meant for a leaf just opened, which is before the entries for the
+// search key: that is the place that keeps the entries in order, and the
+// insert goes there.
+//
+// If the block fills up, it is split and the directory record for the new
+// block comes back, for the directory to file. Otherwise there is nothing for
+// the directory to do, and nil comes back.
+func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
+	l.currentSlot++
+	if err := l.contents.insertLeaf(l.currentSlot, l.searchKey, rid); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }
 
 // close gives back the pin on whichever block the leaf is reading.
