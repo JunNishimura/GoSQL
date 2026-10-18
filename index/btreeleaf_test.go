@@ -277,6 +277,154 @@ func TestBTreeLeafInsert(t *testing.T) {
 	}
 }
 
+// A leaf on an int field holds 24 entries, so each case here fills one with 23
+// and inserts a 24th, the greatest, which fills it and splits it. The split
+// starts from the middle, slot 12, and is moved so that it does not part two
+// entries filed under the same value.
+func TestBTreeLeafInsertSplit(t *testing.T) {
+	tests := []struct {
+		name      string
+		values    []int32
+		wantEntry dirEntry
+		wantLeft  []int32
+		wantNew   []int32
+	}{
+		{
+			name:      "given a leaf of 23 entries for 0 to 22, when an entry for 23 fills it, then it keeps 0 to 11, a new block takes 12 to 23, and the new block comes back filed under 12",
+			values:    seq(0, 23),
+			wantEntry: dirEntry{value: query.NewIntConstant(12), childBlockNumber: 1},
+			wantLeft:  seq(0, 11),
+			wantNew:   seq(12, 23),
+		},
+		{
+			name:      "given a leaf one entry short of full, when the entry that fills it leaves the middle slot holding the second of three entries for 50, then all three go to the new block, which comes back filed under 50",
+			values:    concat(seq(0, 10), rep(50, 3), seq(60, 69)),
+			wantEntry: dirEntry{value: query.NewIntConstant(50), childBlockNumber: 1},
+			wantLeft:  seq(0, 10),
+			wantNew:   concat(rep(50, 3), seq(60, 69)),
+		},
+		{
+			name:      "given a leaf one entry short of full whose first 13 entries are all for 5, when the entry that fills it is inserted, then the 5s all stay, and the new block takes the rest and comes back filed under the first of them",
+			values:    concat(rep(5, 13), seq(10, 20)),
+			wantEntry: dirEntry{value: query.NewIntConstant(10), childBlockNumber: 1},
+			wantLeft:  rep(5, 13),
+			wantNew:   seq(10, 20),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+
+			existing := make([]entry, 0, len(tt.values)-1)
+			for i, v := range tt.values[:len(tt.values)-1] {
+				existing = append(existing, entry{value: query.NewIntConstant(v), rid: recordmanager.NewRecordID(0, i)})
+			}
+			blk := newTestLeafBlock(t, tx, layout, existing)
+
+			last := query.NewIntConstant(tt.values[len(tt.values)-1])
+			leaf, err := newBTreeLeaf(tx, blk, layout, last)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", last, err)
+			}
+
+			got, err := leaf.insert(recordmanager.NewRecordID(1, 0))
+			leaf.close()
+			if err != nil {
+				t.Fatalf("insert() error = %v", err)
+			}
+			if got == nil || *got != tt.wantEntry {
+				t.Errorf("insert() = %+v, want %+v", got, tt.wantEntry)
+			}
+
+			if got := leafValues(t, tx, blk, layout); !slices.Equal(got, tt.wantLeft) {
+				t.Errorf("values left in %v = %v, want %v", blk, got, tt.wantLeft)
+			}
+			newBlk := filemanager.NewBlockId(testBTreeFile, 1)
+			if got := leafValues(t, tx, newBlk, layout); !slices.Equal(got, tt.wantNew) {
+				t.Errorf("values moved to %v = %v, want %v", newBlk, got, tt.wantNew)
+			}
+
+			assertHeader(t, tx, blk, layout, -1, len(tt.wantLeft))
+		})
+	}
+}
+
+// leafValues reads the values of every entry in the leaf block blk, in slot
+// order, or none if the file has no such block.
+func leafValues(
+	t *testing.T,
+	tx *transaction.Transaction,
+	blk *filemanager.BlockId,
+	layout *recordmanager.Layout,
+) []int32 {
+	t.Helper()
+
+	size, err := tx.Size(blk.FileName())
+	if err != nil {
+		t.Fatalf("Size(%q) error = %v", blk.FileName(), err)
+	}
+	if blk.Number() >= size {
+		return []int32{}
+	}
+
+	page, err := newBTreePage(tx, blk, layout)
+	if err != nil {
+		t.Fatalf("newBTreePage(%v) error = %v", blk, err)
+	}
+	defer page.close()
+
+	n, err := page.numRecords()
+	if err != nil {
+		t.Fatalf("numRecords() error = %v", err)
+	}
+
+	got := make([]int32, 0, n)
+	for slot := range n {
+		v, err := page.dataValue(slot)
+		if err != nil {
+			t.Fatalf("dataValue(%d) error = %v", slot, err)
+		}
+		i, err := v.AsInt()
+		if err != nil {
+			t.Fatalf("AsInt() error = %v", err)
+		}
+		got = append(got, i)
+	}
+
+	return got
+}
+
+// seq is the ints from from to to, both included.
+func seq(from, to int32) []int32 {
+	s := make([]int32, 0, to-from+1)
+	for v := from; v <= to; v++ {
+		s = append(s, v)
+	}
+
+	return s
+}
+
+// rep is v, n times over.
+func rep(v int32, n int) []int32 {
+	s := make([]int32, n)
+	for i := range s {
+		s[i] = v
+	}
+
+	return s
+}
+
+// concat is the slices one after another.
+func concat(parts ...[]int32) []int32 {
+	var s []int32
+	for _, part := range parts {
+		s = append(s, part...)
+	}
+
+	return s
+}
+
 // newTestLeafChain appends one leaf block per element of chain to
 // testBTreeFile, each flagged to overflow into the next and the last into
 // none, and returns the first.
