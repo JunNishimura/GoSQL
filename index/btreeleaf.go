@@ -65,24 +65,67 @@ func newBTreeLeaf(
 // whether there was one.
 //
 // The first entry past the ones for the search key is filed under a greater
-// value, or there is none, so either is where they end.
+// value, which is where they end. Reaching the end of the block is not always
+// the end of them, since they may go on in the block this one overflows into,
+// and then the leaf moves there and goes on from its first entry.
 func (l *btreeLeaf) next() (bool, error) {
-	l.currentSlot++
+	for {
+		l.currentSlot++
 
-	n, err := l.contents.numRecords()
+		n, err := l.contents.numRecords()
+		if err != nil {
+			return false, err
+		}
+
+		if l.currentSlot < n {
+			v, err := l.contents.dataValue(l.currentSlot)
+			if err != nil {
+				return false, err
+			}
+
+			return v == l.searchKey, nil
+		}
+
+		moved, err := l.moveToOverflow()
+		if err != nil || !moved {
+			return false, err
+		}
+	}
+}
+
+// moveToOverflow moves the leaf to the block the current one overflows into,
+// before its first entry, if the entries for the search key go on there, and
+// reports whether it did.
+//
+// They go on there only if the block overflows at all and its entries are
+// filed under the search key: every entry of a block with an overflow is filed
+// under one value, so the first says what it is.
+func (l *btreeLeaf) moveToOverflow() (bool, error) {
+	flag, err := l.contents.flag()
 	if err != nil {
 		return false, err
 	}
-	if l.currentSlot >= n {
+	if flag < 0 {
 		return false, nil
 	}
 
-	v, err := l.contents.dataValue(l.currentSlot)
+	firstKey, err := l.contents.dataValue(0)
 	if err != nil {
 		return false, err
 	}
+	if firstKey != l.searchKey {
+		return false, nil
+	}
 
-	return v == l.searchKey, nil
+	overflow, err := newBTreePage(l.tx, filemanager.NewBlockId(l.contents.blk.FileName(), int(flag)), l.layout)
+	if err != nil {
+		return false, err
+	}
+	l.contents.close()
+	l.contents = overflow
+	l.currentSlot = -1
+
+	return true, nil
 }
 
 // dataRecordID is the record id of the indexed table the current entry points

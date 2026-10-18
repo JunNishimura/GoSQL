@@ -84,6 +84,129 @@ func TestBTreeLeafNext(t *testing.T) {
 			}
 		})
 	}
+
+	// Every block of an overflow chain holds entries for one value only, which
+	// is the value of the first entry of the leaf the chain starts from.
+	chainTests := []struct {
+		name      string
+		chain     [][]entry
+		searchKey query.Constant
+		want      []string
+	}{
+		{
+			name: "given a leaf of entries for 20 that overflows into one block, when it is read for 20, then the record ids of both blocks come back, the leaf's first",
+			chain: [][]entry{
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)},
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+				},
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 3)},
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 4)},
+				},
+			},
+			searchKey: query.NewIntConstant(20),
+			want: []string{
+				recordmanager.NewRecordID(0, 1).String(),
+				recordmanager.NewRecordID(0, 2).String(),
+				recordmanager.NewRecordID(0, 3).String(),
+				recordmanager.NewRecordID(0, 4).String(),
+			},
+		},
+		{
+			name: "given a leaf of entries for 20 that overflows into a block that overflows into another, when it is read for 20, then the record ids of all three blocks come back in chain order",
+			chain: [][]entry{
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)},
+				},
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+				},
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 3)},
+				},
+			},
+			searchKey: query.NewIntConstant(20),
+			want: []string{
+				recordmanager.NewRecordID(0, 1).String(),
+				recordmanager.NewRecordID(0, 2).String(),
+				recordmanager.NewRecordID(0, 3).String(),
+			},
+		},
+		{
+			name: "given a leaf of entries for 20 that overflows into one block, when it is read for 10, then nothing comes back",
+			chain: [][]entry{
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)},
+				},
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+				},
+			},
+			searchKey: query.NewIntConstant(10),
+			want:      []string{},
+		},
+		{
+			name: "given a leaf of entries for 20 that overflows into one block, when it is read for 30, then nothing comes back",
+			chain: [][]entry{
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)},
+				},
+				{
+					{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+				},
+			},
+			searchKey: query.NewIntConstant(30),
+			want:      []string{},
+		},
+	}
+	for _, tt := range chainTests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+			blk := newTestLeafChain(t, tx, layout, tt.chain)
+
+			leaf, err := newBTreeLeaf(tx, blk, layout, tt.searchKey)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", tt.searchKey, err)
+			}
+			defer leaf.close()
+
+			if got := leafRecordIDs(t, leaf); !slices.Equal(got, tt.want) {
+				t.Errorf("record ids filed under %s = %v, want %v", tt.searchKey, got, tt.want)
+			}
+		})
+	}
+}
+
+// newTestLeafChain appends one leaf block per element of chain to
+// testBTreeFile, each flagged to overflow into the next and the last into
+// none, and returns the first.
+func newTestLeafChain(
+	t *testing.T,
+	tx *transaction.Transaction,
+	layout *recordmanager.Layout,
+	chain [][]entry,
+) *filemanager.BlockId {
+	t.Helper()
+
+	blks := make([]*filemanager.BlockId, len(chain))
+	for i, entries := range chain {
+		blks[i] = newTestLeafBlock(t, tx, layout, entries)
+	}
+
+	for i := range len(blks) - 1 {
+		page, err := newBTreePage(tx, blks[i], layout)
+		if err != nil {
+			t.Fatalf("newBTreePage(%v) error = %v", blks[i], err)
+		}
+		if err := page.setFlag(int32(blks[i+1].Number())); err != nil {
+			t.Fatalf("setFlag(%d) error = %v", blks[i+1].Number(), err)
+		}
+		page.close()
+	}
+
+	return blks[0]
 }
 
 // newTestLeafBlock appends a leaf block with no overflow to testBTreeFile and
