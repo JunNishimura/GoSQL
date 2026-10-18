@@ -585,6 +585,109 @@ func TestBTreeLeafDelete(t *testing.T) {
 	}
 }
 
+// An overflow block left with no entries is taken out of its chain, so that no
+// block in a chain is empty and every one of them says by its first entry
+// which value it holds.
+func TestBTreeLeafDeleteFromOverflow(t *testing.T) {
+	tests := []struct {
+		name string
+		// chain is the leaf, then the blocks it overflows into, in order.
+		chain   [][]entry
+		deleted *recordmanager.RecordID
+		// wantFlags is the flag of each block of chain afterwards. Those of a
+		// block taken out of the chain are not checked, and are left as -2.
+		wantFlags []int32
+		want      []string
+	}{
+		{
+			name:      "given a leaf of 2 entries for 20 that overflows into a block of 2 more, when one in the overflow block is deleted, then the chain is left as it was and the other three are read",
+			chain:     [][]entry{entriesFor(20, 0, 2), entriesFor(20, 1, 2)},
+			deleted:   recordmanager.NewRecordID(1, 0),
+			wantFlags: []int32{1, -1},
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(0, 1).String(),
+				recordmanager.NewRecordID(1, 1).String(),
+			},
+		},
+		{
+			name:      "given a leaf of entries for 20 that overflows into a block of one more, which overflows into a block of 2 more, when the one in the middle block is deleted, then the leaf overflows into the last block and the other four are read",
+			chain:     [][]entry{entriesFor(20, 0, 2), entriesFor(20, 1, 1), entriesFor(20, 2, 2)},
+			deleted:   recordmanager.NewRecordID(1, 0),
+			wantFlags: []int32{2, -2, -1},
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(0, 1).String(),
+				recordmanager.NewRecordID(2, 0).String(),
+				recordmanager.NewRecordID(2, 1).String(),
+			},
+		},
+		{
+			name:      "given a leaf of entries for 20 that overflows into a block of one more, which overflows into a block of one more, when the one in the last block is deleted, then the middle block overflows into none and the other three are read",
+			chain:     [][]entry{entriesFor(20, 0, 2), entriesFor(20, 1, 1), entriesFor(20, 2, 1)},
+			deleted:   recordmanager.NewRecordID(2, 0),
+			wantFlags: []int32{1, -1, -2},
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(0, 1).String(),
+				recordmanager.NewRecordID(1, 0).String(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+			blk := newTestLeafChain(t, tx, layout, tt.chain)
+			searchKey := query.NewIntConstant(20)
+
+			leaf, err := newBTreeLeaf(tx, blk, layout, searchKey)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", searchKey, err)
+			}
+			err = leaf.delete(tt.deleted)
+			leaf.close()
+			if err != nil {
+				t.Fatalf("delete(%s) error = %v", tt.deleted, err)
+			}
+
+			for i, wantFlag := range tt.wantFlags {
+				if wantFlag == -2 {
+					continue
+				}
+				assertFlag(t, tx, filemanager.NewBlockId(testBTreeFile, i), layout, wantFlag)
+			}
+
+			assertLeafRecordIDs(t, tx, blk, layout, searchKey, tt.want)
+		})
+	}
+}
+
+// assertFlag checks the flag in the header of blk.
+func assertFlag(
+	t *testing.T,
+	tx *transaction.Transaction,
+	blk *filemanager.BlockId,
+	layout *recordmanager.Layout,
+	want int32,
+) {
+	t.Helper()
+
+	page, err := newBTreePage(tx, blk, layout)
+	if err != nil {
+		t.Fatalf("newBTreePage(%v) error = %v", blk, err)
+	}
+	defer page.close()
+
+	got, err := page.flag()
+	if err != nil {
+		t.Fatalf("flag() error = %v", err)
+	}
+	if got != want {
+		t.Errorf("flag() of %v = %d, want %d", blk, got, want)
+	}
+}
+
 // assertLeafRecordIDs opens the leaf in blk for searchKey and checks the
 // record ids it reads.
 func assertLeafRecordIDs(

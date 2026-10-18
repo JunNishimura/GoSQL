@@ -42,6 +42,11 @@ type btreeLeaf struct {
 	// currentSlot is the slot of the entry being read, or the slot before the
 	// first entry for searchKey until the first move.
 	currentSlot int
+	// previousBlock is the number of the block that overflows into the one
+	// being read, or -1 while the leaf is still in the block it was opened in.
+	// It is what an overflow block left empty is taken out of the chain
+	// through.
+	previousBlock int
 }
 
 // newBTreeLeaf opens the leaf in blk to read or change the entries filed under
@@ -67,11 +72,12 @@ func newBTreeLeaf(
 	}
 
 	return &btreeLeaf{
-		tx:          tx,
-		layout:      layout,
-		searchKey:   searchKey,
-		contents:    contents,
-		currentSlot: slot,
+		tx:            tx,
+		layout:        layout,
+		searchKey:     searchKey,
+		contents:      contents,
+		currentSlot:   slot,
+		previousBlock: -1,
 	}, nil
 }
 
@@ -135,6 +141,7 @@ func (l *btreeLeaf) moveToOverflow() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	l.previousBlock = l.contents.blk.Number()
 	l.contents.close()
 	l.contents = overflow
 	l.currentSlot = -1
@@ -169,9 +176,44 @@ func (l *btreeLeaf) delete(rid *recordmanager.RecordID) error {
 			return err
 		}
 		if current.Equals(rid) {
-			return l.contents.delete(l.currentSlot)
+			if err := l.contents.delete(l.currentSlot); err != nil {
+				return err
+			}
+
+			return l.unlinkIfEmpty()
 		}
 	}
+}
+
+// unlinkIfEmpty takes the block being read out of its chain if it is an
+// overflow block with no entries left, by making the block before it overflow
+// into whichever block it did.
+//
+// An empty block cannot stay in a chain. Whether a chain goes on into a block
+// is told by the block's first entry, and an empty block has none: what is
+// read there is whatever its last entry left behind.
+func (l *btreeLeaf) unlinkIfEmpty() error {
+	if l.previousBlock < 0 {
+		return nil
+	}
+
+	n, err := l.contents.numRecords()
+	if err != nil || n > 0 {
+		return err
+	}
+
+	flag, err := l.contents.flag()
+	if err != nil {
+		return err
+	}
+
+	previous, err := newBTreePage(l.tx, filemanager.NewBlockId(l.contents.blk.FileName(), l.previousBlock), l.layout)
+	if err != nil {
+		return err
+	}
+	defer previous.close()
+
+	return previous.setFlag(flag)
 }
 
 // insert files rid under the search key, ahead of any entries already filed
