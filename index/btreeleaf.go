@@ -181,7 +181,7 @@ func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
 		return nil, l.overflow()
 	}
 
-	return l.split()
+	return l.split(n, firstKey)
 }
 
 // overflow makes room in a full leaf whose entries are all filed under one
@@ -206,8 +206,9 @@ func (l *btreeLeaf) overflow() error {
 	return l.contents.setFlag(int32(newBlk.Number()))
 }
 
-// split moves the second half of a full leaf into a new block and returns the
-// directory record for it.
+// split moves the second half of a full leaf, which holds n entries starting
+// with one for firstKey, into a new block and returns the directory record for
+// it.
 //
 // It starts from the middle and moves the split so that it does not part two
 // entries filed under the same value: a search for that value would otherwise
@@ -216,16 +217,7 @@ func (l *btreeLeaf) overflow() error {
 // the new block; but if that value is the first in the block, there is nothing
 // to the left of it to keep, and the split moves right past its last entry
 // instead, so that they all stay.
-func (l *btreeLeaf) split() (*dirEntry, error) {
-	n, err := l.contents.numRecords()
-	if err != nil {
-		return nil, err
-	}
-	firstKey, err := l.contents.dataValue(0)
-	if err != nil {
-		return nil, err
-	}
-
+func (l *btreeLeaf) split(n int, firstKey query.Constant) (*dirEntry, error) {
 	splitPos := n / 2
 	splitKey, err := l.contents.dataValue(splitPos)
 	if err != nil {
