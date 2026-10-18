@@ -28,8 +28,10 @@ type dirEntry struct {
 //
 // A leaf's flag is the number of the block its entries overflow into, or -1
 // if they do not. Entries overflow when so many share one value that they do
-// not fit in a block, and every entry of an overflow block is filed under that
-// value.
+// not fit in a block, and that value is the one the leaf's first entry is filed
+// under. Every entry of an overflow block is filed under it, but the leaf the
+// chain starts from may go on past them to entries for greater values, which
+// the directory sends there as it would to any leaf.
 type btreeLeaf struct {
 	tx        *transaction.Transaction
 	layout    *recordmanager.Layout
@@ -74,10 +76,10 @@ func newBTreeLeaf(
 // next moves on to the next entry filed under the search key and reports
 // whether there was one.
 //
-// The first entry past the ones for the search key is filed under a greater
-// value, which is where they end. Reaching the end of the block is not always
-// the end of them, since they may go on in the block this one overflows into,
-// and then the leaf moves there and goes on from its first entry.
+// The entries for the search key in one block end at the first entry filed
+// under a greater value, or at the end of the block. Either may not be the end
+// of them, since they may go on in the block this one overflows into, and then
+// the leaf moves there and goes on from its first entry.
 func (l *btreeLeaf) next() (bool, error) {
 	for {
 		l.currentSlot++
@@ -92,8 +94,9 @@ func (l *btreeLeaf) next() (bool, error) {
 			if err != nil {
 				return false, err
 			}
-
-			return v == l.searchKey, nil
+			if v == l.searchKey {
+				return true, nil
+			}
 		}
 
 		moved, err := l.moveToOverflow()
@@ -107,9 +110,8 @@ func (l *btreeLeaf) next() (bool, error) {
 // before its first entry, if the entries for the search key go on there, and
 // reports whether it did.
 //
-// They go on there only if the block overflows at all and its entries are
-// filed under the search key: every entry of a block with an overflow is filed
-// under one value, so the first says what it is.
+// They go on there only if the block overflows at all and the search key is
+// the value its entries overflow under, which is the value of its first entry.
 func (l *btreeLeaf) moveToOverflow() (bool, error) {
 	flag, err := l.contents.flag()
 	if err != nil {
@@ -154,7 +156,16 @@ func (l *btreeLeaf) dataRecordID() (*recordmanager.RecordID, error) {
 // If the block fills up, it is split and the directory record for the new
 // block comes back, for the directory to file. Otherwise there is nothing for
 // the directory to do, and nil comes back.
+//
+// A leaf that overflows has to start with the entries for the value it
+// overflows under, so an entry for a smaller value cannot go ahead of them.
+// Instead they move out, chain and all, into a new block for the directory to
+// file under their value, and the leaf is left holding the new entry alone.
 func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
+	if e, err := l.moveOverflowingOut(rid); err != nil || e != nil {
+		return e, err
+	}
+
 	l.currentSlot++
 	if err := l.contents.insertLeaf(l.currentSlot, l.searchKey, rid); err != nil {
 		return nil, err
@@ -182,6 +193,45 @@ func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
 	}
 
 	return l.split(n, firstKey)
+}
+
+// moveOverflowingOut files rid under the search key in a leaf that
+// overflows under a greater value, by moving everything the leaf held into a
+// new block and putting the entry in the leaf alone. It returns the directory
+// record for the new block, or nil if the leaf does not overflow under a
+// greater value and the insert has to go ahead as usual.
+//
+// The new block takes the leaf's flag, so the chain goes on from it as it did
+// from the leaf, and the leaf no longer overflows.
+func (l *btreeLeaf) moveOverflowingOut(rid *recordmanager.RecordID) (*dirEntry, error) {
+	flag, err := l.contents.flag()
+	if err != nil || flag < 0 {
+		return nil, err
+	}
+
+	firstKey, err := l.contents.dataValue(0)
+	if err != nil {
+		return nil, err
+	}
+	c, err := firstKey.Compare(l.searchKey)
+	if err != nil || c <= 0 {
+		return nil, err
+	}
+
+	newBlk, err := l.contents.split(0, flag)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.contents.setFlag(-1); err != nil {
+		return nil, err
+	}
+
+	l.currentSlot = 0
+	if err := l.contents.insertLeaf(l.currentSlot, l.searchKey, rid); err != nil {
+		return nil, err
+	}
+
+	return &dirEntry{value: firstKey, childBlockNumber: newBlk.Number()}, nil
 }
 
 // overflow makes room in a full leaf whose entries are all filed under one

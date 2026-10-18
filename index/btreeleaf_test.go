@@ -428,6 +428,95 @@ func TestBTreeLeafInsertOverflow(t *testing.T) {
 	}
 }
 
+// The entries a leaf overflows into are all for the value of its first entry,
+// so another value inserted there has to go somewhere the chain does not cover.
+func TestBTreeLeafInsertIntoOverflowing(t *testing.T) {
+	t.Run("given a leaf of 2 entries for 20 that overflows into a block of 2 more, when an entry for 10 is inserted, then the leaf keeps only it, and the entries for 20 move with their chain to a new block that comes back filed under 20", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestIndexLayout(t)
+		blk := newTestLeafChain(t, tx, layout, [][]entry{entriesFor(20, 0, 2), entriesFor(20, 2, 2)})
+
+		inserted := recordmanager.NewRecordID(1, 0)
+		leaf, err := newBTreeLeaf(tx, blk, layout, query.NewIntConstant(10))
+		if err != nil {
+			t.Fatalf("newBTreeLeaf(10) error = %v", err)
+		}
+		got, err := leaf.insert(inserted)
+		leaf.close()
+		if err != nil {
+			t.Fatalf("insert(%s) error = %v", inserted, err)
+		}
+
+		wantEntry := dirEntry{value: query.NewIntConstant(20), childBlockNumber: 2}
+		if got == nil || *got != wantEntry {
+			t.Errorf("insert(%s) = %+v, want %+v", inserted, got, wantEntry)
+		}
+
+		assertHeader(t, tx, blk, layout, -1, 1)
+		newBlk := filemanager.NewBlockId(testBTreeFile, 2)
+		assertHeader(t, tx, newBlk, layout, 1, 2)
+
+		assertLeafRecordIDs(t, tx, blk, layout, query.NewIntConstant(10), []string{inserted.String()})
+		assertLeafRecordIDs(t, tx, newBlk, layout, query.NewIntConstant(20), []string{
+			recordmanager.NewRecordID(0, 0).String(),
+			recordmanager.NewRecordID(0, 1).String(),
+			recordmanager.NewRecordID(2, 0).String(),
+			recordmanager.NewRecordID(2, 1).String(),
+		})
+	})
+
+	t.Run("given a leaf of 2 entries for 20 that overflows into a block of 2 more, when an entry for 25 is inserted, then nothing comes back for the directory, 20 still reads all four entries of its chain, and 25 reads its own", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestIndexLayout(t)
+		blk := newTestLeafChain(t, tx, layout, [][]entry{entriesFor(20, 0, 2), entriesFor(20, 2, 2)})
+
+		inserted := recordmanager.NewRecordID(1, 0)
+		leaf, err := newBTreeLeaf(tx, blk, layout, query.NewIntConstant(25))
+		if err != nil {
+			t.Fatalf("newBTreeLeaf(25) error = %v", err)
+		}
+		got, err := leaf.insert(inserted)
+		leaf.close()
+		if err != nil {
+			t.Fatalf("insert(%s) error = %v", inserted, err)
+		}
+		if got != nil {
+			t.Errorf("insert(%s) = %+v, want nil", inserted, got)
+		}
+
+		assertLeafRecordIDs(t, tx, blk, layout, query.NewIntConstant(20), []string{
+			recordmanager.NewRecordID(0, 0).String(),
+			recordmanager.NewRecordID(0, 1).String(),
+			recordmanager.NewRecordID(2, 0).String(),
+			recordmanager.NewRecordID(2, 1).String(),
+		})
+		assertLeafRecordIDs(t, tx, blk, layout, query.NewIntConstant(25), []string{inserted.String()})
+	})
+}
+
+// assertLeafRecordIDs opens the leaf in blk for searchKey and checks the
+// record ids it reads.
+func assertLeafRecordIDs(
+	t *testing.T,
+	tx *transaction.Transaction,
+	blk *filemanager.BlockId,
+	layout *recordmanager.Layout,
+	searchKey query.Constant,
+	want []string,
+) {
+	t.Helper()
+
+	leaf, err := newBTreeLeaf(tx, blk, layout, searchKey)
+	if err != nil {
+		t.Fatalf("newBTreeLeaf(%v, %s) error = %v", blk, searchKey, err)
+	}
+	defer leaf.close()
+
+	if got := leafRecordIDs(t, leaf); !slices.Equal(got, want) {
+		t.Errorf("record ids filed under %s from %v = %v, want %v", searchKey, blk, got, want)
+	}
+}
+
 // entriesFor is n entries filed under v, pointing to slots 0 to n-1 of block
 // blkNum of the indexed table.
 func entriesFor(v int32, blkNum, n int) []entry {
