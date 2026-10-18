@@ -165,7 +165,45 @@ func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
 		return nil, err
 	}
 
+	n, err := l.contents.numRecords()
+	if err != nil {
+		return nil, err
+	}
+	firstKey, err := l.contents.dataValue(0)
+	if err != nil {
+		return nil, err
+	}
+	lastKey, err := l.contents.dataValue(n - 1)
+	if err != nil {
+		return nil, err
+	}
+	if firstKey == lastKey {
+		return nil, l.overflow()
+	}
+
 	return l.split()
+}
+
+// overflow makes room in a full leaf whose entries are all filed under one
+// value, by moving all but the first into a new block the leaf overflows into.
+//
+// Such a leaf cannot be split, since every place to split it would part two
+// entries for that value. The new block goes at the head of the leaf's chain,
+// overflowing into whichever block the leaf did, so the chain stays one line
+// of blocks for that value. Nothing changes for the directory, which still
+// sends a search for that value to the leaf.
+func (l *btreeLeaf) overflow() error {
+	flag, err := l.contents.flag()
+	if err != nil {
+		return err
+	}
+
+	newBlk, err := l.contents.split(1, flag)
+	if err != nil {
+		return err
+	}
+
+	return l.contents.setFlag(int32(newBlk.Number()))
 }
 
 // split moves the second half of a full leaf into a new block and returns the

@@ -350,6 +350,95 @@ func TestBTreeLeafInsertSplit(t *testing.T) {
 	}
 }
 
+// A leaf whose entries are all filed under one value cannot be split without
+// parting two of them, so a 24th entry for that value keeps the leaf's first
+// entry, the one just inserted, and moves the rest into an overflow block put
+// at the head of the leaf's chain.
+func TestBTreeLeafInsertOverflow(t *testing.T) {
+	tests := []struct {
+		name string
+		// chain is the leaf the entry goes into, then the blocks it already
+		// overflows into.
+		chain [][]entry
+		// wantFlag is the block the leaf overflows into afterwards, the one
+		// just appended.
+		wantFlag int32
+		// wantOverflowFlag is the block the appended one overflows into: the
+		// one the leaf overflowed into before, or none.
+		wantOverflowFlag int32
+	}{
+		{
+			name:             "given a leaf of 23 entries for 20 with no overflow, when another entry for 20 fills it, then the leaf keeps the new entry and overflows into a new block holding the other 23, which overflows into none",
+			chain:            [][]entry{entriesFor(20, 0, 23)},
+			wantFlag:         1,
+			wantOverflowFlag: -1,
+		},
+		{
+			name:             "given a leaf of 23 entries for 20 that overflows into a block of 2 more, when another entry for 20 fills it, then the leaf keeps the new entry and overflows into a new block holding the other 23, which overflows into the old one",
+			chain:            [][]entry{entriesFor(20, 0, 23), entriesFor(20, 2, 2)},
+			wantFlag:         2,
+			wantOverflowFlag: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+			blk := newTestLeafChain(t, tx, layout, tt.chain)
+
+			searchKey := query.NewIntConstant(20)
+			inserted := recordmanager.NewRecordID(1, 0)
+
+			leaf, err := newBTreeLeaf(tx, blk, layout, searchKey)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", searchKey, err)
+			}
+			got, err := leaf.insert(inserted)
+			leaf.close()
+			if err != nil {
+				t.Fatalf("insert(%s) error = %v", inserted, err)
+			}
+			if got != nil {
+				t.Errorf("insert(%s) = %+v, want nil", inserted, got)
+			}
+
+			assertHeader(t, tx, blk, layout, tt.wantFlag, 1)
+			overflowBlk := filemanager.NewBlockId(testBTreeFile, int(tt.wantFlag))
+			assertHeader(t, tx, overflowBlk, layout, tt.wantOverflowFlag, 23)
+
+			// Every entry is still found, the new one first, then the leaf's
+			// old ones, then those of the blocks it already overflowed into.
+			want := []string{inserted.String()}
+			for _, entries := range tt.chain {
+				for _, e := range entries {
+					want = append(want, e.rid.String())
+				}
+			}
+
+			leaf, err = newBTreeLeaf(tx, blk, layout, searchKey)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", searchKey, err)
+			}
+			defer leaf.close()
+
+			if got := leafRecordIDs(t, leaf); !slices.Equal(got, want) {
+				t.Errorf("record ids filed under %s = %v, want %v", searchKey, got, want)
+			}
+		})
+	}
+}
+
+// entriesFor is n entries filed under v, pointing to slots 0 to n-1 of block
+// blkNum of the indexed table.
+func entriesFor(v int32, blkNum, n int) []entry {
+	entries := make([]entry, n)
+	for i := range entries {
+		entries[i] = entry{value: query.NewIntConstant(v), rid: recordmanager.NewRecordID(blkNum, i)}
+	}
+
+	return entries
+}
+
 // leafValues reads the values of every entry in the leaf block blk, in slot
 // order, or none if the file has no such block.
 func leafValues(
