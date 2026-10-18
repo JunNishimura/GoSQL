@@ -180,9 +180,79 @@ func (l *btreeLeaf) delete(rid *recordmanager.RecordID) error {
 				return err
 			}
 
+			if l.previousBlock < 0 {
+				return l.refillIfChainLost()
+			}
+
 			return l.unlinkIfEmpty()
 		}
 	}
+}
+
+// refillIfChainLost brings an entry back from the block the leaf overflows
+// into, if the delete just made in the leaf took out the last entry it held
+// for the search key and so left its chain with nothing to be found by.
+//
+// A chain goes on from a leaf only for the value of the leaf's first entry, so
+// once the leaf holds none for it, or none at all, the entries in the chain
+// are still there but no search reaches them. One of them goes back to the
+// front of the leaf, where it stands for the chain again. It is the last of
+// the block's, so that nothing in the block has to move along.
+//
+// The leaf has room for it, the delete having just made some. If that leaves
+// the block empty, the block is taken out of the chain as unlinkIfEmpty would.
+func (l *btreeLeaf) refillIfChainLost() error {
+	if l.currentSlot != 0 {
+		return nil
+	}
+
+	flag, err := l.contents.flag()
+	if err != nil || flag < 0 {
+		return err
+	}
+
+	n, err := l.contents.numRecords()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		firstKey, err := l.contents.dataValue(0)
+		if err != nil || firstKey == l.searchKey {
+			return err
+		}
+	}
+
+	overflow, err := newBTreePage(l.tx, filemanager.NewBlockId(l.contents.blk.FileName(), int(flag)), l.layout)
+	if err != nil {
+		return err
+	}
+	defer overflow.close()
+
+	m, err := overflow.numRecords()
+	if err != nil {
+		return err
+	}
+	rid, err := overflow.dataRecordID(m - 1)
+	if err != nil {
+		return err
+	}
+
+	if err := l.contents.insertLeaf(0, l.searchKey, rid); err != nil {
+		return err
+	}
+	if err := overflow.delete(m - 1); err != nil {
+		return err
+	}
+	if m > 1 {
+		return nil
+	}
+
+	next, err := overflow.flag()
+	if err != nil {
+		return err
+	}
+
+	return l.contents.setFlag(next)
 }
 
 // unlinkIfEmpty takes the block being read out of its chain if it is an

@@ -663,6 +663,126 @@ func TestBTreeLeafDeleteFromOverflow(t *testing.T) {
 	}
 }
 
+// A chain is found by the value of its leaf's first entry, so a delete that
+// takes the last entry for that value out of the leaf brings one back from the
+// block the leaf overflows into. Which one comes back is left to the leaf, so
+// the record ids read are compared without their order.
+func TestBTreeLeafDeleteFromOverflowingLeaf(t *testing.T) {
+	tests := []struct {
+		name string
+		// leaf is the leaf's own entries, and overflow the blocks it overflows
+		// into, in order.
+		leaf     []entry
+		overflow [][]entry
+		deleted  *recordmanager.RecordID
+		wantFlag int32
+		// want is what reading 20 from the leaf comes to afterwards, and
+		// want25 what reading 25 does.
+		want   []string
+		want25 []string
+	}{
+		{
+			name:     "given a leaf holding an entry for 20 and one for 25 that overflows under 20 into a block of 2 more, when the leaf's entry for 20 is deleted, then one comes back from the overflow block, which still holds the other, and both values are read",
+			leaf:     []entry{{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 0)}, {value: query.NewIntConstant(25), rid: recordmanager.NewRecordID(0, 1)}},
+			overflow: [][]entry{entriesFor(20, 1, 2)},
+			deleted:  recordmanager.NewRecordID(0, 0),
+			wantFlag: 1,
+			want: []string{
+				recordmanager.NewRecordID(1, 0).String(),
+				recordmanager.NewRecordID(1, 1).String(),
+			},
+			want25: []string{
+				recordmanager.NewRecordID(0, 1).String(),
+			},
+		},
+		{
+			name:     "given a leaf of one entry for 20 that overflows into a block of one more, when the leaf's entry is deleted, then the other comes back to the leaf, which overflows into none",
+			leaf:     entriesFor(20, 0, 1),
+			overflow: [][]entry{entriesFor(20, 1, 1)},
+			deleted:  recordmanager.NewRecordID(0, 0),
+			wantFlag: -1,
+			want: []string{
+				recordmanager.NewRecordID(1, 0).String(),
+			},
+			want25: []string{},
+		},
+		{
+			name:     "given a leaf of one entry for 20 that overflows into a block of one more, which overflows into a block of one more, when the leaf's entry is deleted, then the middle one comes back to the leaf, which overflows into the last block",
+			leaf:     entriesFor(20, 0, 1),
+			overflow: [][]entry{entriesFor(20, 1, 1), entriesFor(20, 2, 1)},
+			deleted:  recordmanager.NewRecordID(0, 0),
+			wantFlag: 2,
+			want: []string{
+				recordmanager.NewRecordID(1, 0).String(),
+				recordmanager.NewRecordID(2, 0).String(),
+			},
+			want25: []string{},
+		},
+		{
+			name:     "given a leaf holding two entries for 20 and one for 25 that overflows under 20 into a block of one more, when the leaf's first entry for 20 is deleted, then the leaf still starts with 20, its chain is left as it was, and both values are read",
+			leaf:     []entry{{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 0)}, {value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)}, {value: query.NewIntConstant(25), rid: recordmanager.NewRecordID(0, 2)}},
+			overflow: [][]entry{entriesFor(20, 1, 1)},
+			deleted:  recordmanager.NewRecordID(0, 0),
+			wantFlag: 1,
+			want: []string{
+				recordmanager.NewRecordID(0, 1).String(),
+				recordmanager.NewRecordID(1, 0).String(),
+			},
+			want25: []string{
+				recordmanager.NewRecordID(0, 2).String(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+			blk := newTestLeafChain(t, tx, layout, append([][]entry{tt.leaf}, tt.overflow...))
+			searchKey := query.NewIntConstant(20)
+
+			leaf, err := newBTreeLeaf(tx, blk, layout, searchKey)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", searchKey, err)
+			}
+			err = leaf.delete(tt.deleted)
+			leaf.close()
+			if err != nil {
+				t.Fatalf("delete(%s) error = %v", tt.deleted, err)
+			}
+
+			assertFlag(t, tx, blk, layout, tt.wantFlag)
+			assertLeafRecordIDsInAnyOrder(t, tx, blk, layout, searchKey, tt.want)
+			assertLeafRecordIDsInAnyOrder(t, tx, blk, layout, query.NewIntConstant(25), tt.want25)
+		})
+	}
+}
+
+// assertLeafRecordIDsInAnyOrder opens the leaf in blk for searchKey and checks
+// the record ids it reads, whatever order they come in.
+func assertLeafRecordIDsInAnyOrder(
+	t *testing.T,
+	tx *transaction.Transaction,
+	blk *filemanager.BlockId,
+	layout *recordmanager.Layout,
+	searchKey query.Constant,
+	want []string,
+) {
+	t.Helper()
+
+	leaf, err := newBTreeLeaf(tx, blk, layout, searchKey)
+	if err != nil {
+		t.Fatalf("newBTreeLeaf(%v, %s) error = %v", blk, searchKey, err)
+	}
+	defer leaf.close()
+
+	got := leafRecordIDs(t, leaf)
+	slices.Sort(got)
+	sortedWant := slices.Sorted(slices.Values(want))
+	if !slices.Equal(got, sortedWant) {
+		t.Errorf("record ids filed under %s from %v = %v, want %v in any order", searchKey, blk, got, sortedWant)
+	}
+}
+
 // assertFlag checks the flag in the header of blk.
 func assertFlag(
 	t *testing.T,
