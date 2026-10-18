@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -492,6 +493,96 @@ func TestBTreeLeafInsertIntoOverflowing(t *testing.T) {
 		})
 		assertLeafRecordIDs(t, tx, blk, layout, query.NewIntConstant(25), []string{inserted.String()})
 	})
+}
+
+func TestBTreeLeafDelete(t *testing.T) {
+	entries := []entry{
+		{value: query.NewIntConstant(10), rid: recordmanager.NewRecordID(0, 1)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 2)},
+		{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 3)},
+		{value: query.NewIntConstant(30), rid: recordmanager.NewRecordID(0, 4)},
+	}
+	all := []string{
+		"10 " + recordmanager.NewRecordID(0, 1).String(),
+		"20 " + recordmanager.NewRecordID(0, 2).String(),
+		"20 " + recordmanager.NewRecordID(0, 3).String(),
+		"30 " + recordmanager.NewRecordID(0, 4).String(),
+	}
+
+	tests := []struct {
+		name    string
+		deleted entry
+		want    []string
+		wantErr error
+	}{
+		{
+			name:    "given a leaf holding entries for 10, 20, 20 and 30, when the second entry for 20 is deleted, then the other three are left",
+			deleted: entries[2],
+			want:    []string{all[0], all[1], all[3]},
+		},
+		{
+			name:    "given a leaf holding entries for 10, 20, 20 and 30, when the first entry for 20 is deleted, then the other three are left",
+			deleted: entries[1],
+			want:    []string{all[0], all[2], all[3]},
+		},
+		{
+			name:    "given a leaf holding entries for 10, 20, 20 and 30, when the entry for 10 is deleted, then the other three are left",
+			deleted: entries[0],
+			want:    []string{all[1], all[2], all[3]},
+		},
+		{
+			name:    "given a leaf holding entries for 10, 20, 20 and 30, when an entry for 20 pointing to a record no entry points to is deleted, then it reports ErrEntryNotFound and all four are left",
+			deleted: entry{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(9, 9)},
+			want:    all,
+			wantErr: ErrEntryNotFound,
+		},
+		// The record id is one an entry points to, but filed under 10, so an
+		// entry for 20 with it is not there.
+		{
+			name:    "given a leaf holding entries for 10, 20, 20 and 30, when an entry for 20 pointing to the record the entry for 10 points to is deleted, then it reports ErrEntryNotFound and all four are left",
+			deleted: entry{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)},
+			want:    all,
+			wantErr: ErrEntryNotFound,
+		},
+		{
+			name:    "given a leaf holding entries for 10, 20, 20 and 30, when an entry for 25, which none is filed under, is deleted, then it reports ErrEntryNotFound and all four are left",
+			deleted: entry{value: query.NewIntConstant(25), rid: recordmanager.NewRecordID(0, 2)},
+			want:    all,
+			wantErr: ErrEntryNotFound,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestIndexLayout(t)
+			blk := newTestLeafBlock(t, tx, layout, entries)
+
+			leaf, err := newBTreeLeaf(tx, blk, layout, tt.deleted.value)
+			if err != nil {
+				t.Fatalf("newBTreeLeaf(%s) error = %v", tt.deleted.value, err)
+			}
+			err = leaf.delete(tt.deleted.rid)
+			leaf.close()
+
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("delete(%s) error = %v, want %v", tt.deleted.rid, err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("delete(%s) error = %v", tt.deleted.rid, err)
+			}
+
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			if got := leafEntries(t, page); !slices.Equal(got, tt.want) {
+				t.Errorf("entries = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 // assertLeafRecordIDs opens the leaf in blk for searchKey and checks the

@@ -1,6 +1,8 @@
 package index
 
 import (
+	"fmt"
+
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
@@ -144,6 +146,32 @@ func (l *btreeLeaf) moveToOverflow() (bool, error) {
 // to.
 func (l *btreeLeaf) dataRecordID() (*recordmanager.RecordID, error) {
 	return l.contents.dataRecordID(l.currentSlot)
+}
+
+// delete takes out the entry filing rid under the search key.
+//
+// It is meant for a leaf just opened, and moves forward through the entries
+// for the search key to find it. Both halves have to match: the same record id
+// filed under another value is a different entry, and is left alone. One that
+// is not there at all is ErrEntryNotFound, as it is for a hash index.
+func (l *btreeLeaf) delete(rid *recordmanager.RecordID) error {
+	for {
+		ok, err := l.next()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("delete %s filed under %s from B-tree leaf %s: %w", rid, l.searchKey, l.contents.blk, ErrEntryNotFound)
+		}
+
+		current, err := l.dataRecordID()
+		if err != nil {
+			return err
+		}
+		if current.Equals(rid) {
+			return l.contents.delete(l.currentSlot)
+		}
+	}
 }
 
 // insert files rid under the search key, ahead of any entries already filed
