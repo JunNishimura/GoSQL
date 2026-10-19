@@ -131,6 +131,30 @@ func (d *btreeDir) findChildBlock(searchKey query.Constant) (int, error) {
 	return d.contents.childBlockNumber(slot)
 }
 
+// insert files e, the record for a block a split below has just made, in the
+// directory from this block down.
+//
+// If that fills a directory block, it is split in turn, and the record for the
+// new directory block comes back for the level above to file. Otherwise
+// nothing does, and nil comes back.
+func (d *btreeDir) insert(e dirEntry) (*dirEntry, error) {
+	return d.insertEntry(e)
+}
+
+// insertEntry files e in this block, at the place that keeps its records in
+// order of value.
+func (d *btreeDir) insertEntry(e dirEntry) (*dirEntry, error) {
+	slot, err := d.contents.findSlotBefore(e.value)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.contents.insertDir(slot+1, e.value, e.childBlockNumber); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
+}
+
 // close gives back the pin on whichever block the directory is reading.
 func (d *btreeDir) close() {
 	d.contents.close()

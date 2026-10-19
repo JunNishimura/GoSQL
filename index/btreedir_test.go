@@ -2,6 +2,7 @@ package index
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
@@ -192,6 +193,66 @@ func TestBTreeDirSearchDown(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("search(%s) = %d, want %d", tt.searchKey, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBTreeDirInsert(t *testing.T) {
+	// A directory at level 0, so the records go in this block itself.
+	entries := []dirEntry{
+		{value: query.NewIntConstant(10), childBlockNumber: 1},
+		{value: query.NewIntConstant(30), childBlockNumber: 3},
+	}
+
+	tests := []struct {
+		name     string
+		inserted dirEntry
+		want     []string
+	}{
+		{
+			name:     "given a directory at level 0 filing blocks under 10 and 30, when a record for 20 is inserted, then it goes between them and nothing comes back for the level above",
+			inserted: dirEntry{value: query.NewIntConstant(20), childBlockNumber: 2},
+			want:     []string{"10 -> 1", "20 -> 2", "30 -> 3"},
+		},
+		{
+			name:     "given a directory at level 0 filing blocks under 10 and 30, when a record for 5 is inserted, then it goes first and nothing comes back for the level above",
+			inserted: dirEntry{value: query.NewIntConstant(5), childBlockNumber: 9},
+			want:     []string{"5 -> 9", "10 -> 1", "30 -> 3"},
+		},
+		{
+			name:     "given a directory at level 0 filing blocks under 10 and 30, when a record for 40 is inserted, then it goes last and nothing comes back for the level above",
+			inserted: dirEntry{value: query.NewIntConstant(40), childBlockNumber: 4},
+			want:     []string{"10 -> 1", "30 -> 3", "40 -> 4"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestDirLayout(t)
+			blk := newTestDirBlock(t, tx, layout, 0, entries)
+
+			dir, err := newBTreeDir(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreeDir() error = %v", err)
+			}
+			got, err := dir.insert(tt.inserted)
+			dir.close()
+			if err != nil {
+				t.Fatalf("insert(%+v) error = %v", tt.inserted, err)
+			}
+			if got != nil {
+				t.Errorf("insert(%+v) = %+v, want nil", tt.inserted, got)
+			}
+
+			page, err := newBTreePage(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreePage() error = %v", err)
+			}
+			defer page.close()
+
+			if records := dirEntries(t, page); !slices.Equal(records, tt.want) {
+				t.Errorf("records = %v, want %v", records, tt.want)
 			}
 		})
 	}
