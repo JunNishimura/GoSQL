@@ -2,6 +2,7 @@ package index
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -255,6 +256,112 @@ func TestBTreeDirInsert(t *testing.T) {
 				t.Errorf("records = %v, want %v", records, tt.want)
 			}
 		})
+	}
+}
+
+// A directory record on an int field is 12 bytes, so 32 of them fit in the 392
+// bytes a block has past its header. Each case fills a directory block with 31
+// and inserts a 32nd, which fills it and splits it in the middle, at slot 16.
+func TestBTreeDirInsertSplit(t *testing.T) {
+	// The records for 0, 10, ..., 310, filing child blocks 100, 101, ..., 131.
+	all := dirEntriesStepping(0, 310)
+
+	tests := []struct {
+		name     string
+		existing []dirEntry
+		inserted dirEntry
+	}{
+		{
+			name:     "given a directory block at level 0 of 31 records for 0 to 300, when a record for 310 fills it, then it keeps 0 to 150, a new block at level 0 takes 160 to 310, and the new block comes back filed under 160",
+			existing: all[:31],
+			inserted: all[31],
+		},
+		{
+			name:     "given a directory block at level 0 of 31 records for 10 to 310, when a record for 0 fills it, then it keeps 0 to 150, a new block at level 0 takes 160 to 310, and the new block comes back filed under 160",
+			existing: all[1:],
+			inserted: all[0],
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestDirLayout(t)
+			blk := newTestDirBlock(t, tx, layout, 0, tt.existing)
+
+			dir, err := newBTreeDir(tx, blk, layout)
+			if err != nil {
+				t.Fatalf("newBTreeDir() error = %v", err)
+			}
+			got, err := dir.insert(tt.inserted)
+			dir.close()
+			if err != nil {
+				t.Fatalf("insert(%+v) error = %v", tt.inserted, err)
+			}
+
+			newBlk := filemanager.NewBlockId(testBTreeDirFile, 1)
+			wantEntry := dirEntry{value: query.NewIntConstant(160), childBlockNumber: newBlk.Number()}
+			if got == nil || *got != wantEntry {
+				t.Errorf("insert(%+v) = %+v, want %+v", tt.inserted, got, wantEntry)
+			}
+
+			assertDirRecords(t, tx, blk, layout, dirStrings(all[:16]))
+			assertDirRecords(t, tx, newBlk, layout, dirStrings(all[16:]))
+			assertHeader(t, tx, blk, layout, 0, 16)
+			assertHeader(t, tx, newBlk, layout, 0, 16)
+		})
+	}
+}
+
+// dirEntriesStepping is the directory records for from, from+10, ..., to, the
+// one for value v filing child block 100+v/10.
+func dirEntriesStepping(from, to int32) []dirEntry {
+	var entries []dirEntry
+	for v := from; v <= to; v += 10 {
+		entries = append(entries, dirEntry{value: query.NewIntConstant(v), childBlockNumber: 100 + int(v/10)})
+	}
+
+	return entries
+}
+
+// dirStrings writes entries out the way dirEntries reads records back.
+func dirStrings(entries []dirEntry) []string {
+	s := make([]string, len(entries))
+	for i, e := range entries {
+		s[i] = fmt.Sprintf("%s -> %d", e.value, e.childBlockNumber)
+	}
+
+	return s
+}
+
+// assertDirRecords checks the records of the directory block blk, in slot
+// order, or that there are none if the file has no such block.
+func assertDirRecords(
+	t *testing.T,
+	tx *transaction.Transaction,
+	blk *filemanager.BlockId,
+	layout *recordmanager.Layout,
+	want []string,
+) {
+	t.Helper()
+
+	size, err := tx.Size(blk.FileName())
+	if err != nil {
+		t.Fatalf("Size(%q) error = %v", blk.FileName(), err)
+	}
+	if blk.Number() >= size {
+		t.Errorf("%v does not exist, want it to hold %v", blk, want)
+
+		return
+	}
+
+	page, err := newBTreePage(tx, blk, layout)
+	if err != nil {
+		t.Fatalf("newBTreePage(%v) error = %v", blk, err)
+	}
+	defer page.close()
+
+	if got := dirEntries(t, page); !slices.Equal(got, want) {
+		t.Errorf("records of %v = %v, want %v", blk, got, want)
 	}
 }
 

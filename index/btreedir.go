@@ -143,6 +143,14 @@ func (d *btreeDir) insert(e dirEntry) (*dirEntry, error) {
 
 // insertEntry files e in this block, at the place that keeps its records in
 // order of value.
+//
+// If that fills the block, the second half of its records moves into a new
+// block at the same level, and the record for that block comes back: it is
+// filed under the first value it holds, since that is where the entries
+// reached through it start. The split is made in the middle as it is, without
+// the moving a leaf's split does, since no two records of a directory are
+// filed under one value: a leaf never parts the entries for one value, so no
+// two blocks a leaf splits into start with the same one.
 func (d *btreeDir) insertEntry(e dirEntry) (*dirEntry, error) {
 	slot, err := d.contents.findSlotBefore(e.value)
 	if err != nil {
@@ -152,7 +160,31 @@ func (d *btreeDir) insertEntry(e dirEntry) (*dirEntry, error) {
 		return nil, err
 	}
 
-	return nil, nil
+	full, err := d.contents.isFull()
+	if err != nil || !full {
+		return nil, err
+	}
+
+	level, err := d.contents.flag()
+	if err != nil {
+		return nil, err
+	}
+	n, err := d.contents.numRecords()
+	if err != nil {
+		return nil, err
+	}
+
+	splitPos := n / 2
+	splitVal, err := d.contents.dataValue(splitPos)
+	if err != nil {
+		return nil, err
+	}
+	newBlk, err := d.contents.split(splitPos, level)
+	if err != nil {
+		return nil, err
+	}
+
+	return &dirEntry{value: splitVal, childBlockNumber: newBlk.Number()}, nil
 }
 
 // close gives back the pin on whichever block the directory is reading.
