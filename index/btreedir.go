@@ -54,8 +54,47 @@ func newBTreeDir(
 
 // search goes down from this directory block to the leaf searchKey is filed
 // in, and returns the number of that leaf's block.
+//
+// Each block down is opened in place of the one above it, so that the
+// directory reads one block at a time however deep it goes. It ends up
+// holding the block at level 0, and close gives that one back.
 func (d *btreeDir) search(searchKey query.Constant) (int, error) {
-	return d.findChildBlock(searchKey)
+	for {
+		child, err := d.findChildBlock(searchKey)
+		if err != nil {
+			return 0, err
+		}
+
+		level, err := d.contents.flag()
+		if err != nil {
+			return 0, err
+		}
+		if level == 0 {
+			return child, nil
+		}
+
+		if err := d.moveTo(child); err != nil {
+			return 0, err
+		}
+	}
+}
+
+// moveTo opens the directory block numbered blkNum in place of the one being
+// read.
+//
+// The new block is opened before the old one is given back, so that a failure
+// to open it leaves the directory holding the block it had, for close to give
+// back.
+func (d *btreeDir) moveTo(blkNum int) error {
+	next, err := newBTreePage(d.tx, filemanager.NewBlockId(d.contents.blk.FileName(), blkNum), d.layout)
+	if err != nil {
+		return err
+	}
+
+	d.contents.close()
+	d.contents = next
+
+	return nil
 }
 
 // findChildBlock is the number of the child block searchKey is reached

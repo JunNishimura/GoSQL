@@ -94,6 +94,109 @@ func TestBTreeDirSearch(t *testing.T) {
 	}
 }
 
+func TestBTreeDirSearchDown(t *testing.T) {
+	// A root at level 1 over two directory blocks at level 0, whose children
+	// are leaves 10 to 13:
+	//
+	//	block 0, level 1: 0 -> block 1, 50 -> block 2
+	//	block 1, level 0: 0 -> leaf 10, 20 -> leaf 11
+	//	block 2, level 0: 50 -> leaf 12, 70 -> leaf 13
+	twoLevels := [][]dirEntry{
+		{
+			{value: query.NewIntConstant(0), childBlockNumber: 1},
+			{value: query.NewIntConstant(50), childBlockNumber: 2},
+		},
+		{
+			{value: query.NewIntConstant(0), childBlockNumber: 10},
+			{value: query.NewIntConstant(20), childBlockNumber: 11},
+		},
+		{
+			{value: query.NewIntConstant(50), childBlockNumber: 12},
+			{value: query.NewIntConstant(70), childBlockNumber: 13},
+		},
+	}
+	twoLevelsLevels := []int32{1, 0, 0}
+
+	tests := []struct {
+		name      string
+		blocks    [][]dirEntry
+		levels    []int32
+		searchKey query.Constant
+		want      int
+	}{
+		{
+			name:      "given a root at level 1 over directory blocks 1 and 2, when 5 is searched for, then it goes down block 1 to leaf 10",
+			blocks:    twoLevels,
+			levels:    twoLevelsLevels,
+			searchKey: query.NewIntConstant(5),
+			want:      10,
+		},
+		{
+			name:      "given a root at level 1 over directory blocks 1 and 2, when 49 is searched for, then it goes down block 1 to leaf 11",
+			blocks:    twoLevels,
+			levels:    twoLevelsLevels,
+			searchKey: query.NewIntConstant(49),
+			want:      11,
+		},
+		{
+			name:      "given a root at level 1 over directory blocks 1 and 2, when 50 is searched for, then it goes down block 2 to leaf 12",
+			blocks:    twoLevels,
+			levels:    twoLevelsLevels,
+			searchKey: query.NewIntConstant(50),
+			want:      12,
+		},
+		{
+			name:      "given a root at level 1 over directory blocks 1 and 2, when 80 is searched for, then it goes down block 2 to leaf 13",
+			blocks:    twoLevels,
+			levels:    twoLevelsLevels,
+			searchKey: query.NewIntConstant(80),
+			want:      13,
+		},
+		{
+			name: "given a root at level 2 over a block at level 1 over a block at level 0, when 60 is searched for, then it goes down both to leaf 11",
+			blocks: [][]dirEntry{
+				{{value: query.NewIntConstant(0), childBlockNumber: 1}},
+				{{value: query.NewIntConstant(0), childBlockNumber: 2}},
+				{
+					{value: query.NewIntConstant(0), childBlockNumber: 10},
+					{value: query.NewIntConstant(50), childBlockNumber: 11},
+				},
+			},
+			levels:    []int32{2, 1, 0},
+			searchKey: query.NewIntConstant(60),
+			want:      11,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestDirLayout(t)
+
+			var root *filemanager.BlockId
+			for i, entries := range tt.blocks {
+				blk := newTestDirBlock(t, tx, layout, tt.levels[i], entries)
+				if i == 0 {
+					root = blk
+				}
+			}
+
+			dir, err := newBTreeDir(tx, root, layout)
+			if err != nil {
+				t.Fatalf("newBTreeDir() error = %v", err)
+			}
+			defer dir.close()
+
+			got, err := dir.search(tt.searchKey)
+			if err != nil {
+				t.Fatalf("search(%s) error = %v", tt.searchKey, err)
+			}
+			if got != tt.want {
+				t.Errorf("search(%s) = %d, want %d", tt.searchKey, got, tt.want)
+			}
+		})
+	}
+}
+
 // newTestDirBlock appends a directory block at level to testBTreeDirFile and
 // fills it with entries, in the order given, which the caller keeps sorted.
 func newTestDirBlock(
