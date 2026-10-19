@@ -137,8 +137,37 @@ func (d *btreeDir) findChildBlock(searchKey query.Constant) (int, error) {
 // If that fills a directory block, it is split in turn, and the record for the
 // new directory block comes back for the level above to file. Otherwise
 // nothing does, and nil comes back.
+//
+// At level 0, e is filed in this block, since its children are the leaves e
+// is about. Above that, e goes down to the child whose entries it is among,
+// and this block only files what comes back from the child splitting.
+//
+// This block stays pinned while the child is, so going down holds one block
+// per level at once.
 func (d *btreeDir) insert(e dirEntry) (*dirEntry, error) {
-	return d.insertEntry(e)
+	level, err := d.contents.flag()
+	if err != nil {
+		return nil, err
+	}
+	if level == 0 {
+		return d.insertEntry(e)
+	}
+
+	childBlkNum, err := d.findChildBlock(e.value)
+	if err != nil {
+		return nil, err
+	}
+	child, err := newBTreeDir(d.tx, filemanager.NewBlockId(d.contents.blk.FileName(), childBlkNum), d.layout)
+	if err != nil {
+		return nil, err
+	}
+	fromChild, err := child.insert(e)
+	child.close()
+	if err != nil || fromChild == nil {
+		return nil, err
+	}
+
+	return d.insertEntry(*fromChild)
 }
 
 // insertEntry files e in this block, at the place that keeps its records in

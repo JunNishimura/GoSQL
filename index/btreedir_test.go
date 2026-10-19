@@ -312,6 +312,167 @@ func TestBTreeDirInsertSplit(t *testing.T) {
 	}
 }
 
+func TestBTreeDirInsertDown(t *testing.T) {
+	// A root at level 1 over two directory blocks at level 0:
+	//
+	//	block 0, level 1: 0 -> block 1, 50 -> block 2
+	//	block 1, level 0: 0 -> 10, 20 -> 11
+	//	block 2, level 0: 50 -> 12, 70 -> 13
+	twoLevels := [][]dirEntry{
+		{
+			{value: query.NewIntConstant(0), childBlockNumber: 1},
+			{value: query.NewIntConstant(50), childBlockNumber: 2},
+		},
+		{
+			{value: query.NewIntConstant(0), childBlockNumber: 10},
+			{value: query.NewIntConstant(20), childBlockNumber: 11},
+		},
+		{
+			{value: query.NewIntConstant(50), childBlockNumber: 12},
+			{value: query.NewIntConstant(70), childBlockNumber: 13},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		inserted dirEntry
+		// want is the records of blocks 0, 1 and 2 afterwards.
+		want [][]string
+	}{
+		{
+			name:     "given a root at level 1 over directory blocks 1 and 2, when a record for 30 is inserted, then it goes in block 1, the root is left as it was, and nothing comes back",
+			inserted: dirEntry{value: query.NewIntConstant(30), childBlockNumber: 14},
+			want: [][]string{
+				{"0 -> 1", "50 -> 2"},
+				{"0 -> 10", "20 -> 11", "30 -> 14"},
+				{"50 -> 12", "70 -> 13"},
+			},
+		},
+		{
+			name:     "given a root at level 1 over directory blocks 1 and 2, when a record for 60 is inserted, then it goes in block 2, the root is left as it was, and nothing comes back",
+			inserted: dirEntry{value: query.NewIntConstant(60), childBlockNumber: 14},
+			want: [][]string{
+				{"0 -> 1", "50 -> 2"},
+				{"0 -> 10", "20 -> 11"},
+				{"50 -> 12", "60 -> 14", "70 -> 13"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestDirLayout(t)
+			root := newTestDirBlocks(t, tx, layout, []int32{1, 0, 0}, twoLevels)
+
+			dir, err := newBTreeDir(tx, root, layout)
+			if err != nil {
+				t.Fatalf("newBTreeDir() error = %v", err)
+			}
+			got, err := dir.insert(tt.inserted)
+			dir.close()
+			if err != nil {
+				t.Fatalf("insert(%+v) error = %v", tt.inserted, err)
+			}
+			if got != nil {
+				t.Errorf("insert(%+v) = %+v, want nil", tt.inserted, got)
+			}
+
+			for i, want := range tt.want {
+				assertDirRecords(t, tx, filemanager.NewBlockId(testBTreeDirFile, i), layout, want)
+			}
+		})
+	}
+
+	t.Run("given a root at level 1 over a full directory block 1, when a record that fills block 1 is inserted, then block 1 splits into a new block 2 at level 0, the root files it, and nothing comes back", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestDirLayout(t)
+
+		// The records for 0, 10, ..., 310, filing child blocks 100 to 131.
+		all := dirEntriesStepping(0, 310)
+		root := newTestDirBlocks(t, tx, layout, []int32{1, 0}, [][]dirEntry{
+			{{value: query.NewIntConstant(0), childBlockNumber: 1}},
+			all[:31],
+		})
+
+		dir, err := newBTreeDir(tx, root, layout)
+		if err != nil {
+			t.Fatalf("newBTreeDir() error = %v", err)
+		}
+		got, err := dir.insert(all[31])
+		dir.close()
+		if err != nil {
+			t.Fatalf("insert(%+v) error = %v", all[31], err)
+		}
+		if got != nil {
+			t.Errorf("insert(%+v) = %+v, want nil", all[31], got)
+		}
+
+		assertDirRecords(t, tx, root, layout, []string{"0 -> 1", "160 -> 2"})
+		assertDirRecords(t, tx, filemanager.NewBlockId(testBTreeDirFile, 1), layout, dirStrings(all[:16]))
+		assertDirRecords(t, tx, filemanager.NewBlockId(testBTreeDirFile, 2), layout, dirStrings(all[16:]))
+		assertHeader(t, tx, root, layout, 1, 2)
+		assertHeader(t, tx, filemanager.NewBlockId(testBTreeDirFile, 2), layout, 0, 16)
+	})
+
+	// The root's records other than the one for 300 file child blocks that do
+	// not exist, which is all right: the insert only goes down the one for 300.
+	t.Run("given a full root at level 1 whose last record files a full directory block 1, when a record that fills block 1 is inserted, then block 1 splits into a new block 2, the root splits into a new block 3 at level 1, and the record for block 3 comes back", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestDirLayout(t)
+
+		rootEntries := append(dirEntriesStepping(0, 290), dirEntry{value: query.NewIntConstant(300), childBlockNumber: 1})
+		childEntries := dirEntriesStepping(300, 600)
+		root := newTestDirBlocks(t, tx, layout, []int32{1, 0}, [][]dirEntry{rootEntries, childEntries})
+
+		inserted := dirEntry{value: query.NewIntConstant(610), childBlockNumber: 999}
+		dir, err := newBTreeDir(tx, root, layout)
+		if err != nil {
+			t.Fatalf("newBTreeDir() error = %v", err)
+		}
+		got, err := dir.insert(inserted)
+		dir.close()
+		if err != nil {
+			t.Fatalf("insert(%+v) error = %v", inserted, err)
+		}
+
+		wantEntry := dirEntry{value: query.NewIntConstant(160), childBlockNumber: 3}
+		if got == nil || *got != wantEntry {
+			t.Errorf("insert(%+v) = %+v, want %+v", inserted, got, wantEntry)
+		}
+
+		// Block 1 keeps 300 to 450 and block 2 takes 460 to 610; the root
+		// files block 2 under 460, then keeps its first 16 records and moves
+		// the other 16 to block 3.
+		wantBlock3 := append(dirStrings(rootEntries[16:]), "460 -> 2")
+		assertDirRecords(t, tx, root, layout, dirStrings(rootEntries[:16]))
+		assertDirRecords(t, tx, filemanager.NewBlockId(testBTreeDirFile, 3), layout, wantBlock3)
+		assertHeader(t, tx, filemanager.NewBlockId(testBTreeDirFile, 2), layout, 0, 16)
+		assertHeader(t, tx, filemanager.NewBlockId(testBTreeDirFile, 3), layout, 1, 16)
+	})
+}
+
+// newTestDirBlocks appends one directory block per element of blocks to
+// testBTreeDirFile, at the level levels gives for it, and returns the first.
+func newTestDirBlocks(
+	t *testing.T,
+	tx *transaction.Transaction,
+	layout *recordmanager.Layout,
+	levels []int32,
+	blocks [][]dirEntry,
+) *filemanager.BlockId {
+	t.Helper()
+
+	var first *filemanager.BlockId
+	for i, entries := range blocks {
+		blk := newTestDirBlock(t, tx, layout, levels[i], entries)
+		if i == 0 {
+			first = blk
+		}
+	}
+
+	return first
+}
+
 // dirEntriesStepping is the directory records for from, from+10, ..., to, the
 // one for value v filing child block 100+v/10.
 func dirEntriesStepping(from, to int32) []dirEntry {
