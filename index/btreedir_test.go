@@ -451,6 +451,93 @@ func TestBTreeDirInsertDown(t *testing.T) {
 	})
 }
 
+func TestBTreeDirMakeNewRoot(t *testing.T) {
+	tests := []struct {
+		name  string
+		level int32
+	}{
+		{
+			name:  "given a root at level 0 filing blocks under 0 and 50, when a new root is made over it and a record for 100, then the root is at level 1 over a new block at level 0 holding what it held, and the record for 100",
+			level: 0,
+		},
+		{
+			name:  "given a root at level 1 filing blocks under 0 and 50, when a new root is made over it and a record for 100, then the root is at level 2 over a new block at level 1 holding what it held, and the record for 100",
+			level: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			layout := newTestDirLayout(t)
+			root := newTestDirBlock(t, tx, layout, tt.level, []dirEntry{
+				{value: query.NewIntConstant(0), childBlockNumber: 10},
+				{value: query.NewIntConstant(50), childBlockNumber: 11},
+			})
+
+			dir, err := newBTreeDir(tx, root, layout)
+			if err != nil {
+				t.Fatalf("newBTreeDir() error = %v", err)
+			}
+			e := dirEntry{value: query.NewIntConstant(100), childBlockNumber: 12}
+			err = dir.makeNewRoot(e)
+			dir.close()
+			if err != nil {
+				t.Fatalf("makeNewRoot(%+v) error = %v", e, err)
+			}
+
+			moved := filemanager.NewBlockId(testBTreeDirFile, 1)
+			assertDirRecords(t, tx, root, layout, []string{"0 -> 1", "100 -> 12"})
+			assertDirRecords(t, tx, moved, layout, []string{"0 -> 10", "50 -> 11"})
+			assertHeader(t, tx, root, layout, tt.level+1, 2)
+			assertHeader(t, tx, moved, layout, tt.level, 2)
+		})
+	}
+
+	// The directory of TestBTreeDirInsertDown's last case, whose root has just
+	// split, made whole again by a new root over the two halves.
+	t.Run("given a full root at level 1 that has just split on an insert of 610, when a new root is made over it and the record that came back, then a search for 610 goes down three levels to the child it was filed with", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		layout := newTestDirLayout(t)
+
+		rootEntries := append(dirEntriesStepping(0, 290), dirEntry{value: query.NewIntConstant(300), childBlockNumber: 1})
+		root := newTestDirBlocks(t, tx, layout, []int32{1, 0}, [][]dirEntry{rootEntries, dirEntriesStepping(300, 600)})
+
+		inserted := dirEntry{value: query.NewIntConstant(610), childBlockNumber: 999}
+		dir, err := newBTreeDir(tx, root, layout)
+		if err != nil {
+			t.Fatalf("newBTreeDir() error = %v", err)
+		}
+		fromRoot, err := dir.insert(inserted)
+		if err != nil {
+			dir.close()
+			t.Fatalf("insert(%+v) error = %v", inserted, err)
+		}
+		if fromRoot == nil {
+			dir.close()
+			t.Fatalf("insert(%+v) = nil, want the record for the root's new half", inserted)
+		}
+		err = dir.makeNewRoot(*fromRoot)
+		dir.close()
+		if err != nil {
+			t.Fatalf("makeNewRoot(%+v) error = %v", *fromRoot, err)
+		}
+
+		dir, err = newBTreeDir(tx, root, layout)
+		if err != nil {
+			t.Fatalf("newBTreeDir() error = %v", err)
+		}
+		defer dir.close()
+
+		got, err := dir.search(inserted.value)
+		if err != nil {
+			t.Fatalf("search(%s) error = %v", inserted.value, err)
+		}
+		if got != inserted.childBlockNumber {
+			t.Errorf("search(%s) = %d, want %d", inserted.value, got, inserted.childBlockNumber)
+		}
+	})
+}
+
 // newTestDirBlocks appends one directory block per element of blocks to
 // testBTreeDirFile, at the level levels gives for it, and returns the first.
 func newTestDirBlocks(

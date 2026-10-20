@@ -170,6 +170,41 @@ func (d *btreeDir) insert(e dirEntry) (*dirEntry, error) {
 	return d.insertEntry(*fromChild)
 }
 
+// makeNewRoot makes this block, the root, one level higher, over the block it
+// was and the block e files, which a split of it has just made.
+//
+// The root stays where it is, so that whoever holds the index finds it in the
+// same place however deep it grows. What it held moves into a new block at its
+// old level, and it is left holding two records: one for that block, under the
+// value its records started from, and e.
+//
+// The two go in that order without searching for where they go: e is for the
+// second half of what the root held, so its value is greater than the first.
+func (d *btreeDir) makeNewRoot(e dirEntry) error {
+	firstVal, err := d.contents.dataValue(0)
+	if err != nil {
+		return err
+	}
+	level, err := d.contents.flag()
+	if err != nil {
+		return err
+	}
+
+	newBlk, err := d.contents.split(0, level)
+	if err != nil {
+		return err
+	}
+
+	if err := d.contents.insertDir(0, firstVal, newBlk.Number()); err != nil {
+		return err
+	}
+	if err := d.contents.insertDir(1, e.value, e.childBlockNumber); err != nil {
+		return err
+	}
+
+	return d.contents.setFlag(level + 1)
+}
+
 // insertEntry files e in this block, at the place that keeps its records in
 // order of value.
 //
