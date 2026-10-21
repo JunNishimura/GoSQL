@@ -264,6 +264,52 @@ func TestBTreeIndexInsert(t *testing.T) {
 	}
 }
 
+// A leaf holds at most 23 entries between inserts, since it is split as soon
+// as it fills at 24, so 800 entries need at least 35 leaves whatever order they
+// come in. The root holds one record per leaf and splits as it fills at 32, so
+// it has to grow a level for all of them to be found. The root's level is
+// checked so that a case that did not make the root split cannot pass for one
+// that did.
+func TestBTreeIndexInsertGrowingRoot(t *testing.T) {
+	const n = 800
+
+	tests := []struct {
+		name  string
+		order func(i int) int32
+	}{
+		{
+			name:  "given an empty B-tree index, when 800 entries for 0 to 799 are inserted in ascending order, then the root grows to level 1 and each value finds only its own record id",
+			order: func(i int) int32 { return int32(i) },
+		},
+		// 37 and 800 have no factor in common, so this goes through every
+		// value from 0 to 799 once, jumping about.
+		{
+			name:  "given an empty B-tree index, when 800 entries for 0 to 799 are inserted in no order, then the root grows to level 1 and each value finds only its own record id",
+			order: func(i int) int32 { return int32(i * 37 % n) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			idx, err := NewBTreeIndex(tx, testIndexName, newTestIndexLayout(t))
+			if err != nil {
+				t.Fatalf("NewBTreeIndex() error = %v", err)
+			}
+			defer idx.Close()
+
+			entries := make([]entry, n)
+			for i := range entries {
+				v := tt.order(i)
+				entries[i] = entry{value: query.NewIntConstant(v), rid: recordmanager.NewRecordID(int(v)/10, int(v)%10)}
+			}
+			insertEntries(t, idx, entries)
+
+			assertFlag(t, tx, filemanager.NewBlockId(testDirFile, 0), newTestDirLayout(t), 1)
+			assertEachValueFinds(t, idx, entries)
+		})
+	}
+}
+
 // assertEachValueFinds checks that a search for each value of entries finds the
 // record ids of the entries filed under it, and no others, in any order.
 func assertEachValueFinds(t *testing.T, idx Index, entries []entry) {

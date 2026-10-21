@@ -219,7 +219,8 @@ func (bi *BTreeIndex) requireSearch() error {
 // the entry is in it.
 //
 // If the leaf split, the directory is told of the new leaf, from the root
-// down, so that the entries moved into it are found.
+// down, so that the entries moved into it are found. If that splits the root
+// in turn, the tree grows a level, with the root still where it was.
 func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) error {
 	if err := bi.MoveBeforeFirstMatch(value); err != nil {
 		return err
@@ -236,9 +237,12 @@ func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) 
 	}
 	defer root.close()
 
-	_, err = root.insert(*e)
+	fromRoot, err := root.insert(*e)
+	if err != nil || fromRoot == nil {
+		return err
+	}
 
-	return err
+	return root.makeNewRoot(*fromRoot)
 }
 
 // Delete takes out the entry filing rid under value.
