@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"math"
 	"slices"
 	"testing"
@@ -173,6 +174,72 @@ func TestBTreeIndexMoveToNextMatch(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("given a B-tree index that has not been searched, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		defer idx.Close()
+
+		if _, err := idx.MoveToNextMatch(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("MoveToNextMatch() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+
+	t.Run("given a B-tree index that was searched and then closed, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		insertEntries(t, idx, []entry{
+			{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+		})
+		if err := idx.MoveBeforeFirstMatch(query.NewIntConstant(7)); err != nil {
+			t.Fatalf("MoveBeforeFirstMatch(7) error = %v", err)
+		}
+		idx.Close()
+
+		if _, err := idx.MoveToNextMatch(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("MoveToNextMatch() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+
+	// An insert searches for its value to get to the leaf, and gives the leaf
+	// back once the entry is in, so it leaves no search under way.
+	t.Run("given a B-tree index that was searched and then had an entry inserted, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		defer idx.Close()
+
+		if err := idx.MoveBeforeFirstMatch(query.NewIntConstant(7)); err != nil {
+			t.Fatalf("MoveBeforeFirstMatch(7) error = %v", err)
+		}
+		insertEntries(t, idx, []entry{
+			{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+		})
+
+		if _, err := idx.MoveToNextMatch(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("MoveToNextMatch() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+}
+
+func TestBTreeIndexDataRecordID(t *testing.T) {
+	t.Run("given a B-tree index that has not been searched, when the record id is asked for, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		defer idx.Close()
+
+		if _, err := idx.DataRecordID(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("DataRecordID() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+}
+
+// newTestBTreeIndex opens a B-tree index on an int field over a database of its
+// own.
+func newTestBTreeIndex(t *testing.T) *BTreeIndex {
+	t.Helper()
+
+	idx, err := NewBTreeIndex(newTestTransaction(t), testIndexName, newTestIndexLayout(t))
+	if err != nil {
+		t.Fatalf("NewBTreeIndex() error = %v", err)
+	}
+
+	return idx
 }
 
 // assertNewBTreeIndexFiles checks that the files of the index named

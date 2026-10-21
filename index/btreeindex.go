@@ -29,6 +29,7 @@ const (
 // tree rather than the size of the index.
 type BTreeIndex struct {
 	tx           *transaction.Transaction
+	indexName    string
 	leafFileName string
 	leafLayout   *recordmanager.Layout
 	dirLayout    *recordmanager.Layout
@@ -71,6 +72,7 @@ func NewBTreeIndex(tx *transaction.Transaction, indexName string, leafLayout *re
 
 	return &BTreeIndex{
 		tx:           tx,
+		indexName:    indexName,
 		leafFileName: leafFileName,
 		leafLayout:   leafLayout,
 		dirLayout:    dirLayout,
@@ -184,12 +186,30 @@ func (bi *BTreeIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
 
 // MoveToNextMatch moves on to the next entry filed under the search key.
 func (bi *BTreeIndex) MoveToNextMatch() (bool, error) {
+	if err := bi.requireSearch(); err != nil {
+		return false, err
+	}
+
 	return bi.leaf.next()
 }
 
 // DataRecordID is where the table record of the current entry is kept.
 func (bi *BTreeIndex) DataRecordID() (*recordmanager.RecordID, error) {
+	if err := bi.requireSearch(); err != nil {
+		return nil, err
+	}
+
 	return bi.leaf.dataRecordID()
+}
+
+// requireSearch reports ErrNoSearch unless a leaf is open, which it is from a
+// search until the index is closed or has an entry inserted or deleted.
+func (bi *BTreeIndex) requireSearch() error {
+	if bi.leaf == nil {
+		return fmt.Errorf("read B-tree index %s: %w", bi.indexName, ErrNoSearch)
+	}
+
+	return nil
 }
 
 // Insert files rid under value.
