@@ -1,9 +1,12 @@
 package index
 
 import (
+	"math"
+	"slices"
 	"testing"
 
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -66,6 +69,110 @@ func TestNewBTreeIndex(t *testing.T) {
 
 		assertNewBTreeIndexFiles(t, tx, leafLayout, dirLayout, "-2147483648 -> 0")
 	})
+}
+
+// The record ids are compared without their order: an index says nothing of
+// which of the entries for one value comes first, and a B-tree files a new one
+// ahead of those already there.
+func TestBTreeIndexMoveToNextMatch(t *testing.T) {
+	tests := []struct {
+		name      string
+		layout    func(t *testing.T) *recordmanager.Layout
+		entries   []entry
+		searchKey query.Constant
+		want      []string
+	}{
+		{
+			name:   "given entries filed under 7 and under 8, when 7 is searched for, then the record ids filed under 7 come back",
+			layout: newTestIndexLayout,
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(1, 2)},
+			},
+			searchKey: query.NewIntConstant(7),
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(1, 2).String(),
+			},
+		},
+		{
+			name:   "given entries filed under 7 and under 8, when 8 is searched for, then the record id filed under 8 comes back",
+			layout: newTestIndexLayout,
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(1, 2)},
+			},
+			searchKey: query.NewIntConstant(8),
+			want: []string{
+				recordmanager.NewRecordID(0, 1).String(),
+			},
+		},
+		{
+			name:   "given entries filed under 7 and under 8, when 9 is searched for, then nothing comes back",
+			layout: newTestIndexLayout,
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 1)},
+			},
+			searchKey: query.NewIntConstant(9),
+			want:      []string{},
+		},
+		// The least int is also the value the root files the first leaf
+		// under, so this is the one search that starts from the root's very
+		// first record.
+		{
+			name:   "given an entry filed under the least int, when the least int is searched for, then its record id comes back",
+			layout: newTestIndexLayout,
+			entries: []entry{
+				{value: query.NewIntConstant(math.MinInt32), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(0), rid: recordmanager.NewRecordID(0, 1)},
+			},
+			searchKey: query.NewIntConstant(math.MinInt32),
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+			},
+		},
+		{
+			name:   "given entries filed under 'alice' and under 'bob' in an index on a varchar field, when 'alice' is searched for, then the record ids filed under 'alice' come back",
+			layout: newTestVarcharIndexLayout,
+			entries: []entry{
+				{value: query.NewStringConstant("alice"), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewStringConstant("bob"), rid: recordmanager.NewRecordID(0, 1)},
+				{value: query.NewStringConstant("alice"), rid: recordmanager.NewRecordID(1, 2)},
+			},
+			searchKey: query.NewStringConstant("alice"),
+			want: []string{
+				recordmanager.NewRecordID(0, 0).String(),
+				recordmanager.NewRecordID(1, 2).String(),
+			},
+		},
+		{
+			name:      "given an empty index, when 7 is searched for, then nothing comes back",
+			layout:    newTestIndexLayout,
+			searchKey: query.NewIntConstant(7),
+			want:      []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx, err := NewBTreeIndex(newTestTransaction(t), testIndexName, tt.layout(t))
+			if err != nil {
+				t.Fatalf("NewBTreeIndex() error = %v", err)
+			}
+			defer idx.Close()
+
+			insertEntries(t, idx, tt.entries)
+
+			got := searchRecordIDs(t, idx, tt.searchKey)
+			slices.Sort(got)
+			want := slices.Sorted(slices.Values(tt.want))
+			if !slices.Equal(got, want) {
+				t.Errorf("record ids filed under %s = %v, want %v in any order", tt.searchKey, got, want)
+			}
+		})
+	}
 }
 
 // assertNewBTreeIndexFiles checks that the files of the index named

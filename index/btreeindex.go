@@ -157,23 +157,54 @@ func leastValue(leafLayout *recordmanager.Layout) (query.Constant, error) {
 
 // MoveBeforeFirstMatch goes down the directory to the leaf searchKey is filed
 // in and opens it before the first entry for searchKey.
+//
+// The directory is read only on the way down: it is given back once it has
+// said which leaf to open, and the leaf is all the search holds from then on.
 func (bi *BTreeIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
+	bi.Close()
+
+	root, err := newBTreeDir(bi.tx, bi.rootBlk, bi.dirLayout)
+	if err != nil {
+		return err
+	}
+	leafBlkNum, err := root.search(searchKey)
+	root.close()
+	if err != nil {
+		return err
+	}
+
+	leaf, err := newBTreeLeaf(bi.tx, filemanager.NewBlockId(bi.leafFileName, leafBlkNum), bi.leafLayout, searchKey)
+	if err != nil {
+		return err
+	}
+	bi.leaf = leaf
+
 	return nil
 }
 
 // MoveToNextMatch moves on to the next entry filed under the search key.
 func (bi *BTreeIndex) MoveToNextMatch() (bool, error) {
-	return false, nil
+	return bi.leaf.next()
 }
 
 // DataRecordID is where the table record of the current entry is kept.
 func (bi *BTreeIndex) DataRecordID() (*recordmanager.RecordID, error) {
-	return nil, nil
+	return bi.leaf.dataRecordID()
 }
 
 // Insert files rid under value.
+//
+// It searches for value to get to the leaf, so whatever search was under way
+// is dropped, as it is by any other search, and the leaf is given back once
+// the entry is in it.
 func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) error {
-	return nil
+	if err := bi.MoveBeforeFirstMatch(value); err != nil {
+		return err
+	}
+	_, err := bi.leaf.insert(rid)
+	bi.Close()
+
+	return err
 }
 
 // Delete takes out the entry filing rid under value.
@@ -182,4 +213,11 @@ func (bi *BTreeIndex) Delete(value query.Constant, rid *recordmanager.RecordID) 
 }
 
 // Close gives back the block of whichever leaf is open.
-func (bi *BTreeIndex) Close() {}
+func (bi *BTreeIndex) Close() {
+	if bi.leaf == nil {
+		return
+	}
+
+	bi.leaf.close()
+	bi.leaf = nil
+}
