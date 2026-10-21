@@ -218,6 +218,72 @@ func TestBTreeIndexMoveToNextMatch(t *testing.T) {
 	})
 }
 
+// A leaf on an int field holds 24 entries, so 100 of them fill one leaf after
+// another, and each split has to reach the directory for the entries moved into
+// the new leaf to be found. Where the splits fall turns on the order the values
+// come in, so each case inserts them in a different one.
+func TestBTreeIndexInsert(t *testing.T) {
+	const n = 100
+
+	tests := []struct {
+		name  string
+		order func(i int) int32
+	}{
+		{
+			name:  "given an empty B-tree index, when 100 entries for 0 to 99 are inserted in ascending order, then each value finds only its own record id",
+			order: func(i int) int32 { return int32(i) },
+		},
+		{
+			name:  "given an empty B-tree index, when 100 entries for 0 to 99 are inserted in descending order, then each value finds only its own record id",
+			order: func(i int) int32 { return int32(n - 1 - i) },
+		},
+		// 37 and 100 have no factor in common, so this goes through every
+		// value from 0 to 99 once, jumping about.
+		{
+			name:  "given an empty B-tree index, when 100 entries for 0 to 99 are inserted in no order, then each value finds only its own record id",
+			order: func(i int) int32 { return int32(i * 37 % n) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := newTestBTreeIndex(t)
+			defer idx.Close()
+
+			entries := make([]entry, n)
+			for i := range entries {
+				v := tt.order(i)
+				entries[i] = entry{value: query.NewIntConstant(v), rid: recordmanager.NewRecordID(int(v)/10, int(v)%10)}
+			}
+			insertEntries(t, idx, entries)
+
+			assertEachValueFinds(t, idx, entries)
+			if got := searchRecordIDs(t, idx, query.NewIntConstant(n)); len(got) != 0 {
+				t.Errorf("record ids filed under %d = %v, want none", n, got)
+			}
+		})
+	}
+}
+
+// assertEachValueFinds checks that a search for each value of entries finds the
+// record ids of the entries filed under it, and no others, in any order.
+func assertEachValueFinds(t *testing.T, idx Index, entries []entry) {
+	t.Helper()
+
+	want := make(map[query.Constant][]string)
+	for _, e := range entries {
+		want[e.value] = append(want[e.value], e.rid.String())
+	}
+
+	for value, rids := range want {
+		got := searchRecordIDs(t, idx, value)
+		slices.Sort(got)
+		slices.Sort(rids)
+		if !slices.Equal(got, rids) {
+			t.Errorf("record ids filed under %s = %v, want %v in any order", value, got, rids)
+		}
+	}
+}
+
 func TestBTreeIndexDataRecordID(t *testing.T) {
 	t.Run("given a B-tree index that has not been searched, when the record id is asked for, then it reports ErrNoSearch", func(t *testing.T) {
 		idx := newTestBTreeIndex(t)

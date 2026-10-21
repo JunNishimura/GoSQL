@@ -217,12 +217,26 @@ func (bi *BTreeIndex) requireSearch() error {
 // It searches for value to get to the leaf, so whatever search was under way
 // is dropped, as it is by any other search, and the leaf is given back once
 // the entry is in it.
+//
+// If the leaf split, the directory is told of the new leaf, from the root
+// down, so that the entries moved into it are found.
 func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) error {
 	if err := bi.MoveBeforeFirstMatch(value); err != nil {
 		return err
 	}
-	_, err := bi.leaf.insert(rid)
+	e, err := bi.leaf.insert(rid)
 	bi.Close()
+	if err != nil || e == nil {
+		return err
+	}
+
+	root, err := newBTreeDir(bi.tx, bi.rootBlk, bi.dirLayout)
+	if err != nil {
+		return err
+	}
+	defer root.close()
+
+	_, err = root.insert(*e)
 
 	return err
 }
