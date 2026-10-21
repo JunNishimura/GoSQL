@@ -310,6 +310,71 @@ func TestBTreeIndexInsertGrowingRoot(t *testing.T) {
 	}
 }
 
+// More than 24 entries for one value do not fit in a leaf, so they overflow
+// into a chain of blocks, which the other values have to be filed around.
+func TestBTreeIndexInsertDuplicates(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries func() []entry
+	}{
+		{
+			name: "given an empty B-tree index, when 60 entries for 50 are inserted in among one each for 0 to 99, then each value finds only its own record ids",
+			entries: func() []entry {
+				var entries []entry
+				for i := range 100 {
+					entries = append(entries, entry{value: query.NewIntConstant(int32(i)), rid: recordmanager.NewRecordID(0, i)})
+					if i < 60 {
+						entries = append(entries, entry{value: query.NewIntConstant(50), rid: recordmanager.NewRecordID(1, i)})
+					}
+				}
+
+				return entries
+			},
+		},
+		// The entries for 50 come first, so they overflow before any other value
+		// is there, and then the smaller values are inserted into the leaf that
+		// overflows, which has to move its entries out to take them.
+		{
+			name: "given an empty B-tree index, when 60 entries for 50 are inserted and then one each for 0 to 99, then each value finds only its own record ids",
+			entries: func() []entry {
+				var entries []entry
+				for i := range 60 {
+					entries = append(entries, entry{value: query.NewIntConstant(50), rid: recordmanager.NewRecordID(1, i)})
+				}
+				for i := range 100 {
+					entries = append(entries, entry{value: query.NewIntConstant(int32(i)), rid: recordmanager.NewRecordID(0, i)})
+				}
+
+				return entries
+			},
+		},
+		{
+			name: "given an empty B-tree index, when 40 entries each for 10, 20 and 30 are inserted taking turns, then each value finds only its own record ids",
+			entries: func() []entry {
+				var entries []entry
+				for i := range 40 {
+					for _, v := range []int32{10, 20, 30} {
+						entries = append(entries, entry{value: query.NewIntConstant(v), rid: recordmanager.NewRecordID(int(v), i)})
+					}
+				}
+
+				return entries
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := newTestBTreeIndex(t)
+			defer idx.Close()
+
+			entries := tt.entries()
+			insertEntries(t, idx, entries)
+
+			assertEachValueFinds(t, idx, entries)
+		})
+	}
+}
+
 // assertEachValueFinds checks that a search for each value of entries finds the
 // record ids of the entries filed under it, and no others, in any order.
 func assertEachValueFinds(t *testing.T, idx Index, entries []entry) {
