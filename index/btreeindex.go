@@ -245,9 +245,21 @@ func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) 
 	return root.makeNewRoot(*fromRoot)
 }
 
-// Delete takes out the entry filing rid under value.
+// Delete takes out the entry filing rid under value, reporting
+// ErrEntryNotFound if there is none.
+//
+// It searches for value to find the entry, so whatever search was under way
+// is dropped, and the leaf is given back once the entry is out. Nothing above
+// the leaf changes: a leaf left with fewer entries is not merged with its
+// neighbour, so the directory still sends value to it.
 func (bi *BTreeIndex) Delete(value query.Constant, rid *recordmanager.RecordID) error {
-	return nil
+	if err := bi.MoveBeforeFirstMatch(value); err != nil {
+		return err
+	}
+	err := bi.leaf.delete(rid)
+	bi.Close()
+
+	return err
 }
 
 // Close gives back the block of whichever leaf is open.

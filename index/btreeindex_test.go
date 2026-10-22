@@ -375,6 +375,161 @@ func TestBTreeIndexInsertDuplicates(t *testing.T) {
 	}
 }
 
+func TestBTreeIndexDelete(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []entry
+		deleted entry
+		wantErr error
+		// want is the record ids each value is searched for afterwards, and
+		// should give back, in any order.
+		want map[query.Constant][]string
+	}{
+		{
+			name: "given two record ids filed under 7, when one of them is deleted, then the other is still filed under 7",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+			},
+			deleted: entry{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7): {recordmanager.NewRecordID(0, 0).String()},
+			},
+		},
+		{
+			name: "given one record id filed under both 7 and 8, when it is deleted from under 8, then it is filed under 7 and no longer under 8",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+				{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 0)},
+			},
+			deleted: entry{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 0)},
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7): {recordmanager.NewRecordID(0, 0).String()},
+				query.NewIntConstant(8): {},
+			},
+		},
+		{
+			name: "given a record id filed under 7, when another record id is deleted from under 7, then it reports ErrEntryNotFound and the one filed is still there",
+			entries: []entry{
+				{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+			},
+			deleted: entry{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+			wantErr: ErrEntryNotFound,
+			want: map[query.Constant][]string{
+				query.NewIntConstant(7): {recordmanager.NewRecordID(0, 0).String()},
+			},
+		},
+		{
+			name: "given a record id filed under 8, when it is deleted from under 7, then it reports ErrEntryNotFound and it is still filed under 8",
+			entries: []entry{
+				{value: query.NewIntConstant(8), rid: recordmanager.NewRecordID(0, 0)},
+			},
+			deleted: entry{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+			wantErr: ErrEntryNotFound,
+			want: map[query.Constant][]string{
+				query.NewIntConstant(8): {recordmanager.NewRecordID(0, 0).String()},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			idx := newTestBTreeIndex(t)
+			defer idx.Close()
+
+			insertEntries(t, idx, tt.entries)
+
+			if err := idx.Delete(tt.deleted.value, tt.deleted.rid); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Delete(%s, %s) error = %v, want %v", tt.deleted.value, tt.deleted.rid, err, tt.wantErr)
+			}
+
+			for searchKey, want := range tt.want {
+				got := searchRecordIDs(t, idx, searchKey)
+				slices.Sort(got)
+				if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+					t.Errorf("record ids filed under %s = %v, want %v in any order", searchKey, got, want)
+				}
+			}
+		})
+	}
+
+	// 60 entries for 50 overflow into a chain, so deleting all of them takes
+	// some out of the leaf the chain starts from and some out of the blocks it
+	// overflows into, and empties those blocks one after another.
+	t.Run("given 60 entries for 50 in among one each for 0 to 99, when every entry for 50 is deleted, then 50 finds nothing and each other value still finds its own record id", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		defer idx.Close()
+
+		var others, fifties []entry
+		for i := range 100 {
+			others = append(others, entry{value: query.NewIntConstant(int32(i)), rid: recordmanager.NewRecordID(0, i)})
+			if i < 60 {
+				fifties = append(fifties, entry{value: query.NewIntConstant(50), rid: recordmanager.NewRecordID(1, i)})
+			}
+		}
+		insertEntries(t, idx, append(slices.Clone(others), fifties...))
+
+		for _, e := range fifties {
+			if err := idx.Delete(e.value, e.rid); err != nil {
+				t.Fatalf("Delete(%s, %s) error = %v", e.value, e.rid, err)
+			}
+		}
+
+		// The one entry for 50 among the others is all that is left of 50.
+		assertEachValueFinds(t, idx, others)
+	})
+
+	t.Run("given 100 entries for 0 to 99, when the entries for the even values are deleted, then the even values find nothing and the odd values still find their own record ids", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		defer idx.Close()
+
+		var odd, even []entry
+		for i := range 100 {
+			e := entry{value: query.NewIntConstant(int32(i)), rid: recordmanager.NewRecordID(0, i)}
+			if i%2 == 0 {
+				even = append(even, e)
+			} else {
+				odd = append(odd, e)
+			}
+		}
+		insertEntries(t, idx, append(slices.Clone(even), odd...))
+
+		for _, e := range even {
+			if err := idx.Delete(e.value, e.rid); err != nil {
+				t.Fatalf("Delete(%s, %s) error = %v", e.value, e.rid, err)
+			}
+		}
+
+		assertEachValueFinds(t, idx, odd)
+		for _, e := range even {
+			if got := searchRecordIDs(t, idx, e.value); len(got) != 0 {
+				t.Errorf("record ids filed under %s = %v, want none", e.value, got)
+			}
+		}
+	})
+
+	// A delete searches for its value to find the entry, and gives the leaf
+	// back once the entry is out, so it leaves no search under way.
+	t.Run("given a B-tree index that was searched and then had an entry deleted, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
+		idx := newTestBTreeIndex(t)
+		defer idx.Close()
+
+		insertEntries(t, idx, []entry{
+			{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 0)},
+			{value: query.NewIntConstant(7), rid: recordmanager.NewRecordID(0, 1)},
+		})
+		if err := idx.MoveBeforeFirstMatch(query.NewIntConstant(7)); err != nil {
+			t.Fatalf("MoveBeforeFirstMatch(7) error = %v", err)
+		}
+		if err := idx.Delete(query.NewIntConstant(7), recordmanager.NewRecordID(0, 0)); err != nil {
+			t.Fatalf("Delete(7, %s) error = %v", recordmanager.NewRecordID(0, 0), err)
+		}
+
+		if _, err := idx.MoveToNextMatch(); !errors.Is(err, ErrNoSearch) {
+			t.Errorf("MoveToNextMatch() error = %v, want %v", err, ErrNoSearch)
+		}
+	})
+}
+
 // assertEachValueFinds checks that a search for each value of entries finds the
 // record ids of the entries filed under it, and no others, in any order.
 func assertEachValueFinds(t *testing.T, idx Index, entries []entry) {
