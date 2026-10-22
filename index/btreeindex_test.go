@@ -530,6 +530,84 @@ func TestBTreeIndexDelete(t *testing.T) {
 	})
 }
 
+// A search reads one directory block per level and then the leaf, so the cost
+// is the number of directory levels it takes for a root to reach numBlocks
+// leaves, plus one. The root is always there, so there is always at least one
+// level, and the levels go up by one each time the leaves pass a power of how
+// many children a directory block has.
+func TestBTreeIndexSearchCost(t *testing.T) {
+	tests := []struct {
+		name            string
+		numBlocks       int
+		recordsPerBlock int
+		want            int
+	}{
+		{
+			name:            "when an index of one leaf is costed, then a search reads the root and the leaf",
+			numBlocks:       1,
+			recordsPerBlock: 10,
+			want:            2,
+		},
+		{
+			name:            "when an index of as many leaves as a root has children is costed, then a search reads the root and a leaf",
+			numBlocks:       10,
+			recordsPerBlock: 10,
+			want:            2,
+		},
+		{
+			name:            "when an index of one leaf more than a root has children is costed, then a search reads two directory levels and a leaf",
+			numBlocks:       11,
+			recordsPerBlock: 10,
+			want:            3,
+		},
+		{
+			name:            "when an index of the square of how many children a directory block has is costed, then a search reads two directory levels and a leaf",
+			numBlocks:       100,
+			recordsPerBlock: 10,
+			want:            3,
+		},
+		// An exact power is where a logarithm worked out in floating point can
+		// come out a hair either side of a whole number, so these two pin down
+		// that the cost turns over at 1000 and not one leaf either side of it.
+		{
+			name:            "when an index of the cube of how many children a directory block has is costed, then a search reads three directory levels and a leaf",
+			numBlocks:       1000,
+			recordsPerBlock: 10,
+			want:            4,
+		},
+		{
+			name:            "when an index of one leaf more than the cube of how many children a directory block has is costed, then a search reads four directory levels and a leaf",
+			numBlocks:       1001,
+			recordsPerBlock: 10,
+			want:            5,
+		},
+		// An empty index still has its root and its one leaf, which a search
+		// reads to find it holds nothing.
+		{
+			name:            "when an index of no blocks is costed, then a search reads the root and the leaf",
+			numBlocks:       0,
+			recordsPerBlock: 10,
+			want:            2,
+		},
+		// A directory block of one record cannot branch, so it is costed as if
+		// it held two, the fewest a tree can be built from: 5 leaves take three
+		// levels of two.
+		{
+			name:            "when an index of 5 leaves holding one record per block is costed, then a search reads three directory levels and a leaf, as if each block held two",
+			numBlocks:       5,
+			recordsPerBlock: 1,
+			want:            4,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BTreeIndexSearchCost(tt.numBlocks, tt.recordsPerBlock); got != tt.want {
+				t.Errorf("BTreeIndexSearchCost(%d, %d) = %d, want %d", tt.numBlocks, tt.recordsPerBlock, got, tt.want)
+			}
+		})
+	}
+}
+
 // assertEachValueFinds checks that a search for each value of entries finds the
 // record ids of the entries filed under it, and no others, in any order.
 func assertEachValueFinds(t *testing.T, idx Index, entries []entry) {

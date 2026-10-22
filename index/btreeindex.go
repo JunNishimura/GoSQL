@@ -262,6 +262,41 @@ func (bi *BTreeIndex) Delete(value query.Constant, rid *recordmanager.RecordID) 
 	return err
 }
 
+// BTreeIndexSearchCost is how many blocks a search through a B-tree index of
+// numBlocks leaf blocks reads, each block holding recordsPerBlock records.
+//
+// A search reads one directory block per level on its way down, and then the
+// leaf it arrives at. The root is always there, so there is at least one
+// level; each level down multiplies by how many children a directory block
+// has, so the levels are the fewest it takes for that many to reach numBlocks.
+// That is the logarithm of numBlocks rounded up, worked out by multiplying
+// rather than in floating point, which can land a hair either side of a whole
+// number at an exact power and turn the cost over one leaf early or late.
+//
+// How many children a directory block has is taken to be recordsPerBlock, the
+// number of leaf records in a block, since that is what the planner has to
+// give. A directory record is narrower than a leaf record, so a directory
+// block has more children than that, and the levels come out a little more
+// than they are: the cost errs on the side of an index being dearer.
+//
+// A block of one record cannot branch, so it is costed as if it held two, the
+// fewest a tree can be built from.
+//
+// The leaves are taken to be full and a value's entries to fit in one leaf,
+// neither of which is always so: leaves are left half full by a split, and
+// entries for one value can overflow into a chain of blocks. Both make a
+// search read more than this says.
+func BTreeIndexSearchCost(numBlocks int, recordsPerBlock int) int {
+	fanOut := max(recordsPerBlock, 2)
+
+	levels := 1
+	for reach := fanOut; reach < numBlocks; reach *= fanOut {
+		levels++
+	}
+
+	return levels + 1
+}
+
 // Close gives back the block of whichever leaf is open.
 func (bi *BTreeIndex) Close() {
 	if bi.leaf == nil {
