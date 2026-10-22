@@ -146,14 +146,17 @@ func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*re
 }
 
 // Open opens the index described here, through the transaction it was
-// described under. Every index is a hash index for now.
+// described under. Every index is a B-tree index.
 //
-// It returns an error though a hash index cannot fail to open, since it opens
-// nothing until it is searched. A B-tree reads its root when it is opened, and
-// that can fail; the error is here so that the callers do not have to change
-// when one can be asked for.
+// It can fail, since opening a B-tree reads its files, and makes them the
+// first time the index is opened.
 func (info *IndexInfo) Open() (index.Index, error) {
-	return index.NewHashIndex(info.tx, info.indexName, info.indexLayout), nil
+	idx, err := index.NewBTreeIndex(info.tx, info.indexName, info.indexLayout)
+	if err != nil {
+		return nil, fmt.Errorf("open index %s: %w", info.indexName, err)
+	}
+
+	return idx, nil
 }
 
 // BlocksAccessed is how many blocks a search through this index touches.
@@ -166,9 +169,9 @@ func (info *IndexInfo) Open() (index.Index, error) {
 // table.
 //
 // A search does not read all of it, and how much it does read is the index's
-// own business, so the answer is handed to the index. Every index is a hash
-// index for now, as it is in Open, and one of those reads the one bucket a
-// key falls in.
+// own business, so the answer is handed to the index. Every index is a B-tree,
+// as it is in Open, and a search through one reads a block per level of its
+// directory and then a leaf.
 //
 // The division rounds up, since records that fill a block and start another are
 // in two blocks, and the second is read like the first.
@@ -176,7 +179,7 @@ func (info *IndexInfo) BlocksAccessed() int {
 	recordsPerBlock := info.tx.BlockSize() / info.indexLayout.SlotSize()
 	numBlocks := ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
 
-	return index.HashIndexSearchCost(numBlocks, recordsPerBlock)
+	return index.BTreeIndexSearchCost(numBlocks, recordsPerBlock)
 }
 
 // RecordsOutput is how many records a search through this index gives back.
