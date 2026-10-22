@@ -225,16 +225,21 @@ const (
 //	an index on an int         16 byte slots, 800/16 = 50 to a block
 //	an index on a varchar(20)  96 byte slots, 800/96 =  8 to a block
 //
-// A hash index spreads those blocks over its buckets and a search reads one
-// bucket, so the cost is the index's blocks over the number of buckets. The
-// tables here are big enough for the index to take more blocks than there are
-// buckets, since below that every index costs the same one block:
+// A B-tree search reads one directory block per level and then a leaf. Each
+// level down multiplies by how many records go in a block, so the levels are
+// the fewest powers of that it takes to reach the index's blocks, and never
+// fewer than one, the root:
 //
-//	15000 records on an int         15000/50 =  300 blocks, 300/100  =  3
-//	15000 records on a varchar(20)  15000/8  = 1875 blocks, 1875/100 = 19
+//	150000 records on an int        150000/50 = 3000 blocks, 50*50*50 >= 3000 in 3 levels, so 4
+//	15000 records on a varchar(20)  15000/8   = 1875 blocks, 8*8*8*8 >= 1875 in 4 levels, so 5
+//	100 records on an int           100/50    =    2 blocks, 50 >= 2 in 1 level, so 2
 //
-// Both divisions round up. Records that fill a block and start another are in
-// two, and a bucket whose entries do the same is read across both.
+// The division rounds up. Records that fill a block and start another are in
+// two.
+//
+// None of these come to what a hash index would cost, one bucket's share of
+// the blocks (30, 19, 1 and 1), so a cost still worked out as a hash index's
+// does not pass for a B-tree's.
 func TestIndexInfoBlocksAccessed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -243,28 +248,28 @@ func TestIndexInfoBlocksAccessed(t *testing.T) {
 		want       int
 	}{
 		{
-			name:       "given a hash index on an int field, when the blocks a search would touch are asked for, then it is one bucket's share of the index's blocks",
+			name:       "given a B-tree index on an int field of 3000 blocks, when the blocks a search would touch are asked for, then it is three directory levels and a leaf",
 			fieldName:  "id",
-			numRecords: 15000,
-			want:       3,
+			numRecords: 150000,
+			want:       4,
 		},
 		{
-			name:       "given a hash index on a varchar field, whose records are wider and so fewer to a block, when the blocks a search would touch are asked for, then it is more of them",
+			name:       "given a B-tree index on a varchar field, whose records are wider and so fewer to a block, when the blocks a search would touch are asked for, then it is more levels than for an int",
 			fieldName:  "name",
 			numRecords: 15000,
-			want:       19,
+			want:       5,
 		},
 		{
-			name:       "given a hash index of more than one block but fewer blocks than buckets, when the blocks a search would touch are asked for, then it is one block",
+			name:       "given a B-tree index of two blocks, when the blocks a search would touch are asked for, then it is the root and a leaf",
 			fieldName:  "id",
 			numRecords: testIndexedTableRecords,
-			want:       1,
+			want:       2,
 		},
 		{
-			name:       "given a hash index with fewer records than fill a block, when the blocks a search would touch are asked for, then it is the one block they are in",
+			name:       "given a B-tree index with fewer records than fill a block, when the blocks a search would touch are asked for, then it is the root and the leaf",
 			fieldName:  "id",
 			numRecords: 10,
-			want:       1,
+			want:       2,
 		},
 	}
 
@@ -289,6 +294,20 @@ func TestIndexInfoBlocksAccessed(t *testing.T) {
 }
 
 func TestIndexInfoOpen(t *testing.T) {
+	t.Run("given an index described on a field, when it is opened, then it is a B-tree index", func(t *testing.T) {
+		info := newTestIndexInfo(t, testIndexFieldName)
+
+		idx, err := info.Open()
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		defer idx.Close()
+
+		if _, ok := idx.(*index.BTreeIndex); !ok {
+			t.Errorf("Open() = %T, want *index.BTreeIndex", idx)
+		}
+	})
+
 	t.Run("given an index described on a field, when it is opened, then an entry inserted through it is found by searching it", func(t *testing.T) {
 		info := newTestIndexInfo(t, testIndexFieldName)
 
