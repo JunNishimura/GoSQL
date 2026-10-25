@@ -403,6 +403,76 @@ func TestDBPlanner(t *testing.T) {
 	})
 }
 
+// The record of id 7 is written before the index is made and the one of id 8
+// after, so the index has to be filled from the table as well as kept up by
+// the statements, and the one of id 9 is deleted again, so it has to be taken
+// out. Nothing yet reads through an index to answer a query, so the index is
+// searched here directly.
+func TestDBPlannerKeepsIndexes(t *testing.T) {
+	t.Run("given a new database, when a table is made, a record put in, an index made on id, two more put in and one of them deleted through its planner, then the index finds each record left under its id and not the one deleted", func(t *testing.T) {
+		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		executeUpdates(t, db, tx,
+			"create table test (id int)",
+			"insert into test (id) values (7)",
+			"create index id_index on test (id)",
+			"insert into test (id) values (8)",
+			"insert into test (id) values (9)",
+			"delete from test where id = 9",
+		)
+
+		for id, want := range map[int32]int{7: 1, 8: 1, 9: 0} {
+			if got := countIndexed(t, db, tx, "test", "id", query.NewIntConstant(id)); got != want {
+				t.Errorf("the index on id finds %d records for %d, want %d", got, id, want)
+			}
+		}
+	})
+}
+
+// countIndexed searches the index on field of tableName for value and reports
+// how many entries it finds.
+func countIndexed(t *testing.T, db *DB, tx *transaction.Transaction, tableName, field string, value query.Constant) int {
+	t.Helper()
+
+	indexes, err := db.MetadataManager().GetIndexInfo(tx, tableName)
+	if err != nil {
+		t.Fatalf("GetIndexInfo(%q) error = %v", tableName, err)
+	}
+	info, ok := indexes[field]
+	if !ok {
+		t.Fatalf("table %q has no index on %s", tableName, field)
+	}
+
+	idx, err := info.Open()
+	if err != nil {
+		t.Fatalf("Open() of the index on %s error = %v", field, err)
+	}
+	defer idx.Close()
+
+	if err := idx.MoveBeforeFirstMatch(value); err != nil {
+		t.Fatalf("MoveBeforeFirstMatch(%s) error = %v", value, err)
+	}
+
+	count := 0
+	for {
+		ok, err := idx.MoveToNextMatch()
+		if err != nil {
+			t.Fatalf("MoveToNextMatch() error = %v", err)
+		}
+		if !ok {
+			return count
+		}
+		count++
+	}
+}
+
 // openFDs reports how many files the test process has open, skipping the test
 // where the system does not list them under /proc.
 func openFDs(t *testing.T) int {

@@ -15,6 +15,10 @@ import (
 //
 // Each method reports how many records it changed. A statement that changes
 // definitions rather than records reports 0.
+//
+// It changes tables and nothing else. An index on a table it writes to is left
+// as it was, finding records that are gone and missing ones that are there, so
+// a database with indexes has to go through IndexUpdatePlanner instead.
 type BasicUpdatePlanner struct {
 	mm *metadatamanager.MetadataManager
 }
@@ -30,29 +34,39 @@ func NewBasicUpdatePlanner(mm *metadatamanager.MetadataManager) *BasicUpdatePlan
 // ExecuteInsert writes one record of the values given, each to the field it
 // was named with. A field not named is left at its zero value.
 func (up *BasicUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transaction.Transaction) (int, error) {
-	us, err := up.openUpdateScan(data.TableName(), tx)
+	us, err := openUpdateScan(up.mm, data.TableName(), tx)
 	if err != nil {
 		return 0, err
 	}
 	defer us.Close()
 
-	if err := us.MoveToNewRecord(); err != nil {
+	if err := insertRecord(us, data); err != nil {
 		return 0, err
-	}
-
-	values := data.Values()
-	for i, fieldName := range data.Fields() {
-		if err := us.SetValue(fieldName, values[i]); err != nil {
-			return 0, err
-		}
 	}
 
 	return 1, nil
 }
 
+// insertRecord makes a new record through us and writes the values data gives
+// to it, each to the field it was named with, leaving us on that record.
+func insertRecord(us query.UpdateScan, data parse.InsertData) error {
+	if err := us.MoveToNewRecord(); err != nil {
+		return err
+	}
+
+	values := data.Values()
+	for i, fieldName := range data.Fields() {
+		if err := us.SetValue(fieldName, values[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // ExecuteDelete deletes every record of the table the predicate keeps.
 func (up *BasicUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transaction.Transaction) (int, error) {
-	return up.forEachKept(data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
+	return forEachKept(up.mm, data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
 		return us.DeleteCurrentRecord()
 	})
 }
@@ -61,7 +75,7 @@ func (up *BasicUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transacti
 // the new value, read against that record, so that a field in the new value
 // stands for the record's own.
 func (up *BasicUpdatePlanner) ExecuteModify(data parse.ModifyData, tx *transaction.Transaction) (int, error) {
-	return up.forEachKept(data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
+	return forEachKept(up.mm, data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
 		val, err := data.NewValue().Evaluate(us)
 		if err != nil {
 			return err
@@ -96,8 +110,8 @@ func (up *BasicUpdatePlanner) ExecuteCreateIndex(data parse.CreateIndexData, tx 
 // Scan and not an UpdateScan. Opening the table's own scan and testing each
 // record is all a select would do, and this is the one place that needs it
 // done on a scan that can be written through.
-func (up *BasicUpdatePlanner) forEachKept(tableName string, pred query.Predicate, tx *transaction.Transaction, change func(us query.UpdateScan) error) (int, error) {
-	us, err := up.openUpdateScan(tableName, tx)
+func forEachKept(mm *metadatamanager.MetadataManager, tableName string, pred query.Predicate, tx *transaction.Transaction, change func(us query.UpdateScan) error) (int, error) {
+	us, err := openUpdateScan(mm, tableName, tx)
 	if err != nil {
 		return 0, err
 	}
@@ -128,9 +142,10 @@ func (up *BasicUpdatePlanner) forEachKept(tableName string, pred query.Predicate
 	}
 }
 
-// openUpdateScan opens a scan over the table that can be written through.
-func (up *BasicUpdatePlanner) openUpdateScan(tableName string, tx *transaction.Transaction) (query.UpdateScan, error) {
-	tp, err := NewTablePlan(tx, tableName, up.mm)
+// openUpdateScan opens a scan over the table that can be written through,
+// reading its definition through mm.
+func openUpdateScan(mm *metadatamanager.MetadataManager, tableName string, tx *transaction.Transaction) (query.UpdateScan, error) {
+	tp, err := NewTablePlan(tx, tableName, mm)
 	if err != nil {
 		return nil, err
 	}

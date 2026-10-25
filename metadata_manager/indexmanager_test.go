@@ -183,6 +183,62 @@ func TestIndexManagerCreateIndex(t *testing.T) {
 			t.Errorf("the index catalog holds %+v, want %+v", got, want)
 		}
 	})
+
+	t.Run("given an index on a field of a table, when another index on the same field of the same table is created, then it reports ErrFieldAlreadyIndexed and the catalog holds only the first", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		im := newTestIndexManagerWithCatalog(t, tx)
+
+		if err := im.CreateIndex(tx, testIndexName, testTableName, testIndexFieldName); err != nil {
+			t.Fatalf("CreateIndex(%q) error = %v", testIndexName, err)
+		}
+
+		err := im.CreateIndex(tx, otherIndexName, testTableName, testIndexFieldName)
+		if !errors.Is(err, ErrFieldAlreadyIndexed) {
+			t.Errorf("CreateIndex(%q) error = %v, want %v", otherIndexName, err, ErrFieldAlreadyIndexed)
+		}
+
+		want := []indexCatalogRow{
+			{
+				indexName: testIndexName,
+				tableName: testTableName,
+				fieldName: testIndexFieldName,
+			},
+		}
+		if got := readIndexCatalog(t, tx, im); !slices.Equal(got, want) {
+			t.Errorf("the index catalog holds %+v, want %+v", got, want)
+		}
+	})
+
+	// The field is named the same, but of another table, so it is another
+	// field, and indexing it does not touch the first index.
+	t.Run("given an index on a field of a table, when an index on a field of the same name of another table is created, then the catalog holds both", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		im := newTestIndexManagerWithCatalog(t, tx)
+
+		const otherTableName = "other_table"
+		if err := im.CreateIndex(tx, testIndexName, testTableName, testIndexFieldName); err != nil {
+			t.Fatalf("CreateIndex(%q) error = %v", testIndexName, err)
+		}
+		if err := im.CreateIndex(tx, otherIndexName, otherTableName, testIndexFieldName); err != nil {
+			t.Fatalf("CreateIndex(%q) error = %v", otherIndexName, err)
+		}
+
+		want := []indexCatalogRow{
+			{
+				indexName: testIndexName,
+				tableName: testTableName,
+				fieldName: testIndexFieldName,
+			},
+			{
+				indexName: otherIndexName,
+				tableName: otherTableName,
+				fieldName: testIndexFieldName,
+			},
+		}
+		if got := readIndexCatalog(t, tx, im); !slices.Equal(got, want) {
+			t.Errorf("the index catalog holds %+v, want %+v", got, want)
+		}
+	})
 }
 
 // All three of what an index is registered under are names, and the catalog

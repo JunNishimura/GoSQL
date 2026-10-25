@@ -1,6 +1,9 @@
 package metadatamanager
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -83,6 +86,15 @@ func (im *IndexManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	return im.tableManager.CreateTable(tx, indexCatalogName, schema)
 }
 
+// ErrFieldAlreadyIndexed reports creating an index on a field of a table that
+// another index is already on.
+//
+// The indexes of a table are looked up by the field each is on, one per field,
+// so a second one on the same field would never be found. Nothing would keep it
+// up as the table changed, and it would go on holding what the table held when
+// it was made.
+var ErrFieldAlreadyIndexed = errors.New("field already indexed")
+
 // CreateIndex writes down that an index called indexName is on fieldName of
 // tableName.
 //
@@ -90,6 +102,9 @@ func (im *IndexManager) CreateCatalogTable(tx *transaction.Transaction) error {
 // the index itself, and to keep it up as records are written, is not this
 // layer's: what is kept here is that the index exists, so that a planner asking
 // what a table has to go through finds it.
+//
+// A second index on a field another is already on is refused with
+// ErrFieldAlreadyIndexed, before anything is written.
 func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName string, tableName string, fieldName string) error {
 	if err := checkIndexFits(indexName, tableName, fieldName); err != nil {
 		return err
@@ -106,6 +121,10 @@ func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName strin
 	}
 	defer ts.Close()
 
+	if err := refuseIndexedField(ts, tableName, fieldName); err != nil {
+		return err
+	}
+
 	if err := ts.MoveToNewRecord(); err != nil {
 		return err
 	}
@@ -117,6 +136,40 @@ func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName strin
 	}
 
 	return ts.SetString(fieldNameField, fieldName)
+}
+
+// refuseIndexedField reads the index catalog through ts from its first row,
+// and reports ErrFieldAlreadyIndexed if a row says an index is already on
+// fieldName of tableName.
+//
+// The whole catalog is walked, as it is by GetIndexInfo, since a table's rows
+// are not kept next to each other.
+func refuseIndexedField(ts *query.TableScan, tableName string, fieldName string) error {
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil || !hasNext {
+			return err
+		}
+
+		rowTable, err := ts.GetString(tableNameField)
+		if err != nil {
+			return err
+		}
+		rowField, err := ts.GetString(fieldNameField)
+		if err != nil {
+			return err
+		}
+		if rowTable != tableName || rowField != fieldName {
+			continue
+		}
+
+		existing, err := ts.GetString(indexNameField)
+		if err != nil {
+			return err
+		}
+
+		return fmt.Errorf("index field %q of table %q, which index %q is already on: %w", fieldName, tableName, existing, ErrFieldAlreadyIndexed)
+	}
 }
 
 // checkIndexFits refuses any of the three names the index catalog cannot hold.
