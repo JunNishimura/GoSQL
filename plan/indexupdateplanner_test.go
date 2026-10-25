@@ -2,9 +2,11 @@ package plan
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
+	"github.com/JunNishimura/GoSQL/index"
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
 	"github.com/JunNishimura/GoSQL/parse"
 	"github.com/JunNishimura/GoSQL/query"
@@ -103,6 +105,143 @@ func TestIndexUpdatePlannerExecuteInsert(t *testing.T) {
 			t.Errorf("ExecuteInsert() error = %v, want %v", err, recordmanager.ErrFieldTypeMismatch)
 		}
 	})
+}
+
+// Each case starts from the 5 records testRows gives, filed in the table's
+// indexes, and every index is searched afterwards for every one of their
+// values: a delete that took out one entry too many, or left another pointing
+// to the wrong record, shows as a value finding something other than its own
+// record.
+func TestIndexUpdatePlannerExecuteDelete(t *testing.T) {
+	tests := []struct {
+		name      string
+		indexed   []string
+		sql       string
+		wantCount int
+		want      map[string]map[query.Constant][]testRow
+	}{
+		{
+			name:      "given a table of 5 records indexed on id, when the record of id 2 is deleted, then 1 record is reported and the index finds each of the others but not that one",
+			indexed:   []string{"id"},
+			sql:       "delete from test where id = 2",
+			wantCount: 1,
+			want: map[string]map[query.Constant][]testRow{
+				"id": {
+					query.NewIntConstant(0): {{id: 0, name: "name0"}},
+					query.NewIntConstant(1): {{id: 1, name: "name1"}},
+					query.NewIntConstant(2): {},
+					query.NewIntConstant(3): {{id: 3, name: "name3"}},
+					query.NewIntConstant(4): {{id: 4, name: "name4"}},
+				},
+			},
+		},
+		{
+			name:      "given a table of 5 records indexed on name, when the record of id 2 is deleted, then 1 record is reported and the index finds each of the others but not that one",
+			indexed:   []string{"name"},
+			sql:       "delete from test where id = 2",
+			wantCount: 1,
+			want: map[string]map[query.Constant][]testRow{
+				"name": {
+					query.NewStringConstant("name0"): {{id: 0, name: "name0"}},
+					query.NewStringConstant("name1"): {{id: 1, name: "name1"}},
+					query.NewStringConstant("name2"): {},
+					query.NewStringConstant("name3"): {{id: 3, name: "name3"}},
+					query.NewStringConstant("name4"): {{id: 4, name: "name4"}},
+				},
+			},
+		},
+		{
+			name:      "given a table of 5 records indexed on both its fields, when every record is deleted, then 5 records are reported and neither index finds any of them",
+			indexed:   []string{"id", "name"},
+			sql:       "delete from test",
+			wantCount: 5,
+			want: map[string]map[query.Constant][]testRow{
+				"id": {
+					query.NewIntConstant(0): {},
+					query.NewIntConstant(1): {},
+					query.NewIntConstant(2): {},
+					query.NewIntConstant(3): {},
+					query.NewIntConstant(4): {},
+				},
+				"name": {
+					query.NewStringConstant("name0"): {},
+					query.NewStringConstant("name1"): {},
+					query.NewStringConstant("name2"): {},
+					query.NewStringConstant("name3"): {},
+					query.NewStringConstant("name4"): {},
+				},
+			},
+		},
+		{
+			name:      "given a table of 5 records indexed on id, when the records the predicate keeps are none, then 0 records are reported and the index still finds each of them",
+			indexed:   []string{"id"},
+			sql:       "delete from test where id = 100",
+			wantCount: 0,
+			want: map[string]map[query.Constant][]testRow{
+				"id": {
+					query.NewIntConstant(0): {{id: 0, name: "name0"}},
+					query.NewIntConstant(1): {{id: 1, name: "name1"}},
+					query.NewIntConstant(2): {{id: 2, name: "name2"}},
+					query.NewIntConstant(3): {{id: 3, name: "name3"}},
+					query.NewIntConstant(4): {{id: 4, name: "name4"}},
+				},
+			},
+		},
+		{
+			name:      "given a table of 5 records with no index, when the record of id 2 is deleted, then 1 record is reported",
+			indexed:   nil,
+			sql:       "delete from test where id = 2",
+			wantCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			mm := newTestMetadataManager(t, tx)
+			createTestTable(t, tx, mm, 0)
+			createTestIndexes(t, tx, mm, tt.indexed)
+			up := NewIndexUpdatePlanner(mm)
+			insertTestRowsThrough(t, tx, up, testRows(5))
+
+			count, err := up.ExecuteDelete(mustParseUpdate[parse.DeleteData](t, tt.sql), tx)
+			if err != nil {
+				t.Fatalf("ExecuteDelete() error = %v", err)
+			}
+
+			if count != tt.wantCount {
+				t.Errorf("ExecuteDelete() = %d, want %d", count, tt.wantCount)
+			}
+			assertIndexedRows(t, tx, mm, tt.want)
+		})
+	}
+
+	// The index is registered after the records are written, and is not made
+	// to hold them, so it is behind the table: that is what an index left out
+	// of a change looks like.
+	t.Run("given a table of 5 records indexed on id by an index that holds none of them, when the record of id 2 is deleted, then it reports ErrEntryNotFound", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, 5)
+		createTestIndexes(t, tx, mm, []string{"id"})
+
+		_, err := NewIndexUpdatePlanner(mm).ExecuteDelete(mustParseUpdate[parse.DeleteData](t, "delete from test where id = 2"), tx)
+		if !errors.Is(err, index.ErrEntryNotFound) {
+			t.Errorf("ExecuteDelete() error = %v, want %v", err, index.ErrEntryNotFound)
+		}
+	})
+}
+
+// insertTestRowsThrough writes rows into the test table through up, so that
+// they are filed in whatever indexes the table has.
+func insertTestRowsThrough(t *testing.T, tx *transaction.Transaction, up *IndexUpdatePlanner, rows []testRow) {
+	t.Helper()
+
+	for _, row := range rows {
+		sql := fmt.Sprintf("insert into test (id, name) values (%d, '%s')", row.id, row.name)
+		if _, err := up.ExecuteInsert(mustParseUpdate[parse.InsertData](t, sql), tx); err != nil {
+			t.Fatalf("ExecuteInsert(%q) error = %v", sql, err)
+		}
+	}
 }
 
 // createTestIndexes registers an index on each of fields of the test table,

@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"github.com/JunNishimura/GoSQL/index"
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
 	"github.com/JunNishimura/GoSQL/parse"
 	"github.com/JunNishimura/GoSQL/query"
@@ -83,9 +84,73 @@ func insertIntoIndex(info *metadatamanager.IndexInfo, value query.Constant, rid 
 	return idx.Insert(value, rid)
 }
 
-// ExecuteDelete deletes every record of the table the predicate keeps.
+// ExecuteDelete deletes every record of the table the predicate keeps, and
+// takes out the entry each index of the table files it under.
+//
+// The entries go before the record does, since what they are filed under is
+// read from the record. An index found not to hold the entry for a record is
+// behind the table, and that fails the statement rather than being passed
+// over: what it would go on finding is no longer there to find.
 func (up *IndexUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transaction.Transaction) (int, error) {
-	return 0, nil
+	indexes, err := openIndexes(up.mm, data.TableName(), tx)
+	if err != nil {
+		return 0, err
+	}
+	defer closeIndexes(indexes)
+
+	return forEachKept(up.mm, data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
+		rid, err := us.CurrentRecordID()
+		if err != nil {
+			return err
+		}
+
+		for fieldName, idx := range indexes {
+			value, err := us.GetValue(fieldName)
+			if err != nil {
+				return err
+			}
+			if err := idx.Delete(value, rid); err != nil {
+				return err
+			}
+		}
+
+		return us.DeleteCurrentRecord()
+	})
+}
+
+// openIndexes opens every index of tableName, filed under the field each is
+// on, for a statement to keep up as it goes through the table.
+//
+// They are opened once for the statement rather than once per record it
+// changes, since opening a B-tree reads its files. An index holds no block
+// between one search and the next, so holding them all open costs nothing
+// while the statement is on some other record. What was opened before a
+// failure is closed again.
+func openIndexes(mm *metadatamanager.MetadataManager, tableName string, tx *transaction.Transaction) (map[string]index.Index, error) {
+	infos, err := mm.GetIndexInfo(tx, tableName)
+	if err != nil {
+		return nil, err
+	}
+
+	indexes := make(map[string]index.Index, len(infos))
+	for fieldName, info := range infos {
+		idx, err := info.Open()
+		if err != nil {
+			closeIndexes(indexes)
+
+			return nil, err
+		}
+		indexes[fieldName] = idx
+	}
+
+	return indexes, nil
+}
+
+// closeIndexes closes every index openIndexes opened.
+func closeIndexes(indexes map[string]index.Index) {
+	for _, idx := range indexes {
+		idx.Close()
+	}
 }
 
 // ExecuteModify sets the target field of every record the predicate keeps to

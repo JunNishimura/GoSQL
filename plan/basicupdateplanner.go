@@ -62,7 +62,7 @@ func insertRecord(us query.UpdateScan, data parse.InsertData) error {
 
 // ExecuteDelete deletes every record of the table the predicate keeps.
 func (up *BasicUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transaction.Transaction) (int, error) {
-	return up.forEachKept(data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
+	return forEachKept(up.mm, data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
 		return us.DeleteCurrentRecord()
 	})
 }
@@ -71,7 +71,7 @@ func (up *BasicUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transacti
 // the new value, read against that record, so that a field in the new value
 // stands for the record's own.
 func (up *BasicUpdatePlanner) ExecuteModify(data parse.ModifyData, tx *transaction.Transaction) (int, error) {
-	return up.forEachKept(data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
+	return forEachKept(up.mm, data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
 		val, err := data.NewValue().Evaluate(us)
 		if err != nil {
 			return err
@@ -106,8 +106,8 @@ func (up *BasicUpdatePlanner) ExecuteCreateIndex(data parse.CreateIndexData, tx 
 // Scan and not an UpdateScan. Opening the table's own scan and testing each
 // record is all a select would do, and this is the one place that needs it
 // done on a scan that can be written through.
-func (up *BasicUpdatePlanner) forEachKept(tableName string, pred query.Predicate, tx *transaction.Transaction, change func(us query.UpdateScan) error) (int, error) {
-	us, err := openUpdateScan(up.mm, tableName, tx)
+func forEachKept(mm *metadatamanager.MetadataManager, tableName string, pred query.Predicate, tx *transaction.Transaction, change func(us query.UpdateScan) error) (int, error) {
+	us, err := openUpdateScan(mm, tableName, tx)
 	if err != nil {
 		return 0, err
 	}
