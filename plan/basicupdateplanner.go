@@ -36,18 +36,28 @@ func (up *BasicUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transacti
 	}
 	defer us.Close()
 
-	if err := us.MoveToNewRecord(); err != nil {
+	if err := insertRecord(us, data); err != nil {
 		return 0, err
+	}
+
+	return 1, nil
+}
+
+// insertRecord makes a new record through us and writes the values data gives
+// to it, each to the field it was named with, leaving us on that record.
+func insertRecord(us query.UpdateScan, data parse.InsertData) error {
+	if err := us.MoveToNewRecord(); err != nil {
+		return err
 	}
 
 	values := data.Values()
 	for i, fieldName := range data.Fields() {
 		if err := us.SetValue(fieldName, values[i]); err != nil {
-			return 0, err
+			return err
 		}
 	}
 
-	return 1, nil
+	return nil
 }
 
 // ExecuteDelete deletes every record of the table the predicate keeps.

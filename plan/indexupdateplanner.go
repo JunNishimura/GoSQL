@@ -45,15 +45,8 @@ func (up *IndexUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transacti
 	}
 	defer us.Close()
 
-	if err := us.MoveToNewRecord(); err != nil {
+	if err := insertRecord(us, data); err != nil {
 		return 0, err
-	}
-
-	values := data.Values()
-	for i, fieldName := range data.Fields() {
-		if err := us.SetValue(fieldName, values[i]); err != nil {
-			return 0, err
-		}
 	}
 
 	rid, err := us.CurrentRecordID()
