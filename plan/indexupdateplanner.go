@@ -5,7 +5,6 @@ import (
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
 	"github.com/JunNishimura/GoSQL/parse"
 	"github.com/JunNishimura/GoSQL/query"
-	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
@@ -55,33 +54,23 @@ func (up *IndexUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transacti
 		return 0, err
 	}
 
-	indexes, err := up.mm.GetIndexInfo(tx, data.TableName())
+	indexes, err := openIndexes(up.mm, data.TableName(), tx)
 	if err != nil {
 		return 0, err
 	}
-	for fieldName, info := range indexes {
+	defer closeIndexes(indexes)
+
+	for fieldName, idx := range indexes {
 		value, err := us.GetValue(fieldName)
 		if err != nil {
 			return 0, err
 		}
-		if err := insertIntoIndex(info, value, rid); err != nil {
+		if err := idx.Insert(value, rid); err != nil {
 			return 0, err
 		}
 	}
 
 	return 1, nil
-}
-
-// insertIntoIndex opens the index info describes, files rid under value in
-// it, and closes it again.
-func insertIntoIndex(info *metadatamanager.IndexInfo, value query.Constant, rid *recordmanager.RecordID) error {
-	idx, err := info.Open()
-	if err != nil {
-		return err
-	}
-	defer idx.Close()
-
-	return idx.Insert(value, rid)
 }
 
 // ExecuteDelete deletes every record of the table the predicate keeps, and
