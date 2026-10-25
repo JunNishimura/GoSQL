@@ -30,7 +30,7 @@ func NewBasicUpdatePlanner(mm *metadatamanager.MetadataManager) *BasicUpdatePlan
 // ExecuteInsert writes one record of the values given, each to the field it
 // was named with. A field not named is left at its zero value.
 func (up *BasicUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transaction.Transaction) (int, error) {
-	us, err := up.openUpdateScan(data.TableName(), tx)
+	us, err := openUpdateScan(up.mm, data.TableName(), tx)
 	if err != nil {
 		return 0, err
 	}
@@ -97,7 +97,7 @@ func (up *BasicUpdatePlanner) ExecuteCreateIndex(data parse.CreateIndexData, tx 
 // record is all a select would do, and this is the one place that needs it
 // done on a scan that can be written through.
 func (up *BasicUpdatePlanner) forEachKept(tableName string, pred query.Predicate, tx *transaction.Transaction, change func(us query.UpdateScan) error) (int, error) {
-	us, err := up.openUpdateScan(tableName, tx)
+	us, err := openUpdateScan(up.mm, tableName, tx)
 	if err != nil {
 		return 0, err
 	}
@@ -128,9 +128,10 @@ func (up *BasicUpdatePlanner) forEachKept(tableName string, pred query.Predicate
 	}
 }
 
-// openUpdateScan opens a scan over the table that can be written through.
-func (up *BasicUpdatePlanner) openUpdateScan(tableName string, tx *transaction.Transaction) (query.UpdateScan, error) {
-	tp, err := NewTablePlan(tx, tableName, up.mm)
+// openUpdateScan opens a scan over the table that can be written through,
+// reading its definition through mm.
+func openUpdateScan(mm *metadatamanager.MetadataManager, tableName string, tx *transaction.Transaction) (query.UpdateScan, error) {
+	tp, err := NewTablePlan(tx, tableName, mm)
 	if err != nil {
 		return nil, err
 	}
