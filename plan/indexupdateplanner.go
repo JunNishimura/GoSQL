@@ -1,10 +1,13 @@
 package plan
 
 import (
+	"fmt"
+
 	"github.com/JunNishimura/GoSQL/index"
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
 	"github.com/JunNishimura/GoSQL/parse"
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
@@ -196,17 +199,82 @@ func (up *IndexUpdatePlanner) ExecuteModify(data parse.ModifyData, tx *transacti
 	})
 }
 
-// ExecuteCreateTable records the table's definition.
+// ExecuteCreateTable records the table's definition. A new table has no
+// index, so there is nothing to keep up.
 func (up *IndexUpdatePlanner) ExecuteCreateTable(data parse.CreateTableData, tx *transaction.Transaction) (int, error) {
-	return 0, nil
+	return 0, up.mm.CreateTable(tx, data.TableName(), data.Schema())
 }
 
-// ExecuteCreateView records the view's definition.
+// ExecuteCreateView records the view's definition. A view holds no records of
+// its own, so there is nothing to index.
 func (up *IndexUpdatePlanner) ExecuteCreateView(data parse.CreateViewData, tx *transaction.Transaction) (int, error) {
-	return 0, nil
+	return 0, up.mm.CreateView(tx, data.ViewName(), data.ViewDef())
 }
 
-// ExecuteCreateIndex records the index's definition.
+// ExecuteCreateIndex records the index's definition and files every record the
+// table already holds in it.
+//
+// SimpleDB records the definition alone, which leaves the index blind to every
+// record written before it: a search through it misses them, and deleting one
+// finds no entry to take out. Filling it from the table here is what lets this
+// planner keep it up from then on.
+//
+// The table and the field are looked up before anything is written. An index
+// the catalog held for a table or a field that is not there could never be
+// described, and every planner reading that table would fail asking for its
+// indexes.
 func (up *IndexUpdatePlanner) ExecuteCreateIndex(data parse.CreateIndexData, tx *transaction.Transaction) (int, error) {
-	return 0, nil
+	layout, err := up.mm.GetLayout(tx, data.TableName())
+	if err != nil {
+		return 0, err
+	}
+	if _, err := layout.Schema().Type(data.FieldName()); err != nil {
+		return 0, fmt.Errorf("index field %q of table %q: %w", data.FieldName(), data.TableName(), err)
+	}
+
+	if err := up.mm.CreateIndex(tx, data.IndexName(), data.TableName(), data.FieldName()); err != nil {
+		return 0, err
+	}
+
+	return 0, up.fillIndex(data, layout, tx)
+}
+
+// fillIndex files every record of the table data names in the index data
+// makes, under what the record holds in the indexed field.
+func (up *IndexUpdatePlanner) fillIndex(data parse.CreateIndexData, layout *recordmanager.Layout, tx *transaction.Transaction) error {
+	infos, err := up.mm.GetIndexInfo(tx, data.TableName())
+	if err != nil {
+		return err
+	}
+	// The index has just been registered on this field, so it is there.
+	idx, err := infos[data.FieldName()].Open()
+	if err != nil {
+		return err
+	}
+	defer idx.Close()
+
+	ts, err := query.NewTableScan(tx, data.TableName(), layout)
+	if err != nil {
+		return err
+	}
+	defer ts.Close()
+
+	for {
+		hasNext, err := ts.MoveToNextRecord()
+		if err != nil || !hasNext {
+			return err
+		}
+
+		value, err := ts.GetValue(data.FieldName())
+		if err != nil {
+			return err
+		}
+		rid, err := ts.CurrentRecordID()
+		if err != nil {
+			return err
+		}
+		if err := idx.Insert(value, rid); err != nil {
+			return err
+		}
+	}
 }

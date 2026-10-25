@@ -381,6 +381,181 @@ func TestIndexUpdatePlannerExecuteModify(t *testing.T) {
 	})
 }
 
+func TestIndexUpdatePlannerExecuteCreateTable(t *testing.T) {
+	t.Run("when a table of an int and a varchar is created, then 0 records are reported and the catalogs hold its schema", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+
+		count, err := NewIndexUpdatePlanner(mm).ExecuteCreateTable(mustParseUpdate[parse.CreateTableData](t, "create table test (id int, name varchar(10))"), tx)
+		if err != nil {
+			t.Fatalf("ExecuteCreateTable() error = %v", err)
+		}
+
+		if count != 0 {
+			t.Errorf("ExecuteCreateTable() = %d, want 0", count)
+		}
+
+		layout, err := mm.GetLayout(tx, testTableName)
+		if err != nil {
+			t.Fatalf("GetLayout(%q) error = %v", testTableName, err)
+		}
+		assertSchema(t, layout.Schema(), newTestSchema(t))
+	})
+}
+
+func TestIndexUpdatePlannerExecuteCreateView(t *testing.T) {
+	t.Run("given a table, when a view over it is created, then 0 records are reported and the catalogs hold its definition", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, 0)
+
+		count, err := NewIndexUpdatePlanner(mm).ExecuteCreateView(mustParseUpdate[parse.CreateViewData](t, "create view v as select id from test where id = 3"), tx)
+		if err != nil {
+			t.Fatalf("ExecuteCreateView() error = %v", err)
+		}
+
+		if count != 0 {
+			t.Errorf("ExecuteCreateView() = %d, want 0", count)
+		}
+
+		definition, ok, err := mm.GetViewDefinition(tx, "v")
+		if err != nil {
+			t.Fatalf("GetViewDefinition(%q) error = %v", "v", err)
+		}
+		if !ok {
+			t.Fatalf("GetViewDefinition(%q) found no view", "v")
+		}
+		if want := "select id from test where id = 3"; definition != want {
+			t.Errorf("GetViewDefinition(%q) = %q, want %q", "v", definition, want)
+		}
+	})
+}
+
+// The records are written by createTestTable, past every planner, so the only
+// way an index can come to hold them is by being filled from the table when it
+// is made.
+func TestIndexUpdatePlannerExecuteCreateIndex(t *testing.T) {
+	tests := []struct {
+		name    string
+		numRows int
+		sql     string
+		field   string
+		want    map[query.Constant][]testRow
+	}{
+		{
+			name:    "given a table of 5 records, when an index on id is created, then 0 records are reported and the index finds each record under its id",
+			numRows: 5,
+			sql:     "create index idx on test (id)",
+			field:   "id",
+			want: map[query.Constant][]testRow{
+				query.NewIntConstant(0): {{id: 0, name: "name0"}},
+				query.NewIntConstant(1): {{id: 1, name: "name1"}},
+				query.NewIntConstant(2): {{id: 2, name: "name2"}},
+				query.NewIntConstant(3): {{id: 3, name: "name3"}},
+				query.NewIntConstant(4): {{id: 4, name: "name4"}},
+			},
+		},
+		{
+			name:    "given a table of 5 records, when an index on name is created, then 0 records are reported and the index finds each record under its name",
+			numRows: 5,
+			sql:     "create index idx on test (name)",
+			field:   "name",
+			want: map[query.Constant][]testRow{
+				query.NewStringConstant("name0"): {{id: 0, name: "name0"}},
+				query.NewStringConstant("name1"): {{id: 1, name: "name1"}},
+				query.NewStringConstant("name2"): {{id: 2, name: "name2"}},
+				query.NewStringConstant("name3"): {{id: 3, name: "name3"}},
+				query.NewStringConstant("name4"): {{id: 4, name: "name4"}},
+			},
+		},
+		{
+			name:    "given an empty table, when an index on id is created, then 0 records are reported and the index finds nothing",
+			numRows: 0,
+			sql:     "create index idx on test (id)",
+			field:   "id",
+			want: map[query.Constant][]testRow{
+				query.NewIntConstant(0): {},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			mm := newTestMetadataManager(t, tx)
+			createTestTable(t, tx, mm, tt.numRows)
+
+			count, err := NewIndexUpdatePlanner(mm).ExecuteCreateIndex(mustParseUpdate[parse.CreateIndexData](t, tt.sql), tx)
+			if err != nil {
+				t.Fatalf("ExecuteCreateIndex() error = %v", err)
+			}
+
+			if count != 0 {
+				t.Errorf("ExecuteCreateIndex() = %d, want 0", count)
+			}
+			assertIndexedRows(t, tx, mm, map[string]map[query.Constant][]testRow{tt.field: tt.want})
+		})
+	}
+
+	t.Run("given a table indexed on id, when another index on id is created, then it reports ErrFieldAlreadyIndexed", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, 5)
+		up := NewIndexUpdatePlanner(mm)
+
+		if _, err := up.ExecuteCreateIndex(mustParseUpdate[parse.CreateIndexData](t, "create index idx on test (id)"), tx); err != nil {
+			t.Fatalf("ExecuteCreateIndex(idx) error = %v", err)
+		}
+
+		_, err := up.ExecuteCreateIndex(mustParseUpdate[parse.CreateIndexData](t, "create index idx2 on test (id)"), tx)
+		if !errors.Is(err, metadatamanager.ErrFieldAlreadyIndexed) {
+			t.Errorf("ExecuteCreateIndex(idx2) error = %v, want %v", err, metadatamanager.ErrFieldAlreadyIndexed)
+		}
+	})
+
+	// An index the catalog holds for a table or a field that is not there
+	// could never be described, and every planner reading that table would
+	// fail asking for it, so nothing is written for one.
+	t.Run("given no table of the name, when an index on it is created, then it reports ErrTableNotFound and the catalog holds no index for it", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+
+		_, err := NewIndexUpdatePlanner(mm).ExecuteCreateIndex(mustParseUpdate[parse.CreateIndexData](t, "create index idx on missing (id)"), tx)
+		if !errors.Is(err, metadatamanager.ErrTableNotFound) {
+			t.Errorf("ExecuteCreateIndex() error = %v, want %v", err, metadatamanager.ErrTableNotFound)
+		}
+
+		assertNoIndexes(t, tx, mm, "missing")
+	})
+
+	t.Run("given a table with no field of the name, when an index on it is created, then it reports ErrFieldNotFound and the catalog holds no index for the table", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, 5)
+
+		_, err := NewIndexUpdatePlanner(mm).ExecuteCreateIndex(mustParseUpdate[parse.CreateIndexData](t, "create index idx on test (missing)"), tx)
+		if !errors.Is(err, recordmanager.ErrFieldNotFound) {
+			t.Errorf("ExecuteCreateIndex() error = %v, want %v", err, recordmanager.ErrFieldNotFound)
+		}
+
+		assertNoIndexes(t, tx, mm, testTableName)
+	})
+}
+
+// assertNoIndexes checks that the catalog holds no index for tableName, which
+// asking for its indexes without an error also shows the catalog can still
+// answer for.
+func assertNoIndexes(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, tableName string) {
+	t.Helper()
+
+	indexes, err := mm.GetIndexInfo(tx, tableName)
+	if err != nil {
+		t.Fatalf("GetIndexInfo(%q) error = %v", tableName, err)
+	}
+	if len(indexes) != 0 {
+		t.Errorf("GetIndexInfo(%q) has indexes on %d fields, want none", tableName, len(indexes))
+	}
+}
+
 // insertTestRowsThrough writes rows into the test table through up, so that
 // they are filed in whatever indexes the table has.
 func insertTestRowsThrough(t *testing.T, tx *transaction.Transaction, up *IndexUpdatePlanner, rows []testRow) {
