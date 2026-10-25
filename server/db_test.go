@@ -464,6 +464,37 @@ func TestDBPlannerReadsThroughIndexes(t *testing.T) {
 	})
 }
 
+// As for a select, a join is told to go through an index by what it reads: the
+// record of id 1 written past the planner is in the table but not in its index,
+// so a join through the index does not pair it with anything.
+func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
+	t.Run("given a table of oids 1 and 2 and a table indexed on id holding ids 1 and 2 put in through the planner and another id 1 written past it, when a query joining them on oid = id is run through the planner, then it joins through the index and pairs each oid with only the record the index was told of", func(t *testing.T) {
+		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		executeUpdates(t, db, tx,
+			"create table other (oid int)",
+			"create table test (id int)",
+			"create index id_index on test (id)",
+			"insert into other (oid) values (1)",
+			"insert into other (oid) values (2)",
+			"insert into test (id) values (1)",
+			"insert into test (id) values (2)",
+		)
+		writePastPlanner(t, db, tx, "test", 1)
+
+		if got := selectIDs(t, db, tx, "select id, oid from other, test where oid = id"); !slices.Equal(got, []int32{1, 2}) {
+			t.Errorf("the query gives back ids %v, want [1 2], one pair for each oid", got)
+		}
+	})
+}
+
 // writePastPlanner writes a record of id into tableName through a scan of the
 // table alone, so that no index of the table is told of it.
 func writePastPlanner(t *testing.T, db *DB, tx *transaction.Transaction, tableName string, id int32) {
