@@ -118,6 +118,21 @@ func testRecords(ids ...int32) []testRecord {
 func newTestSelectScan(t *testing.T, tx *transaction.Transaction, records []testRecord, value query.Constant) *SelectScan {
 	t.Helper()
 
+	ts, idx := newTestIndexedTable(t, tx, records)
+	s, err := NewSelectScan(ts, idx, value)
+	if err != nil {
+		t.Fatalf("NewSelectScan() error = %v", err)
+	}
+
+	return s
+}
+
+// newTestIndexedTable writes records into a table of an int id and a varchar
+// name, and files each in a B-tree index on id. It returns a scan of the table
+// and the index, both open.
+func newTestIndexedTable(t *testing.T, tx *transaction.Transaction, records []testRecord) (*query.TableScan, *BTreeIndex) {
+	t.Helper()
+
 	schema := recordmanager.NewSchema()
 	if err := schema.AddIntField("id"); err != nil {
 		t.Fatalf("AddIntField(%q) error = %v", "id", err)
@@ -155,12 +170,7 @@ func newTestSelectScan(t *testing.T, tx *transaction.Transaction, records []test
 		}
 	}
 
-	s, err := NewSelectScan(ts, idx, value)
-	if err != nil {
-		t.Fatalf("NewSelectScan() error = %v", err)
-	}
-
-	return s
+	return ts, idx
 }
 
 // readTestRecords reads every record s gives back from where it is, in the
