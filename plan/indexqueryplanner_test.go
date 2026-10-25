@@ -2,6 +2,7 @@ package plan
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -147,6 +148,161 @@ func TestIndexQueryPlannerCreatePlan(t *testing.T) {
 			t.Errorf("CreatePlan() error = %v, want %v", err, metadatamanager.ErrTableNotFound)
 		}
 	})
+}
+
+// The other table, of oids from 0, and the test table, of ids from 0, are
+// joined on oid equal to id. Only a table added to what is already planned is
+// read through an index on a join field, so which side an index is on is told
+// by the order the from clause names the tables.
+func TestIndexQueryPlannerCreatePlanJoins(t *testing.T) {
+	tests := []struct {
+		name    string
+		indexed []string
+		sql     string
+		// wantJoinField is the field of the left side the plan joins on
+		// through an index, or "" if it should join through none.
+		wantJoinField string
+		want          [][2]int32
+	}{
+		{
+			name:          "given 3 records of other and 20 of test indexed on id, when a query of other then test where oid = id is planned, then the plan joins test through the index on oid and reads the three pairs that agree",
+			indexed:       []string{"id"},
+			sql:           "select id, oid from other, test where oid = id",
+			wantJoinField: "oid",
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		{
+			name:          "given 3 records of other and 20 of test indexed on id, when a query of other then test where id = oid, with the fields the other way round, is planned, then the plan joins test through the index on oid",
+			indexed:       []string{"id"},
+			sql:           "select id, oid from other, test where id = oid",
+			wantJoinField: "oid",
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		// test comes first, so it is the left side and its index is never
+		// searched for a join; other, which is added to it, has none.
+		{
+			name:          "given 3 records of other and 20 of test indexed on id, when a query of test then other where id = oid is planned, then the plan joins through no index and reads the three pairs that agree",
+			indexed:       []string{"id"},
+			sql:           "select id, oid from test, other where id = oid",
+			wantJoinField: "",
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		{
+			name:          "given 3 records of other and 20 of test with no index, when a query of other then test where oid = id is planned, then the plan joins through no index and reads the three pairs that agree",
+			indexed:       nil,
+			sql:           "select id, oid from other, test where oid = id",
+			wantJoinField: "",
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		{
+			name:          "given 3 records of other and 20 of test indexed on name, when a query of other then test where oid = id is planned, then the plan joins through no index",
+			indexed:       []string{"name"},
+			sql:           "select id, oid from other, test where oid = id",
+			wantJoinField: "",
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		// The test table could be read through the index on name for
+		// 'name1', or joined through the index on id. The two cost the same
+		// here, and the join is taken; the term on name is still tested.
+		{
+			name:          "given 3 records of other and 20 of test indexed on id and on name, when a query of other then test where oid = id and name = 'name1' is planned, then the plan joins test through the index on oid and reads the one pair whose name is 'name1'",
+			indexed:       []string{"id", "name"},
+			sql:           "select id, oid from other, test where oid = id and name = 'name1'",
+			wantJoinField: "oid",
+			want:          [][2]int32{{1, 1}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			mm := newTestMetadataManager(t, tx)
+			createOtherTable(t, tx, mm, 3)
+			createTestTable(t, tx, mm, testRecordCount)
+			createIndexesThrough(t, tx, mm, tt.indexed)
+
+			p := mustCreateIndexPlan(t, tx, mm, tt.sql)
+
+			got, ok := indexJoinFieldOf(p)
+			switch {
+			case tt.wantJoinField == "" && ok:
+				t.Errorf("the plan joins through an index on %s, want no index join", got)
+			case tt.wantJoinField != "" && got != tt.wantJoinField:
+				t.Errorf("the plan joins through an index on %q (%t), want on %q", got, ok, tt.wantJoinField)
+			}
+
+			if pairs := openAndReadIDPairs(t, p); !slices.Equal(pairs, tt.want) {
+				t.Errorf("the plan read (id, oid) pairs %v, want %v", pairs, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheaperJoin(t *testing.T) {
+	tests := []struct {
+		name    string
+		join    int
+		product int
+		want    string
+	}{
+		{
+			name:    "when the join through an index reads fewer blocks than the product, then the join is taken",
+			join:    5,
+			product: 10,
+			want:    "join",
+		},
+		{
+			name:    "when the product reads fewer blocks than the join through an index, then the product is taken",
+			join:    10,
+			product: 5,
+			want:    "product",
+		},
+		{
+			name:    "when the two read as many blocks, then the join is taken",
+			join:    7,
+			product: 7,
+			want:    "join",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			join := &fakePlan{blocksAccessed: tt.join}
+			product := &fakePlan{blocksAccessed: tt.product}
+
+			var name string
+			switch got := cheaperJoin(join, product); got {
+			case Plan(join):
+				name = "join"
+			case Plan(product):
+				name = "product"
+			default:
+				name = fmt.Sprintf("%v", got)
+			}
+			if name != tt.want {
+				t.Errorf("cheaperJoin(join of %d, product of %d) = the %s, want the %s", tt.join, tt.product, name, tt.want)
+			}
+		})
+	}
+}
+
+// indexJoinFieldOf returns the join field of the first index join plan within
+// p, and whether there is one.
+func indexJoinFieldOf(p Plan) (string, bool) {
+	switch p := p.(type) {
+	case *IndexJoinPlan:
+		return p.joinField, true
+	case *ProjectPlan:
+		return indexJoinFieldOf(p.p)
+	case *SelectPlan:
+		return indexJoinFieldOf(p.p)
+	case *ProductPlan:
+		if f, ok := indexJoinFieldOf(p.p1); ok {
+			return f, true
+		}
+
+		return indexJoinFieldOf(p.p2)
+	default:
+		return "", false
+	}
 }
 
 // createIndexesThrough makes an index on each of fields of the test table
