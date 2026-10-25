@@ -15,6 +15,10 @@ import (
 //
 // Each method reports how many records it changed. A statement that changes
 // definitions rather than records reports 0.
+//
+// It changes tables and nothing else. An index on a table it writes to is left
+// as it was, finding records that are gone and missing ones that are there, so
+// a database with indexes has to go through IndexUpdatePlanner instead.
 type BasicUpdatePlanner struct {
 	mm *metadatamanager.MetadataManager
 }
