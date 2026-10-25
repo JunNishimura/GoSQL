@@ -24,25 +24,33 @@ func isField(e query.Expression, fieldName string) bool {
 	return ok && name == fieldName
 }
 
-// isConstant reports whether e is a constant.
-func isConstant(e query.Expression) bool {
-	_, ok := e.(query.ConstantExpression)
-	return ok
-}
-
 // equatesWithConstant reports whether a term of pred equates fieldName with a
 // constant, on either side.
 func equatesWithConstant(pred query.Predicate, fieldName string) bool {
+	_, ok := constantEquatedWith(pred, fieldName)
+
+	return ok
+}
+
+// constantEquatedWith returns the constant a term of pred equates fieldName
+// with, on either side, and whether there is such a term.
+//
+// It is what an index on fieldName is searched for: a record the predicate
+// keeps holds that constant in fieldName, so the records filed under it are
+// the only ones the predicate can keep. If more than one term equates the
+// field with a constant, the first is taken; a record the predicate keeps
+// satisfies every term, so searching for any one of them finds it.
+func constantEquatedWith(pred query.Predicate, fieldName string) (query.Constant, bool) {
 	for _, term := range pred.Terms() {
-		if isField(term.LHS(), fieldName) && isConstant(term.RHS()) {
-			return true
+		if c, ok := term.RHS().(query.ConstantExpression); ok && isField(term.LHS(), fieldName) {
+			return c.Value(), true
 		}
-		if isConstant(term.LHS()) && isField(term.RHS(), fieldName) {
-			return true
+		if c, ok := term.LHS().(query.ConstantExpression); ok && isField(term.RHS(), fieldName) {
+			return c.Value(), true
 		}
 	}
 
-	return false
+	return query.Constant{}, false
 }
 
 // equatesWithField returns the other field a term of pred equates fieldName
