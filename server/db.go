@@ -75,7 +75,7 @@ func Open(dir string, blockSize, numBuffers int) (_ *DB, err error) {
 		bufferManager:   bm,
 		lockTable:       concurrencymanager.NewLockTable(),
 		metadataManager: mm,
-		planner:         plan.NewPlanner(plan.NewBasicQueryPlanner(mm), plan.NewIndexUpdatePlanner(mm)),
+		planner:         plan.NewPlanner(plan.NewIndexQueryPlanner(mm), plan.NewIndexUpdatePlanner(mm)),
 	}
 
 	tx, err := db.NewTransaction()

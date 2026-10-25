@@ -15,7 +15,8 @@ import (
 // It weighs nothing. The plan it builds is the one the query reads as, however
 // much a different order of the same tables would save, which makes it the
 // baseline a smarter planner is measured against rather than one to run a
-// large query through.
+// large query through. It reads every table in full, whatever indexes it has;
+// IndexQueryPlanner is the one that reads through them.
 type BasicQueryPlanner struct {
 	mm *metadatamanager.MetadataManager
 }

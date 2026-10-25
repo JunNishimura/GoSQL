@@ -436,6 +436,57 @@ func TestDBPlannerKeepsIndexes(t *testing.T) {
 	})
 }
 
+// What a query is planned as cannot be seen from here, so it is told by what
+// it reads: a record written past the planner is in the table but not in the
+// index, and a query answered through the index does not come across it.
+func TestDBPlannerReadsThroughIndexes(t *testing.T) {
+	t.Run("given a table indexed on id holding a record of id 7 put in through the planner and another written past it, when a query where id is 7 is run through the planner, then it reads the table through the index and finds only the record the index was told of", func(t *testing.T) {
+		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		executeUpdates(t, db, tx,
+			"create table test (id int)",
+			"create index id_index on test (id)",
+			"insert into test (id) values (7)",
+			"insert into test (id) values (8)",
+		)
+		writePastPlanner(t, db, tx, "test", 7)
+
+		if got := selectIDs(t, db, tx, "select id from test where id = 7"); !slices.Equal(got, []int32{7}) {
+			t.Errorf("the query gives back ids %v, want [7], the one record the index files under 7", got)
+		}
+	})
+}
+
+// writePastPlanner writes a record of id into tableName through a scan of the
+// table alone, so that no index of the table is told of it.
+func writePastPlanner(t *testing.T, db *DB, tx *transaction.Transaction, tableName string, id int32) {
+	t.Helper()
+
+	layout, err := db.MetadataManager().GetLayout(tx, tableName)
+	if err != nil {
+		t.Fatalf("GetLayout(%q) error = %v", tableName, err)
+	}
+	ts, err := query.NewTableScan(tx, tableName, layout)
+	if err != nil {
+		t.Fatalf("NewTableScan(%q) error = %v", tableName, err)
+	}
+	defer ts.Close()
+
+	if err := ts.MoveToNewRecord(); err != nil {
+		t.Fatalf("MoveToNewRecord() error = %v", err)
+	}
+	if err := ts.SetInt("id", id); err != nil {
+		t.Fatalf("SetInt(%q) error = %v", "id", err)
+	}
+}
+
 // countIndexed searches the index on field of tableName for value and reports
 // how many entries it finds.
 func countIndexed(t *testing.T, db *DB, tx *transaction.Transaction, tableName, field string, value query.Constant) int {
