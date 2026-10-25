@@ -143,9 +143,57 @@ func closeIndexes(indexes map[string]index.Index) {
 }
 
 // ExecuteModify sets the target field of every record the predicate keeps to
-// the new value.
+// the new value, read against that record as BasicUpdatePlanner reads it, and
+// moves the record's entry in the index on that field from the old value to
+// the new.
+//
+// Only that one index is touched. An index on any other field files the record
+// under a value the statement leaves as it was, and the entry still points to
+// the same record, so it is right as it stands.
 func (up *IndexUpdatePlanner) ExecuteModify(data parse.ModifyData, tx *transaction.Transaction) (int, error) {
-	return 0, nil
+	targetField := data.TargetField()
+
+	infos, err := up.mm.GetIndexInfo(tx, data.TableName())
+	if err != nil {
+		return 0, err
+	}
+
+	var idx index.Index
+	if info, ok := infos[targetField]; ok {
+		idx, err = info.Open()
+		if err != nil {
+			return 0, err
+		}
+		defer idx.Close()
+	}
+
+	return forEachKept(up.mm, data.TableName(), data.Predicate(), tx, func(us query.UpdateScan) error {
+		newValue, err := data.NewValue().Evaluate(us)
+		if err != nil {
+			return err
+		}
+		oldValue, err := us.GetValue(targetField)
+		if err != nil {
+			return err
+		}
+
+		if err := us.SetValue(targetField, newValue); err != nil {
+			return err
+		}
+		if idx == nil {
+			return nil
+		}
+
+		rid, err := us.CurrentRecordID()
+		if err != nil {
+			return err
+		}
+		if err := idx.Delete(oldValue, rid); err != nil {
+			return err
+		}
+
+		return idx.Insert(newValue, rid)
+	})
 }
 
 // ExecuteCreateTable records the table's definition.
