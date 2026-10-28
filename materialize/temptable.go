@@ -4,17 +4,11 @@ import (
 	"strconv"
 	"sync/atomic"
 
+	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
-
-// tempTablePrefix starts the name of every temp table.
-//
-// It begins with '#', which the tokenizer never puts in a word, so no statement
-// can name a table that starts with it: a user's table cannot share a temp
-// table's file, and nothing but a temp table is ever named this way.
-const tempTablePrefix = "#temp"
 
 // lastTableNum is the number given to the temp table made most recently. It is
 // shared by every transaction, since they all write to the one directory.
@@ -39,7 +33,7 @@ type TempTable struct {
 func NewTempTable(tx *transaction.Transaction, schema *recordmanager.Schema) *TempTable {
 	return &TempTable{
 		tx:        tx,
-		tableName: tempTablePrefix + strconv.FormatInt(lastTableNum.Add(1), 10),
+		tableName: filemanager.TempFilePrefix + strconv.FormatInt(lastTableNum.Add(1), 10),
 		layout:    recordmanager.NewLayout(schema),
 	}
 }

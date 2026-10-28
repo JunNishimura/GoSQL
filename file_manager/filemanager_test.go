@@ -50,6 +50,28 @@ func TestNewFileManager(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("given a database directory that holds a temp table's file and another file, it removes the temp table's file and keeps the other", func(t *testing.T) {
+		dir := t.TempDir()
+		tempFile := filepath.Join(dir, TempFilePrefix+"1.tbl")
+		otherFile := filepath.Join(dir, testFileName)
+		for _, path := range []string{tempFile, otherFile} {
+			if err := os.WriteFile(path, nil, 0666); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+		}
+
+		if _, err := NewFileManager(dir, testBlockSize); err != nil {
+			t.Fatalf("NewFileManager() error = %v", err)
+		}
+
+		if _, err := os.Stat(tempFile); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Stat(%q) error = %v, want %v", tempFile, err, os.ErrNotExist)
+		}
+		if _, err := os.Stat(otherFile); err != nil {
+			t.Errorf("Stat(%q) error = %v, want the file kept", otherFile, err)
+		}
+	})
 }
 
 func TestIsNew(t *testing.T) {
@@ -80,6 +102,19 @@ func TestIsNew(t *testing.T) {
 				return dir
 			},
 			want: false,
+		},
+		{
+			// The temp table's file is removed as the file manager is made, so
+			// the directory is left as empty as one that never held anything.
+			name: "given a database directory that holds only a temp table's file, when a file manager is made on it, then it reports the database as new",
+			dirFunc: func(t *testing.T) string {
+				dir := t.TempDir()
+				if err := os.WriteFile(filepath.Join(dir, TempFilePrefix+"1.tbl"), nil, 0666); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+				return dir
+			},
+			want: true,
 		},
 		{
 			name: "given a database directory an earlier file manager created and wrote nothing to, when a second is made on it, then it reports the database as new",
