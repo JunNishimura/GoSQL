@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -41,6 +42,17 @@ type FileManager struct {
 	mu          sync.Mutex
 }
 
+// TempFilePrefix starts the name of every file a temp table is kept in.
+//
+// It begins with '#', which the SQL tokenizer never puts in a word, so no
+// statement can name a table that starts with it: a user's table cannot share
+// a temp table's file, and nothing but a temp table is ever named this way.
+//
+// A temp table lasts no longer than the query that made it, so one found when
+// a file manager is made was left behind by a database that stopped before it
+// could remove it.
+const TempFilePrefix = "#temp"
+
 // dirName is the name IsSynced takes for the database directory itself: the
 // directory as a path relative to itself.
 const dirName = "."
@@ -53,12 +65,27 @@ func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read directory %s: %w", dbDir, err)
 	}
+
+	// Temp files are removed before the directory is judged new, so that one
+	// holding nothing else is taken for the empty directory it now is.
+	kept := 0
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), TempFilePrefix) {
+			kept++
+			continue
+		}
+		path := filepath.Join(dbDir, entry.Name())
+		if err := os.Remove(path); err != nil {
+			return nil, fmt.Errorf("remove temp file %s: %w", path, err)
+		}
+	}
+
 	return &FileManager{
 		dbDirectory: dbDir,
 		blockSize:   blockSize,
 		openFiles:   make(map[string]*os.File),
 		unsynced:    make(map[string]struct{}),
-		isNew:       len(entries) == 0,
+		isNew:       kept == 0,
 	}, nil
 }
 
