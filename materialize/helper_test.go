@@ -7,6 +7,7 @@ import (
 	concurrencymanager "github.com/JunNishimura/GoSQL/concurrency_manager"
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
+	"github.com/JunNishimura/GoSQL/query"
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
@@ -43,6 +44,30 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 
 	return tx
 }
+
+// fakeScan is a scan standing on one record, whose fields hold the values the
+// test put in the map. Only reading that record is supported: it has no other
+// record to move to.
+type fakeScan map[string]query.Constant
+
+var _ query.Scan = fakeScan{}
+
+func (fs fakeScan) MoveBeforeFirstRecord() error    { return nil }
+func (fs fakeScan) MoveToNextRecord() (bool, error) { return false, nil }
+func (fs fakeScan) GetInt(fieldName string) (int32, error) {
+	return fs[fieldName].AsInt()
+}
+func (fs fakeScan) GetString(fieldName string) (string, error) {
+	return fs[fieldName].AsString()
+}
+func (fs fakeScan) GetValue(fieldName string) (query.Constant, error) {
+	return fs[fieldName], nil
+}
+func (fs fakeScan) HasField(fieldName string) bool {
+	_, ok := fs[fieldName]
+	return ok
+}
+func (fs fakeScan) Close() {}
 
 // newTestSchema builds a schema of an int "id" and a varchar "name", one field
 // of each kind.
