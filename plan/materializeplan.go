@@ -76,19 +76,29 @@ func copyRecords(src query.Scan, dest query.UpdateScan, fieldNames []string) err
 			return nil
 		}
 
-		if err := dest.MoveToNewRecord(); err != nil {
+		if err := copyRecord(src, dest, fieldNames); err != nil {
 			return err
 		}
-		for _, fieldName := range fieldNames {
-			val, err := src.GetValue(fieldName)
-			if err != nil {
-				return err
-			}
-			if err := dest.SetValue(fieldName, val); err != nil {
-				return err
-			}
+	}
+}
+
+// copyRecord writes a new record into dest with the values the record src is
+// on holds in fieldNames.
+func copyRecord(src query.Scan, dest query.UpdateScan, fieldNames []string) error {
+	if err := dest.MoveToNewRecord(); err != nil {
+		return err
+	}
+	for _, fieldName := range fieldNames {
+		val, err := src.GetValue(fieldName)
+		if err != nil {
+			return err
+		}
+		if err := dest.SetValue(fieldName, val); err != nil {
+			return err
 		}
 	}
+
+	return nil
 }
 
 // BlocksAccessed is the blocks the temp table takes up: the records of src,
