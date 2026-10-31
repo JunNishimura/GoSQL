@@ -2,6 +2,7 @@ package materialize
 
 import (
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 // AggregationFn works out one value from the records of a group, a record at
@@ -16,4 +17,7 @@ type AggregationFn interface {
 	// FieldName is the name the value goes by in the records of the group by.
 	FieldName() string
 	Value() query.Constant
+	// AddFieldTo adds the field the value goes by to schema, of the type the
+	// value is when the records aggregated are of src.
+	AddFieldTo(schema, src *recordmanager.Schema) error
 }

@@ -2,6 +2,7 @@ package materialize
 
 import (
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 var _ AggregationFn = (*MaxFn)(nil)
@@ -57,4 +58,19 @@ func (f *MaxFn) FieldName() string {
 // Value is the largest value found.
 func (f *MaxFn) Value() query.Constant {
 	return f.max
+}
+
+// AddFieldTo adds the largest value to schema, of the type and length of the
+// field of src it is found in.
+func (f *MaxFn) AddFieldTo(schema, src *recordmanager.Schema) error {
+	fieldType, err := src.Type(f.fieldName)
+	if err != nil {
+		return err
+	}
+	length, err := src.Length(f.fieldName)
+	if err != nil {
+		return err
+	}
+
+	return schema.AddField(f.FieldName(), fieldType, length)
 }

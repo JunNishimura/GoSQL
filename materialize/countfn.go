@@ -2,6 +2,7 @@ package materialize
 
 import (
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 var _ AggregationFn = (*CountFn)(nil)
@@ -42,4 +43,9 @@ func (f *CountFn) FieldName() string {
 // Value is the number of records counted, as an int.
 func (f *CountFn) Value() query.Constant {
 	return query.NewIntConstant(f.count)
+}
+
+// AddFieldTo adds the count to schema as an int field.
+func (f *CountFn) AddFieldTo(schema, src *recordmanager.Schema) error {
+	return schema.AddIntField(f.FieldName())
 }
