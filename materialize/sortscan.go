@@ -2,8 +2,10 @@ package materialize
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 // maxRuns is how many runs a sort scan merges. A sort merges its runs in
@@ -170,6 +172,66 @@ func (ss *SortScan) GetValue(fieldName string) (query.Constant, error) {
 // not.
 func (ss *SortScan) HasField(fieldName string) bool {
 	return ss.runs[0].HasField(fieldName)
+}
+
+// SortPosition is where a sort scan is, saved for the scan to be put back to.
+//
+// The record each run is on is not enough to say that. Which run the scan's
+// record is taken from, and which runs have run out, decide what the scan
+// reads next, so they are saved along with the records and put back with
+// them.
+type SortPosition struct {
+	// rids are the records the runs are on, nil for a run that had run out.
+	rids    []*recordmanager.RecordID
+	hasMore []bool
+	current int
+}
+
+// SavePosition returns where the scan is, for RestorePosition to put it back
+// to. It is what a merge join reads the records of a join value on its right
+// again for each record on its left that shares the value.
+func (ss *SortScan) SavePosition() (*SortPosition, error) {
+	rids := make([]*recordmanager.RecordID, len(ss.runs))
+	for i, s := range ss.runs {
+		// A run that has run out may never have been on a record at all, as an
+		// empty one never is, so there is no record of it to ask for.
+		if !ss.hasMore[i] {
+			continue
+		}
+
+		rid, err := s.CurrentRecordID()
+		if err != nil {
+			return nil, err
+		}
+		rids[i] = rid
+	}
+
+	return &SortPosition{
+		rids:    rids,
+		hasMore: slices.Clone(ss.hasMore),
+		current: ss.current,
+	}, nil
+}
+
+// RestorePosition puts the scan back where it was when pos was saved.
+//
+// A run that had run out is left where it is: it is never read again before
+// the scan is moved back to its start, which rewinds every run.
+func (ss *SortScan) RestorePosition(pos *SortPosition) error {
+	for i, s := range ss.runs {
+		if !pos.hasMore[i] {
+			continue
+		}
+
+		if err := s.MoveToRecordID(pos.rids[i]); err != nil {
+			return err
+		}
+	}
+
+	copy(ss.hasMore, pos.hasMore)
+	ss.current = pos.current
+
+	return nil
 }
 
 // Close closes the runs.

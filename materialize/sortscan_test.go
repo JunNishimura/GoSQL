@@ -253,3 +253,109 @@ func readIDsAndNames(t *testing.T, s query.Scan) []string {
 		got = append(got, fmt.Sprintf("%d:%s", id, name))
 	}
 }
+
+func TestSortScanRestorePosition(t *testing.T) {
+	tests := []struct {
+		name string
+		runs [][]int32
+		// read is how many records are read before the position is saved.
+		read int
+		// wantCurrent is the id of the record the scan is on once put back.
+		wantCurrent int32
+		// wantRest is the ids read after it, once put back.
+		wantRest []int32
+	}{
+		{
+			name:        "given two runs read to the middle, when the position is saved, the scan read to the end and put back, then it is on the saved record and reads the rest again",
+			runs:        [][]int32{{1, 3, 5}, {2, 4, 6}},
+			read:        3,
+			wantCurrent: 3,
+			wantRest:    []int32{4, 5, 6},
+		},
+		{
+			name:        "given two runs, when the position is saved before both run out and the scan is put back after, then it reads the records it had read past again",
+			runs:        [][]int32{{1, 2}, {3, 4}},
+			read:        2,
+			wantCurrent: 2,
+			wantRest:    []int32{3, 4},
+		},
+		{
+			name:        "given two runs, when the position is saved on a record of the first and put back after reading on in the second, then it is on the record of the first",
+			runs:        [][]int32{{1, 3}, {2, 4}},
+			read:        1,
+			wantCurrent: 1,
+			wantRest:    []int32{2, 3, 4},
+		},
+		{
+			name:        "given two runs, when the position is saved after the first has run out, then the scan put back does not read the first again",
+			runs:        [][]int32{{1}, {2, 3}},
+			read:        2,
+			wantCurrent: 2,
+			wantRest:    []int32{3},
+		},
+		{
+			name:        "given an empty run and another, when the position is saved and the scan put back, then it reads the rest of the other",
+			runs:        [][]int32{{}, {1, 2}},
+			read:        1,
+			wantCurrent: 1,
+			wantRest:    []int32{2},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+
+			s := mustNewSortScan(t, tx, tt.runs...)
+			defer s.Close()
+
+			for range tt.read {
+				if ok, err := s.MoveToNextRecord(); err != nil || !ok {
+					t.Fatalf("MoveToNextRecord() = %v, %v, want true, nil", ok, err)
+				}
+			}
+			pos, err := s.SavePosition()
+			if err != nil {
+				t.Fatalf("SavePosition() error = %v", err)
+			}
+			readRestOfIDs(t, s)
+
+			if err := s.RestorePosition(pos); err != nil {
+				t.Fatalf("RestorePosition() error = %v", err)
+			}
+
+			got, err := s.GetInt("id")
+			if err != nil {
+				t.Fatalf("GetInt(%q) error = %v", "id", err)
+			}
+			if got != tt.wantCurrent {
+				t.Errorf("the scan is on id %d, want %d", got, tt.wantCurrent)
+			}
+			if rest := readRestOfIDs(t, s); !slices.Equal(rest, tt.wantRest) {
+				t.Errorf("the scan read on %v, want %v", rest, tt.wantRest)
+			}
+		})
+	}
+}
+
+// readRestOfIDs reads the id of every record a scan gives back from where it
+// is, without moving it back to its start.
+func readRestOfIDs(t *testing.T, s query.Scan) []int32 {
+	t.Helper()
+
+	ids := []int32{}
+	for {
+		ok, err := s.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !ok {
+			return ids
+		}
+
+		id, err := s.GetInt("id")
+		if err != nil {
+			t.Fatalf("GetInt(%q) error = %v", "id", err)
+		}
+		ids = append(ids, id)
+	}
+}
