@@ -46,6 +46,19 @@ func NewSortPlan(tx *transaction.Transaction, src Plan, sortFields ...string) *S
 // src is read once, while it is split into runs, and closed before the runs
 // are merged, so the scan handed back holds only the last runs.
 func (sp *SortPlan) Open() (query.Scan, error) {
+	ss, err := sp.openSortScan()
+	if err != nil {
+		// Returned as it is, a nil *SortScan would be a query.Scan that is not
+		// nil.
+		return nil, err
+	}
+
+	return ss, nil
+}
+
+// openSortScan is Open, returning the scan as the sort scan it is, for a
+// merge join, which puts the scan of its right side back to where it was.
+func (sp *SortPlan) openSortScan() (*materialize.SortScan, error) {
 	src, err := sp.src.Open()
 	if err != nil {
 		return nil, err
