@@ -632,6 +632,71 @@ func TestBufferManagerUnpin(t *testing.T) {
 	}
 }
 
+func TestBufferManagerAvailable(t *testing.T) {
+	const poolSize = 3
+
+	tests := []struct {
+		name string
+		// pinBlocks are the block numbers pinned in order.
+		pinBlocks []int
+		// unpins is how many of those pins are released, from the first.
+		unpins int
+		want   int
+	}{
+		{
+			name:      "given a pool of 3 buffers with nothing pinned, when asked, then all 3 are available",
+			pinBlocks: nil,
+			unpins:    0,
+			want:      poolSize,
+		},
+		{
+			name:      "given a pool of 3 buffers, when two different blocks are pinned, then 1 is available",
+			pinBlocks: []int{0, 1},
+			unpins:    0,
+			want:      poolSize - 2,
+		},
+		{
+			name:      "given a pool of 3 buffers, when the same block is pinned twice, then 2 are available because it takes one buffer",
+			pinBlocks: []int{0, 0},
+			unpins:    0,
+			want:      poolSize - 1,
+		},
+		{
+			name:      "given a pool of 3 buffers with two different blocks pinned, when one is unpinned, then 2 are available",
+			pinBlocks: []int{0, 1},
+			unpins:    1,
+			want:      poolSize - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm := newTestManagers(t, testBlockSize)
+			prepareDataFile(t, fm, []int32{0, 0})
+			bm, err := NewBufferManager(fm, lm, poolSize)
+			if err != nil {
+				t.Fatalf("NewBufferManager() error = %v", err)
+			}
+
+			bufs := make([]*Buffer, 0, len(tt.pinBlocks))
+			for _, blkNum := range tt.pinBlocks {
+				buf, err := bm.Pin(filemanager.NewBlockId(testDataFile, blkNum))
+				if err != nil {
+					t.Fatalf("Pin() error = %v", err)
+				}
+				bufs = append(bufs, buf)
+			}
+			for _, buf := range bufs[:tt.unpins] {
+				bm.Unpin(buf)
+			}
+
+			if got := bm.Available(); got != tt.want {
+				t.Errorf("Available() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFlushAll(t *testing.T) {
 	onDisk := []int32{100, 101, 102}
 	inMemory := []int32{900, 901, 902}

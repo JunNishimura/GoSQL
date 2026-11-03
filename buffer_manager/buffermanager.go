@@ -146,6 +146,15 @@ func (bm *BufferManager) Unpin(buf *Buffer) {
 	}
 }
 
+// Available returns how many buffers in the pool are not pinned, which is how
+// many more blocks can be pinned without waiting for one to be unpinned.
+func (bm *BufferManager) Available() int {
+	bm.mu.Lock()
+	defer bm.mu.Unlock()
+
+	return bm.numAvailable
+}
+
 func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 	return bm.bufferByBlock[*blk]
 }
