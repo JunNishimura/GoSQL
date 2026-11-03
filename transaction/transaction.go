@@ -98,6 +98,13 @@ func (tx *Transaction) Unpin(blk *filemanager.BlockId) {
 	tx.buffers.Unpin(blk)
 }
 
+// AvailableBuffers returns how many buffers in the pool are not pinned. The
+// pool is shared, so this counts the pins of every transaction, not only this
+// one's, and another transaction may take some of them before this one does.
+func (tx *Transaction) AvailableBuffers() int {
+	return tx.bufferManager.Available()
+}
+
 // GetInt returns the int at offset in blk.
 //
 // No lock is taken here: Pin already took the shared one, and reaching this
