@@ -23,6 +23,15 @@ var ErrNoCurrentRecord = errors.New("no current record")
 // One table is one file, so the name of the table is enough to find it.
 const tableFileExtension = ".tbl"
 
+// TableFileName is the file the records of tableName are kept in.
+//
+// It is exported for the scans that reach a table's blocks by number rather
+// than through a TableScan, such as one that pins a chunk of them at once, so
+// that they find the same file this one does.
+func TableFileName(tableName string) string {
+	return tableName + tableFileExtension
+}
+
 // beforeFirstSlot is where a scan sits when it has moved to a block but has not
 // yet looked at any of its slots.
 //
@@ -77,7 +86,7 @@ func NewTableScan(tx *transaction.Transaction, tableName string, layout *recordm
 	ts := &TableScan{
 		tx:       tx,
 		layout:   layout,
-		fileName: tableName + tableFileExtension,
+		fileName: TableFileName(tableName),
 	}
 
 	size, err := tx.Size(ts.fileName)
