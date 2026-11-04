@@ -306,6 +306,62 @@ func TestTransactionUnpin(t *testing.T) {
 	})
 }
 
+func TestTransactionAvailableBuffers(t *testing.T) {
+	const poolSize = 4
+
+	tests := []struct {
+		name string
+		// pinsByOther is how many blocks another transaction pins before this
+		// one asks.
+		pinsByOther int
+		// pinsBySelf is how many blocks this transaction pins before it asks.
+		pinsBySelf int
+		want       int
+	}{
+		{
+			name:        "given a pool of 4 buffers, when the transaction has pinned 2 blocks, then 2 are available",
+			pinsByOther: 0,
+			pinsBySelf:  2,
+			want:        poolSize - 2,
+		},
+		{
+			name:        "given a pool of 4 buffers, when another transaction has pinned 1 block, then 3 are available because the pool is shared",
+			pinsByOther: 1,
+			pinsBySelf:  0,
+			want:        poolSize - 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, lm, bm, lt := newTestDepsWithPool(t, poolSize)
+			other, err := NewTransaction(fm, lm, bm, lt, 1)
+			if err != nil {
+				t.Fatalf("NewTransaction() error = %v", err)
+			}
+			tx, err := NewTransaction(fm, lm, bm, lt, 2)
+			if err != nil {
+				t.Fatalf("NewTransaction() error = %v", err)
+			}
+
+			for range tt.pinsByOther {
+				if err := other.Pin(appendBlock(t, fm)); err != nil {
+					t.Fatalf("Pin() error = %v", err)
+				}
+			}
+			for range tt.pinsBySelf {
+				if err := tx.Pin(appendBlock(t, fm)); err != nil {
+					t.Fatalf("Pin() error = %v", err)
+				}
+			}
+
+			if got := tx.AvailableBuffers(); got != tt.want {
+				t.Errorf("AvailableBuffers() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTransactionSetAndGet(t *testing.T) {
 	tests := []struct {
 		name string
