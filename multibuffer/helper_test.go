@@ -18,8 +18,15 @@ const (
 	testBlockSize         = 400
 	testNumBuffers        = 8
 	testStringFieldLength = 10
-	testFileName          = "chunk.tbl"
+	// testTableName is the table the blocks a test writes belong to, read
+	// through chunks.
+	testTableName = "chunk"
+	// testLeftTableName is the table the left side of a product is read from.
+	testLeftTableName = "left"
 )
+
+// testFileName is the file of testTableName.
+var testFileName = query.TableFileName(testTableName)
 
 // newTestTransaction builds a transaction over a database of its own, so that
 // one test cannot see the tables another made.
@@ -102,6 +109,69 @@ func writeBlocks(t *testing.T, tx *transaction.Transaction, fileName string, lay
 		}
 
 		tx.Unpin(blk)
+	}
+}
+
+// openLeftScan writes a record of each of lids into a table of one int field
+// "lid", and returns a scan of it before its first record, for the left side
+// of a product. The scan holds one buffer pinned.
+func openLeftScan(t *testing.T, tx *transaction.Transaction, lids []int32) *query.TableScan {
+	t.Helper()
+
+	schema := recordmanager.NewSchema()
+	if err := schema.AddIntField("lid"); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", "lid", err)
+	}
+	ts, err := query.NewTableScan(tx, testLeftTableName, recordmanager.NewLayout(schema))
+	if err != nil {
+		t.Fatalf("NewTableScan() error = %v", err)
+	}
+	for _, lid := range lids {
+		if err := ts.MoveToNewRecord(); err != nil {
+			t.Fatalf("MoveToNewRecord() error = %v", err)
+		}
+		if err := ts.SetInt("lid", lid); err != nil {
+			t.Fatalf("SetInt() error = %v", err)
+		}
+	}
+	if err := ts.MoveBeforeFirstRecord(); err != nil {
+		t.Fatalf("MoveBeforeFirstRecord() error = %v", err)
+	}
+
+	return ts
+}
+
+// pair is a record of a product, as the lid of its left side and the id of its
+// right.
+type pair struct {
+	lid int32
+	id  int32
+}
+
+// readPairs moves s through the records it has left and returns their lids
+// and ids.
+func readPairs(t *testing.T, s query.Scan) []pair {
+	t.Helper()
+
+	var pairs []pair
+	for {
+		ok, err := s.MoveToNextRecord()
+		if err != nil {
+			t.Fatalf("MoveToNextRecord() error = %v", err)
+		}
+		if !ok {
+			return pairs
+		}
+
+		lid, err := s.GetInt("lid")
+		if err != nil {
+			t.Fatalf("GetInt(%q) error = %v", "lid", err)
+		}
+		id, err := s.GetInt("id")
+		if err != nil {
+			t.Fatalf("GetInt(%q) error = %v", "id", err)
+		}
+		pairs = append(pairs, pair{lid: lid, id: id})
 	}
 }
 
