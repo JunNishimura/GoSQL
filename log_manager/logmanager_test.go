@@ -182,14 +182,14 @@ func TestFlush(t *testing.T) {
 		wantFlushed      bool
 		wantLastSavedLSN int
 		// wantSynced is whether the log file is synced afterwards. The log
-		// manager starts by writing its first block, so the file is unsynced
-		// unless the flush syncs it.
+		// manager writes its first block when it is created, so the file is
+		// unsynced unless the flush syncs it.
 		wantSynced bool
 	}{
 		{
-			// A buffer flushes the log before writing its block, and a commit
-			// before returning, and both count on the record surviving a crash
-			// of the OS, which takes a sync and not only a write.
+			// A buffer flushes the log before it writes its block, and a commit
+			// flushes it before it returns. Both need the record to survive an
+			// OS crash, which requires a sync and not only a write.
 			name:             "given an lsn newer than what is on disk, it writes the page out and syncs the log file",
 			lastSavedLSN:     0,
 			latestLSN:        5,
@@ -427,7 +427,7 @@ func TestArchive(t *testing.T) {
 			t.Fatalf("Archive() error = %v", err)
 		}
 
-		// What is left behind is a log with room in it and nothing written yet.
+		// The file left in place is a log with free space and no records yet.
 		length, err := fm.Length(testLogFile)
 		if err != nil {
 			t.Fatalf("Length() error = %v", err)
@@ -444,9 +444,9 @@ func TestArchive(t *testing.T) {
 		}
 	})
 
-	// Archiving exists to keep the log readable afterwards, so everything written
-	// before it has to be in the file that was moved, including whatever was still
-	// only in memory.
+	// The purpose of an archive is to keep the log readable. The moved file must
+	// therefore hold everything written before the archive, including the records
+	// that were still only in memory.
 	t.Run("given records that were still only in memory, it writes them out so the archived file holds every one", func(t *testing.T) {
 		fm := newTestFileManager(t)
 		lm, err := NewLogManager(fm, testLogFile)
@@ -490,10 +490,10 @@ func TestArchive(t *testing.T) {
 		}
 	})
 
-	// The LSN counter carries on rather than starting over. Buffers still hold the
-	// numbers they were given before the archive, and those records are on disk in
-	// the archived file, so nothing is waiting to be written: starting over would
-	// make every one of them look newer than the log and force a pointless flush.
+	// The LSN continues and does not restart. Buffers still hold the LSNs they
+	// were given before the archive, and those records are on disk in the
+	// archived file. If the LSN restarted, every such buffer would appear newer
+	// than the log and would force an unnecessary flush.
 	t.Run("it carries the lsn on rather than starting over, so buffers do not look newer than the log", func(t *testing.T) {
 		fm := newTestFileManager(t)
 		lm, err := NewLogManager(fm, testLogFile)
