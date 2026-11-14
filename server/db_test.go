@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -468,6 +469,14 @@ func TestDBPlannerReadsThroughIndexes(t *testing.T) {
 // As for a select, a join is told to go through an index by what it reads: the
 // record of id 1 written past the planner is in the table but not in its index,
 // so a join through the index does not pair it with anything.
+//
+// That the planner joins through the index here rests on its statistics, not
+// on the index being the cheaper way in general. The tables are too small for
+// their statistics to count any record, so the join through the index and the
+// product are both reckoned at one block, and a tie goes to the index. With
+// some fifty records in test the product reckons fewer blocks and is taken, so
+// this test is to be reworked if the tables grow or the statistics come to
+// count records written in the same transaction.
 func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
 	t.Run("given a table of oids 1 and 2 and a table indexed on id holding ids 1 and 2 put in through the planner and another id 1 written past it, when a query joining them on oid = id is run through the planner, then it joins through the index and pairs each oid with only the record the index was told of", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -492,6 +501,30 @@ func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
 
 		if got := selectIDs(t, db, tx, "select id, oid from other, test where oid = id"); !slices.Equal(got, []int32{1, 2}) {
 			t.Errorf("the query gives back ids %v, want [1 2], one pair for each oid", got)
+		}
+	})
+}
+
+// A planner that only puts a select over the whole query would take a term on
+// a field no table has and fail only once a record is tested against it. One
+// that places each term where its fields are read has nowhere to put such a
+// term, and says so before anything is read.
+func TestDBPlannerRefusesUnknownFields(t *testing.T) {
+	t.Run("given a table of id, when a query where a field it does not have is 1 is planned through the planner, then planning reports ErrFieldNotFound", func(t *testing.T) {
+		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		executeUpdates(t, db, tx, "create table test (id int)")
+
+		sql := "select id from test where missing = 1"
+		if _, err := db.Planner().CreateQueryPlan(sql, tx); !errors.Is(err, recordmanager.ErrFieldNotFound) {
+			t.Errorf("CreateQueryPlan(%q) error = %v, want %v", sql, err, recordmanager.ErrFieldNotFound)
 		}
 	})
 }
