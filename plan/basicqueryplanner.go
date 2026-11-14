@@ -1,8 +1,6 @@
 package plan
 
 import (
-	"fmt"
-
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
 	"github.com/JunNishimura/GoSQL/parse"
 	"github.com/JunNishimura/GoSQL/transaction"
@@ -69,13 +67,9 @@ func (qp *BasicQueryPlanner) planTable(tableName string, tx *transaction.Transac
 		return NewTablePlan(tx, tableName, qp.mm)
 	}
 
-	parser, err := parse.NewParser(definition)
+	viewData, err := parseViewDefinition(tableName, definition)
 	if err != nil {
-		return nil, fmt.Errorf("parse the definition of view %q: %w", tableName, err)
-	}
-	viewData, err := parser.Query()
-	if err != nil {
-		return nil, fmt.Errorf("parse the definition of view %q: %w", tableName, err)
+		return nil, err
 	}
 
 	return qp.CreatePlan(viewData, tx)

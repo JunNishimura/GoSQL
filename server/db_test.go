@@ -1,9 +1,11 @@
 package server
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -467,6 +469,14 @@ func TestDBPlannerReadsThroughIndexes(t *testing.T) {
 // As for a select, a join is told to go through an index by what it reads: the
 // record of id 1 written past the planner is in the table but not in its index,
 // so a join through the index does not pair it with anything.
+//
+// That the planner joins through the index here rests on its statistics, not
+// on the index being the cheaper way in general. The tables are too small for
+// their statistics to count any record, so the join through the index and the
+// product are both reckoned at one block, and a tie goes to the index. With
+// some fifty records in test the product reckons fewer blocks and is taken, so
+// this test is to be reworked if the tables grow or the statistics come to
+// count records written in the same transaction.
 func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
 	t.Run("given a table of oids 1 and 2 and a table indexed on id holding ids 1 and 2 put in through the planner and another id 1 written past it, when a query joining them on oid = id is run through the planner, then it joins through the index and pairs each oid with only the record the index was told of", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -491,6 +501,30 @@ func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
 
 		if got := selectIDs(t, db, tx, "select id, oid from other, test where oid = id"); !slices.Equal(got, []int32{1, 2}) {
 			t.Errorf("the query gives back ids %v, want [1 2], one pair for each oid", got)
+		}
+	})
+}
+
+// A planner that only puts a select over the whole query would take a term on
+// a field no table has and fail only once a record is tested against it. One
+// that places each term where its fields are read has nowhere to put such a
+// term, and says so before anything is read.
+func TestDBPlannerRefusesUnknownFields(t *testing.T) {
+	t.Run("given a table of id, when a query where a field it does not have is 1 is planned through the planner, then planning reports ErrFieldNotFound", func(t *testing.T) {
+		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		tx, err := db.NewTransaction()
+		if err != nil {
+			t.Fatalf("NewTransaction() error = %v", err)
+		}
+
+		executeUpdates(t, db, tx, "create table test (id int)")
+
+		sql := "select id from test where missing = 1"
+		if _, err := db.Planner().CreateQueryPlan(sql, tx); !errors.Is(err, recordmanager.ErrFieldNotFound) {
+			t.Errorf("CreateQueryPlan(%q) error = %v, want %v", sql, err, recordmanager.ErrFieldNotFound)
 		}
 	})
 }
@@ -555,9 +589,13 @@ func countIndexed(t *testing.T, db *DB, tx *transaction.Transaction, tableName, 
 	}
 }
 
-// openFDs reports how many files the test process has open, skipping the test
-// where the system does not list them under /proc.
-func openFDs(t *testing.T) int {
+// openFDs reports how many files under dir the test process has open, skipping
+// the test where the system does not list them under /proc.
+//
+// Only files under dir are counted because the other tests leave databases
+// open, and the garbage collector closes their files whenever it gets to them;
+// a count of every file the process has open goes down by those at any time.
+func openFDs(t *testing.T, dir string) int {
 	t.Helper()
 
 	entries, err := os.ReadDir("/proc/self/fd")
@@ -565,13 +603,31 @@ func openFDs(t *testing.T) int {
 		t.Skipf("cannot count open files: %v", err)
 	}
 
-	return len(entries)
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q) error = %v", dir, err)
+	}
+
+	count := 0
+	for _, entry := range entries {
+		// A file closed since the directory was read has no link to follow,
+		// and is not open any more either.
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(target, root+string(filepath.Separator)) {
+			count++
+		}
+	}
+
+	return count
 }
 
 func TestDBClose(t *testing.T) {
 	t.Run("given a database that has had a table made in it, when it is closed, then every file it opened is closed", func(t *testing.T) {
 		dir := t.TempDir()
-		before := openFDs(t)
+		before := openFDs(t, dir)
 		db, err := Open(dir, testBlockSize, testNumBuffers)
 		if err != nil {
 			t.Fatalf("Open() error = %v", err)
@@ -586,7 +642,7 @@ func TestDBClose(t *testing.T) {
 		}
 		// Without files open to start with, the count after Close would match
 		// whether or not Close closed anything.
-		if opened := openFDs(t); opened <= before {
+		if opened := openFDs(t, dir); opened <= before {
 			t.Fatalf("the process has %d files open before Close, want more than the %d before Open", opened, before)
 		}
 
@@ -594,7 +650,7 @@ func TestDBClose(t *testing.T) {
 			t.Fatalf("Close() error = %v", err)
 		}
 
-		if after := openFDs(t); after != before {
+		if after := openFDs(t, dir); after != before {
 			t.Errorf("the process has %d files open, want %d as before Open", after, before)
 		}
 	})
@@ -604,13 +660,13 @@ func TestDBClose(t *testing.T) {
 	t.Run("given a block size too small for a catalog record, when a database is opened, then it fails and every file it opened is closed", func(t *testing.T) {
 		const tooSmallBlockSize = 100
 		dir := t.TempDir()
-		before := openFDs(t)
+		before := openFDs(t, dir)
 
 		if _, err := Open(dir, tooSmallBlockSize, testNumBuffers); err == nil {
 			t.Fatal("Open() error = nil, want an error")
 		}
 
-		if after := openFDs(t); after != before {
+		if after := openFDs(t, dir); after != before {
 			t.Errorf("the process has %d files open, want %d as before Open", after, before)
 		}
 	})
