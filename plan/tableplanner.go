@@ -6,6 +6,7 @@ import (
 
 	metadatamanager "github.com/JunNishimura/GoSQL/metadata_manager"
 	"github.com/JunNishimura/GoSQL/query"
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
@@ -15,13 +16,31 @@ import (
 //
 // Each plan tests the terms of the query's predicate that can be tested where
 // it reads, so that what it hands on is as small as the predicate lets it be.
+//
+// The name may be a view as well as a stored table. A view is taken as a table
+// whose records are those its plan gives back and which has no index, so it
+// is read in full and joined by a product, under the same terms a table would
+// be.
 type tablePlanner struct {
 	tx   *transaction.Transaction
 	pred query.Predicate
-	// stored is the plan of reading the whole of the table.
+	// p is the plan of reading the whole of the table, or of the view.
+	p Plan
+	// stored is p, for a stored table, and nil for a view.
 	stored *TablePlan
-	// indexes are the indexes of the table, by the field each is on.
+	// indexes are the indexes of the table, by the field each is on, and none
+	// for a view.
 	indexes map[string]*metadatamanager.IndexInfo
+}
+
+// newViewPlanner returns the planner of a view, whose definition p is the plan
+// of, under the query predicate pred.
+func newViewPlanner(tx *transaction.Transaction, p Plan, pred query.Predicate) *tablePlanner {
+	return &tablePlanner{
+		tx:   tx,
+		pred: pred,
+		p:    p,
+	}
 }
 
 // newTablePlanner returns the planner of the stored table tableName under the
@@ -40,16 +59,22 @@ func newTablePlanner(tx *transaction.Transaction, tableName string, pred query.P
 	return &tablePlanner{
 		tx:      tx,
 		pred:    pred,
+		p:       stored,
 		stored:  stored,
 		indexes: indexes,
 	}, nil
+}
+
+// schema is the fields of the records of the table, or of the view.
+func (tp *tablePlanner) schema() *recordmanager.Schema {
+	return tp.p.Schema()
 }
 
 // makeSelectPlan returns the plan of reading the table on its own: through an
 // index where the predicate equates an indexed field with a constant, and
 // under a select of the terms that can be tested against its records alone.
 func (tp *tablePlanner) makeSelectPlan() Plan {
-	var p Plan = tp.stored
+	p := tp.p
 	if indexSelect, ok := cheapestIndexSelect(tp.stored, tp.indexes, tp.pred); ok {
 		p = indexSelect
 	}
@@ -66,7 +91,7 @@ func (tp *tablePlanner) makeSelectPlan() Plan {
 // cheaperJoin weighs them. Either way, the terms on the table alone are tested
 // on its side of the join and the join terms over the join.
 func (tp *tablePlanner) makeJoinPlan(current Plan) (Plan, bool, error) {
-	joinPred, ok := tp.pred.JoinSubPred(tp.stored.Schema(), current.Schema())
+	joinPred, ok := tp.pred.JoinSubPred(tp.schema(), current.Schema())
 	if !ok {
 		return nil, false, nil
 	}
@@ -139,7 +164,7 @@ func (tp *tablePlanner) makeProductPlan(current Plan) (Plan, error) {
 // can be tested against the table's records alone, or p itself if there are
 // none.
 func (tp *tablePlanner) addSelectPred(p Plan) Plan {
-	selectPred, ok := tp.pred.SelectSubPred(tp.stored.Schema())
+	selectPred, ok := tp.pred.SelectSubPred(tp.schema())
 	if !ok {
 		return p
 	}

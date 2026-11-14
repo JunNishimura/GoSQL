@@ -55,10 +55,15 @@ func NewHeuristicQueryPlanner(mm *metadatamanager.MetadataManager) *HeuristicQue
 // A term naming a field none of the tables has is refused with
 // recordmanager.ErrFieldNotFound. It could be tested nowhere, and planning
 // the rest would quietly keep the records it was written to drop.
+//
+// A name in the from clause that is a view is planned from its definition by
+// this planner, and the plan that gives is then taken as one more table, with
+// the fields the definition selects. A view defined over another view is
+// expanded in turn by the same call.
 func (qp *HeuristicQueryPlanner) CreatePlan(data parse.QueryData, tx *transaction.Transaction) (Plan, error) {
 	planners := make([]*tablePlanner, 0, len(data.Tables()))
 	for _, tableName := range data.Tables() {
-		tp, err := newTablePlanner(tx, tableName, data.Predicate(), qp.mm)
+		tp, err := qp.newPlanner(tableName, data.Predicate(), tx)
 		if err != nil {
 			return nil, err
 		}
@@ -98,12 +103,37 @@ func (qp *HeuristicQueryPlanner) CreatePlan(data parse.QueryData, tx *transactio
 	return NewProjectPlan(current, data.Fields()...)
 }
 
+// newPlanner returns the planner of one name of a from clause under the query
+// predicate pred: of a view, planned from its definition, or of a stored
+// table.
+func (qp *HeuristicQueryPlanner) newPlanner(tableName string, pred query.Predicate, tx *transaction.Transaction) (*tablePlanner, error) {
+	definition, isView, err := qp.mm.GetViewDefinition(tx, tableName)
+	if err != nil {
+		return nil, err
+	}
+	if !isView {
+		return newTablePlanner(tx, tableName, pred, qp.mm)
+	}
+
+	viewData, err := parseViewDefinition(tableName, definition)
+	if err != nil {
+		return nil, err
+	}
+
+	p, err := qp.CreatePlan(viewData, tx)
+	if err != nil {
+		return nil, err
+	}
+
+	return newViewPlanner(tx, p, pred), nil
+}
+
 // checkFieldsKnown reports recordmanager.ErrFieldNotFound for the first term
 // of pred with a side that none of the tables planners plan can evaluate.
 func checkFieldsKnown(pred query.Predicate, planners []*tablePlanner) error {
 	known := func(e query.Expression) bool {
 		return slices.ContainsFunc(planners, func(tp *tablePlanner) bool {
-			return e.AppliesTo(tp.stored.Schema())
+			return e.AppliesTo(tp.schema())
 		})
 	}
 

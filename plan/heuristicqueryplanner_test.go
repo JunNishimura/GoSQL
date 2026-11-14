@@ -77,6 +77,57 @@ func TestHeuristicQueryPlannerCreatePlan(t *testing.T) {
 	})
 }
 
+// A view in the from clause is planned from its definition, by the same
+// planner, and then taken as one more table: one with the fields the
+// definition selects and no index of its own.
+func TestHeuristicQueryPlannerCreatePlanViews(t *testing.T) {
+	t.Run("given a view of the test table where id is 3, which is indexed on id, when a query reading the view is planned, then the plan reads the table through the index for 3", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, testRecordCount)
+		createIndexesThrough(t, tx, mm, []string{"id"})
+		mustCreateView(t, tx, mm, "v", "select id from test where id = 3")
+
+		p := mustCreateHeuristicPlan(t, tx, mm, "select id from v")
+
+		if got, ok := indexSearchOf(p); !ok || got != query.NewIntConstant(3) {
+			t.Errorf("the plan reads through an index for %s (%t), want one for 3", got, ok)
+		}
+		if got, want := openAndReadIDs(t, p), []int32{3}; !slices.Equal(got, want) {
+			t.Errorf("the plan read ids %v, want %v", got, want)
+		}
+	})
+
+	t.Run("given a view of the ids of a table of 20 records and a table of 3, when a query joining them where id is oid and id is 1 is planned, then the plan reads the one pair of 1", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, testRecordCount)
+		createOtherTable(t, tx, mm, 3)
+		mustCreateView(t, tx, mm, "v", "select id from test")
+
+		p := mustCreateHeuristicPlan(t, tx, mm, "select id, oid from v, other where id = oid and id = 1")
+
+		if got, want := sortedPairs(openAndReadIDPairs(t, p)), [][2]int32{{1, 1}}; !slices.Equal(got, want) {
+			t.Errorf("the plan read (id, oid) pairs %v, want %v", got, want)
+		}
+	})
+
+	// The view selects id alone, so name is a field of the table under it but
+	// not of the view, and a query reading the view cannot name it.
+	t.Run("given a view of the ids of the test table, when a query reading the view where name is 'name1' is planned, then it reports ErrFieldNotFound", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, testRecordCount)
+		mustCreateView(t, tx, mm, "v", "select id from test")
+
+		sql := "select id from v where name = 'name1'"
+		_, err := NewHeuristicQueryPlanner(mm).CreatePlan(mustParseQuery(t, sql), tx)
+		if !errors.Is(err, recordmanager.ErrFieldNotFound) {
+			t.Errorf("CreatePlan(%q) error = %v, want %v", sql, err, recordmanager.ErrFieldNotFound)
+		}
+	})
+}
+
 // The order a plan joins its tables in is read off the plan itself, left to
 // right. The guesses that order turns on are worked out from the statistics,
 // which guess 1 + n/3 distinct values for every field of a table of n records:
