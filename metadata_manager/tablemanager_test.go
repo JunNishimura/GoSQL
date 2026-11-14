@@ -10,25 +10,23 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// The widths every expected number in this file is built from, spelled out
-// once:
+// The sizes that every expected number in this file is based on:
 //
 //	an int          4 bytes
 //	a varchar(n)    4 + 4n bytes
 //	the in-use flag 4 bytes, at the front of every slot
 //
-// The catalogs describe themselves, so their own widths are asserted twice
-// over: once as the layouts the manager builds in code, and again as the rows
-// those layouts are written into.
+// The catalogs describe themselves, so their sizes are asserted twice: once
+// in the layouts that the manager builds in code, and once in the rows that
+// are written with those layouts.
 //
 //	table_catalog   4 + (4 + 64) + 4                     =  76 bytes
 //	field_catalog   4 + (4 + 64) + (4 + 64) + 4 + 4 + 4  = 152 bytes
 //
-// Every expected number below is written as a literal rather than asked of a
-// layout, so that a change to any of those widths shows up here as a failing
-// test. Asking a layout would only check that the catalogs agree with whatever
-// the layout said, which they would go on doing after the format changed
-// underneath both.
+// Every expected number below is a literal and is not read from a layout. A
+// change to any of these sizes then fails a test here. Reading the numbers
+// from a layout would only check that the catalogs match the layout, which
+// they would still do after a format change that affects both.
 const (
 	tableCatalogSlotSize = 76
 	fieldCatalogSlotSize = 152
@@ -112,16 +110,17 @@ func TestNewTableManager(t *testing.T) {
 				t.Fatalf("NewTableManager() error = %v", err)
 			}
 
-			// The order the fields come back in is part of what is asserted: a
-			// layout assigns offsets by walking them in order, so a catalog
-			// whose fields were added in another order is another record
-			// format, whatever the offsets say.
+			// The order of the returned fields is part of the assertion. A
+			// layout assigns offsets in field order, so a catalog whose fields
+			// were added in another order has a different record format,
+			// whatever its offsets are.
 			assertLayout(t, tt.layout(tm), tt.want)
 		})
 	}
 }
 
-// The table the tests below create: an int and a varchar of 20 characters.
+// The table that the tests below create: an int and a varchar of 20
+// characters.
 //
 //	test_table  4 + 4 + (4 + 80) = 92 bytes, with "id" at offset 4 and "name"
 //	            at offset 8
@@ -131,9 +130,9 @@ const (
 	testTableSlotSize     = 92
 )
 
-// newTestSchema is the schema of testTableName. One field of each kind is what
-// makes the field catalog rows worth reading: an int and a varchar are written
-// down differently, since only one of the two has a length.
+// newTestSchema returns the schema of testTableName. It has one field of each
+// type, so that the field catalog rows differ: an int and a varchar are
+// stored differently, because only a varchar has a length.
 func newTestSchema(t *testing.T) *recordmanager.Schema {
 	t.Helper()
 
@@ -210,8 +209,8 @@ func TestTableManagerCreateTable(t *testing.T) {
 	})
 }
 
-// The catalogs describe themselves, so creating them writes rows about the two
-// of them into the two of them.
+// The catalogs describe themselves, so creating them writes rows for both
+// catalogs into both catalogs.
 func TestTableManagerCreateCatalogTables(t *testing.T) {
 	t.Run("when the catalogs are created, then the table catalog holds a row for itself and one for the field catalog", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -301,10 +300,10 @@ func TestTableManagerCreateCatalogTables(t *testing.T) {
 	})
 }
 
-// A name the catalogs cannot hold is refused rather than written. The record
-// page would refuse it too, but only partway through, with a message about a
-// field of the field catalog rather than about the name the caller passed, and
-// only after the rows ahead of it had already been written.
+// A name that is too long for the catalogs is rejected and not written. The
+// record page would reject it too, but only partway through the write. Its
+// error would name a field of the field catalog and not the name that the
+// caller passed, and the rows before it would already be written.
 func TestTableManagerRejectsANameLongerThanTheCatalogsHold(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -340,9 +339,9 @@ func TestTableManagerRejectsANameLongerThanTheCatalogsHold(t *testing.T) {
 				t.Errorf("error = %v, want %v", err, ErrNameTooLong)
 			}
 
-			// The refusal is worth little if it comes after some of the rows
-			// have been written: what is left behind is a table the catalogs
-			// half know about, which no later call has any reason to clean up.
+			// The error is of little use if some rows have already been
+			// written. The catalogs would then partly describe a table, and no
+			// later call would remove those rows.
 			if rows := readTableCatalog(t, tx, tm); len(rows) != 0 {
 				t.Errorf("the table catalog holds %+v, want nothing: the refused table was written anyway", rows)
 			}
@@ -353,8 +352,9 @@ func TestTableManagerRejectsANameLongerThanTheCatalogsHold(t *testing.T) {
 	}
 }
 
-// The second table the read tests need. Its one field is a varchar of its own
-// width, so that a layout carrying it cannot be mistaken for testTableName's.
+// The second table that the read tests need. Its only field is a varchar with
+// a different length, so that its layout cannot be confused with the layout
+// of testTableName.
 //
 //	other_table  4 + (4 + 120) = 128 bytes, with "title" at offset 4
 const (
@@ -362,8 +362,8 @@ const (
 	otherTableSlotSize = 128
 )
 
-// createTestTables puts two tables in the catalogs, so that reading one back is
-// a matter of picking rows out rather than of reading every row there is.
+// createTestTables adds two tables to the catalogs. Reading one of them then
+// requires selecting rows, not reading every row.
 func createTestTables(t *testing.T, tx *transaction.Transaction, tm *TableManager) {
 	t.Helper()
 
@@ -448,11 +448,11 @@ func TestTableManagerGetLayout(t *testing.T) {
 		}
 	})
 
-	// The catalogs describe themselves, so reading one of them back out of
-	// itself has to give the layout it was created from. That is the one read
-	// the rest of the database rests on: every other table's layout is read
-	// through these two, so if they do not come back as they went in, nothing
-	// read afterwards means anything.
+	// The catalogs describe themselves, so the layout of a catalog that is
+	// read from the catalog must equal the layout it was created with. The
+	// rest of the database depends on this read: the layout of every other
+	// table is read through these two catalogs. If their layouts were
+	// wrong, every later read would be wrong too.
 	t.Run("given the catalogs describing themselves, when the table catalog's layout is read back out of them, then it is the one it was created from", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		tm := mustNewTableManager(t)

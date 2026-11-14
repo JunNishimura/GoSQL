@@ -6,33 +6,34 @@ import (
 	"unicode/utf8"
 )
 
-// ErrNameTooLong reports a table, field, view or index name of more characters
-// than the catalogs were built to hold.
+// ErrNameTooLong is returned for a table, field, view or index name with more
+// characters than the catalogs can store.
 var ErrNameTooLong = errors.New("name too long")
 
-// maxNameLength is the longest name the catalogs can hold.
+// maxNameLength is the maximum length of a name in the catalogs.
 //
-// One limit covers all four kinds of name, because a name is written into more
-// than one catalog and has to fit wherever it goes. An index is the clearest
-// case: it is kept as a table, so its name is in the index catalog as an index
-// and in the table catalog as a table, and a limit that differed between the
-// two would be the smaller of them anyway.
+// One limit applies to all four kinds of name, because a name is written to
+// more than one catalog and must fit in each. An index is the clearest case.
+// It is stored as a table, so its name is in the index catalog as an index
+// name and in the table catalog as a table name. If the two limits differed,
+// the smaller one would apply anyway.
 //
-// The catalogs are tables, so a name in them is a varchar, and a varchar takes
-// up the room its limit allows rather than the room its value needs. Raising
-// this is therefore paid for by every catalog record, whether or not any name
-// is that long.
+// The catalogs are tables, so a name in them is a varchar. A varchar takes
+// the space of its limit, not of its value. A higher limit therefore
+// increases the size of every catalog record, whether or not any name is that
+// long.
 const maxNameLength = 16
 
-// checkNameFits refuses a name the catalogs cannot hold. what is the kind of
-// name it is, and goes in the message.
+// checkNameFits returns an error for a name that is too long for the
+// catalogs. what is the kind of name, and is used in the error message.
 //
-// A record page would refuse the same name on its own, since the catalogs hold
-// names in varchar fields of this width. What is gained by asking here is what
-// the caller is told: the record page speaks of a field of a catalog, and what
-// the caller passed was the name of a table, a view or an index.
+// A record page would reject the same name, because the catalogs store names
+// in varchar fields of this length. The check here gives the caller a better
+// error. The record page reports a field of a catalog, while the caller
+// passed the name of a table, a view or an index.
 //
-// The count is of characters because that is what a varchar's length means.
+// The length is counted in characters, because a varchar's declared length is
+// a character count.
 func checkNameFits(what string, name string) error {
 	if count := utf8.RuneCountInString(name); count > maxNameLength {
 		return fmt.Errorf("%s name %q is %d characters, and the catalogs hold %d: %w", what, name, count, maxNameLength, ErrNameTooLong)

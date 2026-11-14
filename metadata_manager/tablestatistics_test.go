@@ -35,10 +35,9 @@ func TestTableStatisticsRecordsOutput(t *testing.T) {
 	})
 }
 
-// The count is a guess made from the number of records alone, on the reasoning
-// that a field of a table tends to repeat each of its values a few times. It
-// never reaches zero, because a field of a table with no records still has the
-// one value a query could ask for and find nothing under.
+// The estimate is derived from the record count alone, on the assumption that
+// each value of a field occurs a few times. It is never zero. Even for a
+// table with no records, a query can search for one value, and finds nothing.
 func TestTableStatisticsDistinctValues(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -77,11 +76,11 @@ func TestTableStatisticsDistinctValues(t *testing.T) {
 		})
 	}
 
-	// The field is named in the call but not looked at, and this holds that
-	// down rather than leaving it to be found. A caller reading the guess for
-	// two fields of one table gets the same number twice, however unlike the
-	// two fields are, and a caller that wants better has to give this layer
-	// something it does not have today: what is actually in the field.
+	// The method takes the field name but does not use it, and this test
+	// documents that. A caller that reads the estimate for two fields of one
+	// table gets the same number twice, however different the fields are. A
+	// better estimate would need data that this layer does not have today:
+	// the actual contents of the field.
 	t.Run("given two fields of one table, when each one's distinct values are asked for, then the guess is the same for both", func(t *testing.T) {
 		stats := NewTableStatistics(7, 100)
 

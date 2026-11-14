@@ -10,8 +10,8 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// How many records of the test table go in a block, and a count that runs past
-// that, so a measured table is one that reaches into a second block.
+// The number of records of the test table per block, and a record count above
+// it, so that a measured table extends into a second block.
 //
 //	a block             800 bytes
 //	a test_table slot    92 bytes
@@ -21,16 +21,16 @@ const (
 	testTableRecordCount     = testTableRecordsPerBlock + 1
 )
 
-// tableCounts is what was measured about one table, flattened so that a whole
-// refresh can be compared in one go.
+// tableCounts holds the statistics of one table in a flat form, so that the
+// result of a whole refresh can be compared at once.
 type tableCounts struct {
 	blocks  int
 	records int
 }
 
 // newTestStatisticsManager builds a statistics manager over a database that
-// already holds the catalogs and the test table, which is the state every
-// measurement starts from.
+// already has the catalogs and the test table. Every test of the statistics
+// starts from that state.
 func newTestStatisticsManager(t *testing.T, tx *transaction.Transaction) *StatisticsManager {
 	t.Helper()
 
@@ -55,8 +55,8 @@ func TestNewStatisticsManager(t *testing.T) {
 			t.Errorf("tableManager = %p, want %p", sm.tableManager, tableManager)
 		}
 
-		// An empty map rather than a nil one: what is held here is written to
-		// as tables are asked about, and a nil map cannot be written to.
+		// The map must be empty and not nil. The manager writes to it when
+		// statistics are requested, and a write to a nil map panics.
 		if sm.statistics == nil {
 			t.Fatal("statistics = nil, want an empty map")
 		}
@@ -94,10 +94,10 @@ func TestStatisticsManagerCalculateTableStatistics(t *testing.T) {
 		}
 	})
 
-	// A table nothing has been written to still has the block a scan of it
-	// opens, and reading it still costs that block. Counting the blocks from
-	// the last record found would call it nothing at all, which would make an
-	// empty table the cheapest thing a plan could read and free to read twice.
+	// A table with no records still has the block that a scan of it opens,
+	// and reading it costs that block. A block count taken from the last
+	// record found would be zero. An empty table would then be the cheapest
+	// input of any plan, and reading it twice would cost nothing.
 	t.Run("given a table with no records in it, when it is measured, then it is one block holding nothing", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		sm := newTestStatisticsManager(t, tx)
@@ -121,9 +121,9 @@ func TestStatisticsManagerCalculateTableStatistics(t *testing.T) {
 	})
 }
 
-// A refresh measures every table the table catalog names, which is the two
-// catalogs as well as the tables a user made. The numbers below are what the
-// catalogs hold once the test table has been created:
+// A refresh processes every table in the table catalog: the two catalogs as
+// well as the user tables. The numbers below describe the catalogs after the
+// test table has been created:
 //
 //	table_catalog  3 rows, one per table, 10 to a block  -> 1 block
 //	field_catalog  9 rows, 2 + 5 for the catalogs and 2  -> 2 blocks
@@ -180,10 +180,10 @@ func TestStatisticsManagerRefreshStatistics(t *testing.T) {
 		}
 	})
 
-	// What a refresh holds afterwards is what the catalogs say now, not that
-	// with whatever was there before left underneath it. A table that has been
-	// dropped would otherwise keep its numbers for as long as the database ran,
-	// and a plan reading a table of that name later would be costed by them.
+	// After a refresh the manager holds statistics for the current catalogs
+	// only, and none of the old entries. Otherwise a dropped table would
+	// keep its statistics for as long as the database ran, and a later
+	// table with the same name would be costed with them.
 	t.Run("given statistics for a table the catalogs do not name, when the statistics are refreshed, then that table is no longer among them", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		sm := newTestStatisticsManager(t, tx)
@@ -218,10 +218,10 @@ func TestStatisticsManagerGetStatistics(t *testing.T) {
 		}
 	})
 
-	// Measuring costs a read of the whole table, so what is held is handed back
-	// rather than gathered again. That the answer is out of date is the point
-	// of holding it: a plan costed by it may be slower than the best one, and
-	// is not a wrong answer.
+	// Gathering statistics costs a scan of the whole table, so the stored
+	// statistics are returned and not gathered again. The result is stale by
+	// design: a plan costed with it can be slower than the best plan, but it
+	// does not give a wrong result.
 	t.Run("given a table already measured, when it has grown and is asked about again, then the numbers already held come back", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		sm := newTestStatisticsManager(t, tx)
@@ -255,9 +255,9 @@ func TestStatisticsManagerGetStatistics(t *testing.T) {
 		}
 	})
 
-	// The held numbers are never thrown away for being wrong, since nothing
-	// here is told when a table changes. They are thrown away for being old,
-	// and how old is counted in calls.
+	// The stored statistics are never discarded for being wrong, because the
+	// manager is not notified when a table changes. They are discarded for
+	// being old, and their age is counted in calls.
 	t.Run("given as many calls as go between refreshes, when one more is made, then every table is measured over and the count starts again", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		sm := newTestStatisticsManager(t, tx)
@@ -292,19 +292,20 @@ func TestStatisticsManagerGetStatistics(t *testing.T) {
 	})
 }
 
-// How many callers ask at once, and how many times each of them asks. The two
-// multiply out to more than callsBetweenRefreshes, so at least one gathering
-// happens while the other callers are waiting to be let in.
+// The number of concurrent callers, and the number of calls of each. Their
+// product exceeds callsBetweenRefreshes, so at least one refresh runs while
+// other callers wait for the lock.
 const (
 	concurrentCallers = 4
 	callsPerCaller    = callsBetweenRefreshes/concurrentCallers + 10
 )
 
-// askForStatisticsRepeatedly asks about the test table over and over on a
-// transaction of its own, and reports by returning.
+// askForStatisticsRepeatedly requests the statistics of the test table
+// repeatedly, in a transaction of its own, and returns any error.
 //
-// It runs on a goroutine other than the test's, where *testing.T must not be
-// failed: a Fatal there stops that goroutine and leaves the test passing.
+// It runs on a goroutine other than the test goroutine, where *testing.T must
+// not be failed: a Fatal there stops only that goroutine, and the test would
+// pass.
 func askForStatisticsRepeatedly(db *testDatabase, sm *StatisticsManager) error {
 	tx, err := db.newTransaction()
 	if err != nil {
@@ -325,13 +326,12 @@ func askForStatisticsRepeatedly(db *testDatabase, sm *StatisticsManager) error {
 }
 
 // One statistics manager serves the whole database, so several transactions
-// reach into the same map at once. Two goroutines writing a Go map is not a
-// race to be reasoned about afterwards but a crash, which is what the lock in
-// the manager is there for, and this is what says so.
+// access the same map concurrently. Concurrent writes to a Go map cause a
+// panic. The lock in the manager prevents that, and this test verifies it.
 //
-// The table does not change while this runs, so every answer has to be the same
-// one. What the case is watching for is not a wrong number but a torn map, and
-// the run under -race is where that shows.
+// The table does not change during the test, so every result must be the
+// same. The test does not look for a wrong number. It looks for a corrupted
+// map, which a run with -race detects.
 func TestStatisticsManagerGetStatisticsUnderConcurrentCallers(t *testing.T) {
 	t.Run("given several transactions of one database asking at once, when between them they ask often enough to set a gathering off, then each of them is answered and all the answers agree", func(t *testing.T) {
 		db := newTestDatabase(t)
@@ -346,9 +346,9 @@ func TestStatisticsManagerGetStatisticsUnderConcurrentCallers(t *testing.T) {
 		}
 		insertTestRecords(t, setup, tm, testTableRecordCount)
 
-		// The writes are committed before anyone else reads, so that the locks
-		// they took are given back. Left open, the readers below would wait on
-		// them until the lock table gave up on their behalf.
+		// The writes are committed before any other transaction reads, so that
+		// their locks are released. Otherwise the readers below would wait for
+		// the locks until the lock table timed out.
 		if err := setup.Commit(); err != nil {
 			t.Fatalf("Commit() error = %v", err)
 		}

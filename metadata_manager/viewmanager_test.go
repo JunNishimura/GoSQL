@@ -10,12 +10,12 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// The view catalog's own width, built from the same numbers as the other two:
+// The slot size of the view catalog, from the same sizes as the other two:
 //
 //	view_catalog  4 + (4 + 64) + (4 + 400) = 476 bytes
 //
-// The definition field is what makes it wide. It is also why testBlockSize is
-// what it is, since no block narrower than this can hold a view catalog record.
+// The definition field makes the slot large. It also determines
+// testBlockSize, because no smaller block can hold a view catalog record.
 const viewCatalogSlotSize = 476
 
 func TestNewViewManager(t *testing.T) {
@@ -51,10 +51,10 @@ func TestViewManagerCreateCatalogTable(t *testing.T) {
 		}
 	})
 
-	// The layout is read back rather than the rows, because reading it back is
-	// what every later view call does first: the view catalog is an ordinary
-	// table, so writing a view means opening a scan on it, and a scan needs the
-	// layout the table catalog holds for it.
+	// The test reads the layout and not the rows, because every later view
+	// call starts by reading the layout. The view catalog is an ordinary
+	// table, so writing a view opens a scan of it, and the scan needs the
+	// layout that the table catalog stores for it.
 	t.Run("when the view catalog is created, then its layout can be read back through the table manager", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		tm := mustNewTableManager(t)
@@ -89,8 +89,8 @@ func TestViewManagerCreateCatalogTable(t *testing.T) {
 	})
 }
 
-// The views the tests below create. The definitions are not parsed by anything
-// here, so what they say matters only in that the two differ.
+// The views that the tests below create. Nothing here parses the definitions,
+// so their content only matters in that the two differ.
 const (
 	testViewName        = "active_users"
 	testViewDefinition  = "select id, name from users where active = 1"
@@ -98,8 +98,8 @@ const (
 	otherViewDefinition = "select id from orders where placed_at > 0"
 )
 
-// newTestViewManager builds a view manager over catalogs that already exist, so
-// that a test can go straight to the views.
+// newTestViewManager builds a view manager over existing catalogs, so that a
+// test can work with views directly.
 func newTestViewManager(t *testing.T, tx *transaction.Transaction) *ViewManager {
 	t.Helper()
 
@@ -131,10 +131,10 @@ func TestViewManagerCreateView(t *testing.T) {
 		}
 	})
 
-	// A second view has to sit alongside the first rather than replace it. The
-	// catalog is written through MoveToNewRecord, which claims a free slot, so
-	// the two land in separate records and reading gives both back in the order
-	// they were written.
+	// A second view must be added to the catalog and must not replace the
+	// first. The catalog is written through MoveToNewRecord, which claims a
+	// free slot. The two views are therefore separate records, and a read
+	// returns both in the order in which they were written.
 	t.Run("given a view the catalog already holds, when a second one is created, then the catalog holds both", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		vm := newTestViewManager(t, tx)
@@ -178,8 +178,8 @@ func TestViewManagerCreateView(t *testing.T) {
 	})
 }
 
-// createTestViews puts two views in the catalog, so that asking for one is a
-// matter of picking a row out rather than of reading the only row there is.
+// createTestViews adds two views to the catalog. Reading one of them then
+// requires selecting a row, not reading the only row.
 func createTestViews(t *testing.T, tx *transaction.Transaction, vm *ViewManager) {
 	t.Helper()
 
@@ -228,10 +228,10 @@ func TestViewManagerGetViewDefinition(t *testing.T) {
 		})
 	}
 
-	// A name the catalog has no row for is not a failure. A query naming a
-	// table asks this first, and for every table that is not a view the answer
-	// is no. Saying so through the error would make the usual case the one the
-	// caller handles as a fault.
+	// A name with no row in the catalog is not an error. A query that names a
+	// table calls this method first, and for every table that is not a view
+	// the answer is false. If that were an error, the caller would have to
+	// handle the usual case as a failure.
 	t.Run("given a catalog that holds other views, when a name it has no row for is asked for, then it reports that there is no such view and no error", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		vm := newTestViewManager(t, tx)
@@ -250,9 +250,9 @@ func TestViewManagerGetViewDefinition(t *testing.T) {
 	})
 }
 
-// A name or a definition the catalog cannot hold is refused here rather than
-// left to the record page. The record page would refuse it too, but its message
-// names a field of the view catalog, and what the caller passed was a view.
+// A name or a definition that is too long for the catalog is rejected here
+// and not by the record page. The record page would reject it too, but its
+// error names a field of the view catalog, while the caller passed a view.
 func TestViewManagerRejectsWhatTheCatalogCannotHold(t *testing.T) {
 	tests := []struct {
 		name       string

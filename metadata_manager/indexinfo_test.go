@@ -9,15 +9,16 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// The index the tests below describe: one on the int field of the test table.
-// The name is short enough for the catalogs to hold, as any real one has to be.
+// The index that the tests below describe: an index on the int field of the
+// test table. Its name is short enough for the catalogs, as every real index
+// name must be.
 const (
 	testIndexName      = "id_index"
 	testIndexFieldName = "id"
 )
 
-// The widths an index record is built from. Its first two fields name the
-// record it points at, and the third holds the value it is filed under.
+// The sizes of an index record. Its first two fields hold the record id of
+// the table record, and the third holds the key.
 //
 //	an index on an int field       4 + 4 + 4 + 4        = 16 bytes
 //	an index on a varchar(20)      4 + 4 + 4 + (4 + 80) = 96 bytes
@@ -57,10 +58,9 @@ func TestNewIndexInfo(t *testing.T) {
 		}
 	})
 
-	// An index on a field the table does not have is refused where it is made,
-	// rather than at the first call that needs to know how wide the field is.
-	// There is nothing such an index could be: it has no records to hold, and
-	// no shape for the records it does not hold.
+	// An index on a field that the table does not have is rejected when it is
+	// described, not at the first call that needs the length of the field.
+	// Such an index is unusable: it has no records and no layout.
 	t.Run("given a field the indexed table does not have, when an index on it is described, then it reports ErrFieldNotFound", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		tableSchema := newTestSchema(t)
@@ -73,13 +73,13 @@ func TestNewIndexInfo(t *testing.T) {
 	})
 }
 
-// An index record names the record it points at and the value it is filed
-// under, so the first two fields are a record id taken apart and the third is a
+// An index record holds the record id of a table record and its key. The
+// first two fields are the two parts of the record id, and the third is a
 // copy of the indexed field.
 //
-// The third takes its type and width from the table's schema rather than being
-// fixed, since what is filed is whatever the indexed field holds. That is the
-// whole reason this is worked out per index rather than written down once.
+// The third field takes its type and length from the schema of the table and
+// is not fixed, because the key is a copy of the indexed field's value. The
+// layout is therefore computed per index and is not a constant.
 func TestCreateIndexLayout(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -160,15 +160,15 @@ func TestCreateIndexLayout(t *testing.T) {
 	})
 }
 
-// An index on a field wide enough that its own records do not fit in a block
-// is refused where it is described.
+// An index on a field so long that the index records do not fit in a block is
+// rejected when it is described.
 //
 //	an index on a varchar(200)  4 + 4 + 4 + (4 + 800) = 816 bytes
 //
-// A record page would refuse the same layout, so such an index could never be
-// opened. What makes refusing it here worth doing is that the cost of a search
-// through it is asked before it is opened, and working that out divides by how
-// many of its records go in a block, which for this one is none.
+// A record page would reject the same layout, so such an index could never be
+// opened. The early check matters because the cost of a search is requested
+// before the index is opened. The cost divides by the number of index records
+// per block, which is zero for this index.
 func TestNewIndexInfoRejectsAnIndexWiderThanABlock(t *testing.T) {
 	t.Run("given a field whose index records would not fit in a block, when an index on it is described, then it reports ErrSlotWiderThanBlock", func(t *testing.T) {
 		tableSchema := recordmanager.NewSchema()
@@ -188,8 +188,8 @@ func TestNewIndexInfoRejectsAnIndexWiderThanABlock(t *testing.T) {
 	})
 }
 
-// newTestIndexInfo describes an index on fieldName of the test table, over a
-// table said to hold testIndexedTableRecords records.
+// newTestIndexInfo describes an index on fieldName of the test table, with
+// statistics that report testIndexedTableRecords records for the table.
 func newTestIndexInfo(t *testing.T, fieldName string) *IndexInfo {
 	t.Helper()
 
@@ -207,8 +207,8 @@ func newTestIndexInfo(t *testing.T, fieldName string) *IndexInfo {
 	return info
 }
 
-// What the indexed table is said to hold, and what the guess at one field's
-// distinct values comes to for it.
+// The reported contents of the indexed table, and the resulting estimate of
+// the distinct values of one field.
 //
 //	records          100
 //	distinct values  1 + 100/3 = 34
@@ -217,29 +217,29 @@ const (
 	testIndexedTableDistinct = 1 + testIndexedTableRecords/distinctValuesDivisor
 )
 
-// Searching an index reads the index rather than the table, so what it costs
-// comes from how the index's own records pack into a block, not from how the
-// table's do. An index on a wide field holds fewer records to a block and so
-// takes more of them.
+// An index search reads the index and not the table. Its cost therefore
+// depends on how many index records fit in a block, not on how many table
+// records do. An index on a long field has fewer records per block and
+// therefore more blocks.
 //
 //	an index on an int         16 byte slots, 800/16 = 50 to a block
 //	an index on a varchar(20)  96 byte slots, 800/96 =  8 to a block
 //
-// A B-tree search reads one directory block per level and then a leaf. Each
-// level down multiplies by how many records go in a block, so the levels are
-// the fewest powers of that it takes to reach the index's blocks, and never
-// fewer than one, the root:
+// A B-tree search reads one directory block per level and then one leaf. Each
+// level multiplies the reachable blocks by the number of records per block.
+// The number of levels is the smallest power of that number that reaches the
+// number of index blocks. It is at least one, for the root:
 //
 //	150000 records on an int        150000/50 = 3000 blocks, 50*50*50 >= 3000 in 3 levels, so 4
 //	15000 records on a varchar(20)  15000/8   = 1875 blocks, 8*8*8*8 >= 1875 in 4 levels, so 5
 //	100 records on an int           100/50    =    2 blocks, 50 >= 2 in 1 level, so 2
 //
-// The division rounds up. Records that fill a block and start another are in
-// two.
+// The division rounds up. Records that fill one block and start another
+// occupy two blocks.
 //
-// None of these come to what a hash index would cost, one bucket's share of
-// the blocks (30, 19, 1 and 1), so a cost still worked out as a hash index's
-// does not pass for a B-tree's.
+// None of these results equals the cost of a hash index, which is one
+// bucket's share of the blocks (30, 19, 1 and 1). An implementation that
+// still computed the hash index cost would therefore fail these cases.
 func TestIndexInfoBlocksAccessed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -343,9 +343,9 @@ func TestIndexInfoOpen(t *testing.T) {
 	})
 }
 
-// A search through an index gives back the records filed under one value, not
-// every record of the table. How many that is follows from how many different
-// values the field holds: the more there are, the fewer records share each one.
+// An index search returns the records with one key, not every record of the
+// table. Their number depends on the number of distinct values of the field:
+// with more distinct values, fewer records share each value.
 func TestIndexInfoRecordsOutput(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -384,10 +384,11 @@ func TestIndexInfoRecordsOutput(t *testing.T) {
 	}
 }
 
-// Reading through an index is reading records that all hold one value in the
-// indexed field, so that field has one value among them however many the table
-// holds. Any other field is as varied among them as it is in the table, which
-// is the most that can be said without looking.
+// The records read through an index all have the same value in the indexed
+// field. That field therefore has one distinct value among them, whatever the
+// size of the table. Any other field is assumed to vary among them as it does
+// in the table, which is the best available estimate without reading the
+// data.
 func TestIndexInfoDistinctValues(t *testing.T) {
 	tests := []struct {
 		name     string

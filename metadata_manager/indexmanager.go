@@ -9,49 +9,51 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// The index catalog is a table like the others, and holds one row per index.
+// The index catalog is a table like the other catalogs. It has one row per
+// index.
 const indexCatalogName = "index_catalog"
 
-// indexNameField is what an index is called. It is the only field of the index
-// catalog this package has to name for itself: a row of that catalog says an
-// index is on a field of a table, and the other two of those are the table and
-// the field, which are named here the way they are named in every catalog.
+// indexNameField holds the name of an index. It is the only field name that
+// this package defines for the index catalog. A catalog row states that an
+// index is on a field of a table, and the table and field names use the same
+// field names as in every other catalog.
 const indexNameField = "index_name"
 
-// IndexManager is what the database knows about its indexes: which field of
-// which table each one is on, and what going through it would cost.
+// IndexManager manages the metadata of the indexes of the database: the table
+// and field of each index, and the estimated cost of using it.
 //
-// It keeps the first part in a catalog of its own, which is an ordinary table
-// made through the table manager. The second part is not kept anywhere. What an
-// index costs follows from how many records the indexed table holds and how
-// varied the indexed field is among them, and those are the statistics
-// manager's to say.
+// The first part is stored in a catalog of its own, which is an ordinary
+// table created through the table manager. The second part is not stored. The
+// cost of an index depends on the number of records in the indexed table and
+// on the number of distinct values of the indexed field. The statistics
+// manager provides both.
 //
-// That is what makes this the first layer here to stand on another. The table
-// and view managers answer out of their own catalogs; this one reads its
-// catalog to find that an index exists, and then has to ask elsewhere what the
-// index is worth. Neither manager alone could answer, because the catalog knows
-// of the index and the statistics know of the table, and a cost needs both.
+// This is the first manager in this package that depends on another manager.
+// The table and view managers answer from their own catalogs. The index
+// manager reads its catalog to learn that an index exists, and then asks the
+// statistics manager for the data needed to estimate its cost. Neither
+// manager could answer alone: the catalog knows the index, the statistics
+// know the table, and a cost estimate needs both.
 //
-// No layout is held alongside them, for the reason the view manager gives: the
-// index catalog is an ordinary table, so its layout comes back out of the table
-// catalog like any other. Nor is there a lock, since nothing is held here that
-// two transactions could write over each other.
+// The manager holds no layout, for the same reason as the view manager: the
+// index catalog is an ordinary table, so its layout is read from the table
+// catalog. The manager has no lock either, because it holds no state that two
+// transactions could modify concurrently.
 type IndexManager struct {
-	// tableManager is how the index catalog is made and read, and how the
-	// schema of an indexed table is found.
+	// tableManager creates and reads the index catalog, and provides the
+	// schema of an indexed table.
 	tableManager *TableManager
-	// statisticsManager is how the indexed table's measurements are found,
-	// which is what an index is costed from.
+	// statisticsManager provides the statistics of the indexed table, which
+	// the cost of an index is estimated from.
 	statisticsManager *StatisticsManager
 }
 
-// NewIndexManager returns an index manager that keeps its catalog through
-// tableManager and costs what it finds through statisticsManager.
+// NewIndexManager returns an index manager that stores its catalog through
+// tableManager and estimates costs through statisticsManager.
 //
-// It touches no storage, so it takes no transaction and cannot fail. Creating
-// the index catalog is a call of its own, which the caller makes on a database
-// that has none yet.
+// It accesses no storage, so it takes no transaction and cannot fail. The
+// index catalog is created by a separate call, which the caller makes for a
+// database that does not have one yet.
 func NewIndexManager(tableManager *TableManager, statisticsManager *StatisticsManager) *IndexManager {
 	return &IndexManager{
 		tableManager:      tableManager,
@@ -59,20 +61,19 @@ func NewIndexManager(tableManager *TableManager, statisticsManager *StatisticsMa
 	}
 }
 
-// CreateCatalogTable makes the index catalog, which is an ordinary table and so
-// is made the way any other one is.
+// CreateCatalogTable creates the index catalog. It is an ordinary table and
+// is created like any other table.
 //
-// It is apart from NewIndexManager for the reason the other catalog calls are
-// apart from their constructors: whether the database is new is the caller's to
-// know. Calling it on a database that already has an index catalog would write
-// a second row describing it.
+// It is separate from NewIndexManager for the same reason as the other
+// catalog creation methods: only the caller knows whether the database is
+// new. On a database that already has an index catalog, this call would write
+// a second row that describes the catalog.
 func (im *IndexManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	schema := recordmanager.NewSchema()
 
-	// Adding a field cannot fail here, since the three names are fixed by this
-	// package and no two of them are the same. The error is returned rather than
-	// dropped so that this stays true if AddField grows another reason to refuse
-	// a field.
+	// Adding a field cannot fail here, because this package defines the three
+	// names and they are all different. The error is still returned, so that
+	// the code stays correct if AddField gains another failure case.
 	if err := schema.AddStringField(indexNameField, maxNameLength); err != nil {
 		return err
 	}
@@ -86,24 +87,24 @@ func (im *IndexManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	return im.tableManager.CreateTable(tx, indexCatalogName, schema)
 }
 
-// ErrFieldAlreadyIndexed reports creating an index on a field of a table that
-// another index is already on.
+// ErrFieldAlreadyIndexed is returned when an index is created on a field that
+// already has an index.
 //
-// The indexes of a table are looked up by the field each is on, one per field,
-// so a second one on the same field would never be found. Nothing would keep it
-// up as the table changed, and it would go on holding what the table held when
-// it was made.
+// The indexes of a table are looked up by field, with one index per field. A
+// second index on the same field would never be found. No statement would
+// maintain it when the table changes, so it would keep the contents that the
+// table had when the index was created.
 var ErrFieldAlreadyIndexed = errors.New("field already indexed")
 
-// CreateIndex writes down that an index called indexName is on fieldName of
+// CreateIndex records that an index named indexName is on fieldName of
 // tableName.
 //
-// That row is all there is to registering an index here. What it takes to build
-// the index itself, and to keep it up as records are written, is not this
-// layer's: what is kept here is that the index exists, so that a planner asking
-// what a table has to go through finds it.
+// The catalog row is the whole registration of an index. Building the index
+// and maintaining it when records are written are not tasks of this layer.
+// This layer only records that the index exists, so that a planner that asks
+// for the indexes of a table finds it.
 //
-// A second index on a field another is already on is refused with
+// A second index on a field that already has one is rejected with
 // ErrFieldAlreadyIndexed, before anything is written.
 func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName string, tableName string, fieldName string) error {
 	if err := checkIndexFits(indexName, tableName, fieldName); err != nil {
@@ -138,12 +139,12 @@ func (im *IndexManager) CreateIndex(tx *transaction.Transaction, indexName strin
 	return ts.SetString(fieldNameField, fieldName)
 }
 
-// refuseIndexedField reads the index catalog through ts from its first row,
-// and reports ErrFieldAlreadyIndexed if a row says an index is already on
-// fieldName of tableName.
+// refuseIndexedField scans the index catalog through ts from its first row.
+// It returns ErrFieldAlreadyIndexed if a row states that fieldName of
+// tableName already has an index.
 //
-// The whole catalog is walked, as it is by GetIndexInfo, since a table's rows
-// are not kept next to each other.
+// The whole catalog is scanned, as in GetIndexInfo, because the rows of one
+// table are not adjacent.
 func refuseIndexedField(ts *query.TableScan, tableName string, fieldName string) error {
 	for {
 		hasNext, err := ts.MoveToNextRecord()
@@ -172,15 +173,16 @@ func refuseIndexedField(ts *query.TableScan, tableName string, fieldName string)
 	}
 }
 
-// checkIndexFits refuses any of the three names the index catalog cannot hold.
+// checkIndexFits returns an error if any of the three names is too long for
+// the index catalog.
 //
-// All three are looked at before the row is written, so that a refusal names
-// the one the caller has to change rather than the first the record page
-// happens to reach.
+// All three names are checked before the row is written. An error then names
+// the value that the caller must change, not the first field that the record
+// page happens to write.
 //
-// The index's own name has to fit twice over. An index is kept as a table, and
-// that table is named by the index, so the name goes in the table catalog as
-// well as here.
+// The index name must fit in two catalogs. An index is stored as a table with
+// the name of the index, so the name is written to the table catalog as well
+// as to the index catalog.
 func checkIndexFits(indexName string, tableName string, fieldName string) error {
 	if err := checkNameFits("index", indexName); err != nil {
 		return err
@@ -192,21 +194,20 @@ func checkIndexFits(indexName string, tableName string, fieldName string) error 
 	return checkNameFits("field", fieldName)
 }
 
-// GetIndexInfo returns the indexes on tableName, one per field, filed under the
-// field each is on.
+// GetIndexInfo returns the indexes on tableName as a map from the indexed
+// field to its index. A field has at most one index.
 //
-// A table with no index is not a failure but the usual case: most tables have
-// none, and a planner asks about every table it reads. What comes back then is
-// an empty map, which is also what comes back for a table the database does not
-// have, since neither has a row in the index catalog.
+// A table with no index is not an error. It is the usual case: most tables
+// have none, and a planner asks about every table it reads. The result is
+// then an empty map. The result is also an empty map for a table that does
+// not exist, because neither has a row in the index catalog.
 //
-// The whole catalog is walked, because every table's indexes are kept in it
-// together and a table's rows are not kept next to each other.
+// The whole catalog is scanned. The catalog holds the indexes of all tables,
+// and the rows of one table are not adjacent.
 //
-// What is read of the indexed table is read once and used for every index on
-// it, rather than once per index. The answers cannot differ between two rows
-// about the same table, and reading the table's measurements means reading the
-// table through.
+// The schema and statistics of the indexed table are read once and used for
+// every index on it. They cannot differ between two rows for the same table,
+// and reading the statistics can require a scan of the table.
 func (im *IndexManager) GetIndexInfo(tx *transaction.Transaction, tableName string) (map[string]*IndexInfo, error) {
 	layout, err := im.tableManager.GetLayout(tx, indexCatalogName)
 	if err != nil {
@@ -221,10 +222,10 @@ func (im *IndexManager) GetIndexInfo(tx *transaction.Transaction, tableName stri
 
 	indexes := map[string]*IndexInfo{}
 
-	// These stay nil until a row for this table turns up, so that a table with
-	// no index is answered without reading the table at all. A nil schema is
-	// what says they have not been read yet; they are read together and there
-	// is no schema for a table that could not be measured.
+	// These stay nil until the first row for this table is found, so that a
+	// table with no index needs no read of the table. A nil schema means that
+	// they have not been read yet. Both are read together, so the schema is
+	// never set without the statistics.
 	var tableSchema *recordmanager.Schema
 	var tableStatistics *TableStatistics
 
@@ -270,18 +271,18 @@ func (im *IndexManager) GetIndexInfo(tx *transaction.Transaction, tableName stri
 	}
 }
 
-// describeIndexedTable reads the two things an index on tableName is described
-// and costed from: the shape of the table's records, and its measurements.
+// describeIndexedTable reads the two inputs that an index on tableName is
+// described and costed from: the schema of the table and its statistics.
 //
-// Both are about the table rather than the index. The index catalog says only
-// that an index exists; how much of the table one search through it saves is
-// the table's to answer, and that is why this manager holds a statistics
-// manager as well as a table manager.
+// Both describe the table, not the index. The index catalog only records that
+// an index exists. How much of the table an index search saves depends on the
+// table, which is why this manager holds a statistics manager as well as a
+// table manager.
 //
-// The statistics may be gathered here, which reads every table in the database,
-// and it happens while the caller has a scan of the index catalog open. That
-// costs buffers rather than correctness: no lock of this package is held across
-// it, since this manager holds none of its own.
+// This call can trigger a refresh of the statistics, which scans every table
+// in the database, while the caller has a scan of the index catalog open.
+// This uses more buffers but does not affect correctness: this manager has no
+// lock of its own, so no lock of this package is held during the refresh.
 func (im *IndexManager) describeIndexedTable(tx *transaction.Transaction, tableName string) (*recordmanager.Schema, *TableStatistics, error) {
 	layout, err := im.tableManager.GetLayout(tx, tableName)
 	if err != nil {

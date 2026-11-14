@@ -5,17 +5,17 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// MetadataManager is the one way in to everything the database knows about
-// itself: its tables, its views, what its tables measure, and its indexes.
+// MetadataManager is the single entry point to all metadata of the database:
+// its tables, its views, the statistics of its tables, and its indexes.
 //
-// Behind it are four managers, and a caller planning a query needs all of them.
-// Sorting out which one answers what is work that would otherwise be done at
-// every call site, and done the same way each time; so is wiring the four
-// together, which has to come out right for any of them to agree with the
-// others.
+// It wraps four managers, and a caller that plans a query needs all of them.
+// Without this type, every call site would have to choose the right manager,
+// in the same way each time. The four managers would also have to be wired
+// together by the caller, and they only give consistent answers if the wiring
+// is correct.
 //
-// The methods here carry nothing of their own. Each is the call it stands for,
-// and what it does is written where that call is.
+// The methods here add no behavior. Each one forwards to the method it names,
+// and that method documents the behavior.
 type MetadataManager struct {
 	tableManager      *TableManager
 	viewManager       *ViewManager
@@ -23,18 +23,19 @@ type MetadataManager struct {
 	indexManager      *IndexManager
 }
 
-// NewMetadataManager builds the four managers and ties them to one another.
+// NewMetadataManager creates the four managers and connects them.
 //
-// One table manager serves all four, and one statistics manager serves both the
-// caller and the index manager. The first matters little, since a table manager
-// holds nothing and two of them would answer alike. The second matters: a
-// statistics manager holds what it has measured, and a second one would be a
-// second set of measurements, gathered on its own schedule and blind to the
-// first. An index costed through one and a table costed through the other would
-// then be costed by numbers taken at different times.
+// One table manager serves all four managers, and one statistics manager
+// serves both the caller and the index manager. Sharing the table manager
+// matters little, because a table manager holds no state and two of them
+// would give the same answers. Sharing the statistics manager matters. A
+// statistics manager holds the statistics it has gathered. A second one
+// would hold a second set, refreshed on its own schedule and independent of
+// the first. An index costed through one and a table costed through the other
+// would then use statistics from different times.
 //
-// It reads nothing, so it takes no transaction. Making the catalogs is a call
-// of its own.
+// It reads nothing, so it takes no transaction. The catalogs are created by a
+// separate call.
 func NewMetadataManager() (*MetadataManager, error) {
 	tableManager, err := NewTableManager()
 	if err != nil {
@@ -51,15 +52,15 @@ func NewMetadataManager() (*MetadataManager, error) {
 	}, nil
 }
 
-// CreateCatalogTables makes every catalog the managers behind this one read
-// through, which is what a database has to have before any of them can answer.
+// CreateCatalogTables creates every catalog that the wrapped managers read. A
+// database needs these catalogs before any manager can answer.
 //
-// The table manager's two come first, and not by preference: the view and index
-// catalogs are ordinary tables, so making them means writing rows into the
-// table and field catalogs, and those have to be there to be written to.
+// The two catalogs of the table manager must be created first. The view and
+// index catalogs are ordinary tables, so creating them writes rows to the
+// table and field catalogs, which must already exist.
 //
-// The statistics manager has no catalog. What it knows is measured rather than
-// recorded, which is why it is the one of the four that writes nothing down.
+// The statistics manager has no catalog. Its data is computed and not stored,
+// so it is the only one of the four that writes nothing.
 func (mm *MetadataManager) CreateCatalogTables(tx *transaction.Transaction) error {
 	if err := mm.tableManager.CreateCatalogTables(tx); err != nil {
 		return err
@@ -71,12 +72,12 @@ func (mm *MetadataManager) CreateCatalogTables(tx *transaction.Transaction) erro
 	return mm.indexManager.CreateCatalogTable(tx)
 }
 
-// CreateTable records a table's definition. See TableManager.CreateTable.
+// CreateTable records the definition of a table. See TableManager.CreateTable.
 func (mm *MetadataManager) CreateTable(tx *transaction.Transaction, tableName string, schema *recordmanager.Schema) error {
 	return mm.tableManager.CreateTable(tx, tableName, schema)
 }
 
-// GetLayout reads a table's definition back. See TableManager.GetLayout.
+// GetLayout reads the definition of a table. See TableManager.GetLayout.
 func (mm *MetadataManager) GetLayout(tx *transaction.Transaction, tableName string) (*recordmanager.Layout, error) {
 	return mm.tableManager.GetLayout(tx, tableName)
 }
@@ -86,8 +87,8 @@ func (mm *MetadataManager) CreateView(tx *transaction.Transaction, viewName stri
 	return mm.viewManager.CreateView(tx, viewName, definition)
 }
 
-// GetViewDefinition reads back the query a view stands for, and whether there
-// is a view of that name at all. See ViewManager.GetViewDefinition.
+// GetViewDefinition reads the query of a view, and reports whether a view
+// with that name exists. See ViewManager.GetViewDefinition.
 func (mm *MetadataManager) GetViewDefinition(tx *transaction.Transaction, viewName string) (string, bool, error) {
 	return mm.viewManager.GetViewDefinition(tx, viewName)
 }
@@ -98,14 +99,14 @@ func (mm *MetadataManager) CreateIndex(tx *transaction.Transaction, indexName st
 	return mm.indexManager.CreateIndex(tx, indexName, tableName, fieldName)
 }
 
-// GetIndexInfo reads the indexes a table has, by the field each is on. See
+// GetIndexInfo reads the indexes of a table, keyed by the indexed field. See
 // IndexManager.GetIndexInfo.
 func (mm *MetadataManager) GetIndexInfo(tx *transaction.Transaction, tableName string) (map[string]*IndexInfo, error) {
 	return mm.indexManager.GetIndexInfo(tx, tableName)
 }
 
-// GetStatistics reads what a table measures, gathering if what is held has
-// grown old. See StatisticsManager.GetStatistics.
+// GetStatistics reads the statistics of a table, and refreshes them first if
+// they are too old. See StatisticsManager.GetStatistics.
 func (mm *MetadataManager) GetStatistics(tx *transaction.Transaction, tableName string) (*TableStatistics, error) {
 	return mm.statisticsManager.GetStatistics(tx, tableName)
 }
