@@ -7,8 +7,8 @@ import (
 	"github.com/JunNishimura/GoSQL/query"
 )
 
-// newTestInsertData parses s as an insert, failing the test if it does not
-// parse as one.
+// newTestInsertData parses s as an insert, and fails the test if s is not a
+// valid insert.
 func newTestInsertData(t *testing.T, s string) InsertData {
 	t.Helper()
 

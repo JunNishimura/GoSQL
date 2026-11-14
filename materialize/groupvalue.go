@@ -6,17 +6,17 @@ import (
 	"github.com/JunNishimura/GoSQL/query"
 )
 
-// GroupValue is the values a record holds in the fields a group by groups on,
-// which is what tells the records of one group from those of the next.
+// GroupValue holds the values of the group fields of one record. These values
+// distinguish the records of one group from those of the next.
 //
-// It is kept as two slices rather than a map so that two can be compared with
-// slices.Equal: a Constant compares with ==, and a map does not.
+// It stores two slices and not a map, so that two group values can be
+// compared with slices.Equal. A Constant supports ==, and a map does not.
 type GroupValue struct {
 	fieldNames []string
 	vals       []query.Constant
 }
 
-// NewGroupValue reads the values the record s is on holds in fieldNames.
+// NewGroupValue reads the values of fieldNames from the current record of s.
 func NewGroupValue(s query.Scan, fieldNames []string) (*GroupValue, error) {
 	vals := make([]query.Constant, 0, len(fieldNames))
 	for _, fieldName := range fieldNames {
@@ -33,8 +33,8 @@ func NewGroupValue(s query.Scan, fieldNames []string) (*GroupValue, error) {
 	}, nil
 }
 
-// Value is the value held in fieldName, and false if fieldName is not one of
-// the fields grouped on.
+// Value returns the value of fieldName. It returns false if fieldName is not
+// a group field.
 func (gv *GroupValue) Value(fieldName string) (query.Constant, bool) {
 	i := slices.Index(gv.fieldNames, fieldName)
 	if i < 0 {
@@ -44,10 +44,10 @@ func (gv *GroupValue) Value(fieldName string) (query.Constant, bool) {
 	return gv.vals[i], true
 }
 
-// Equals reports whether other holds the same value as gv in every field.
+// Equals reports whether other has the same value as gv for every field.
 //
-// Only the values are compared. The two are taken to be of the same fields in
-// the same order, as two group values of one group by are.
+// Only the values are compared. Both are assumed to have the same fields in
+// the same order, as two group values of one group by do.
 func (gv *GroupValue) Equals(other *GroupValue) bool {
 	return slices.Equal(gv.vals, other.vals)
 }

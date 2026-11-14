@@ -6,122 +6,121 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// Expression is one side of a term of a predicate: either the name of a field,
-// which stands for whatever the record being looked at holds in it, or a
-// constant, which stands for itself.
+// Expression is one side of a predicate term. It is either a field name,
+// which evaluates to the value of that field in the current record, or a
+// constant, which evaluates to itself.
 //
-// Both kinds answer the same question in the same shape — what value does this
-// come to, for the record this scan is on — so the interface carries the work
-// rather than standing in for a type switch. That is what makes this an
-// interface where Constant, whose two kinds are read out with methods of
-// different return types, is a struct instead.
+// Both kinds answer the same question with the same signature: the value of
+// the expression for the current record of a scan. The interface therefore
+// carries real behavior and does not replace a type switch. This is why
+// Expression is an interface, while Constant is a struct: the two types of a
+// constant are read by methods with different return types.
 type Expression interface {
-	// Evaluate returns the value the expression comes to for the record the
-	// scan is on.
+	// Evaluate returns the value of the expression for the current record of
+	// s.
 	Evaluate(s Scan) (Constant, error)
 	// AppliesTo reports whether the expression can be evaluated against a
 	// record of schema.
 	//
-	// This is what a planner sorts the terms of a predicate by: a term both of
-	// whose sides apply to one table's schema can be tested as that table is
-	// read, before it is joined to anything.
+	// A planner classifies the terms of a predicate with it. If both sides of
+	// a term apply to the schema of one table, the term can be tested while
+	// that table is read, before any join.
 	AppliesTo(schema *recordmanager.Schema) bool
 	fmt.Stringer
 }
 
-// Nothing reads these: they are here so that an implementation drifting away
-// from the interface is a compile error in this file rather than at whichever
-// term first tried to hold one.
+// These variables are never read. They make a type that no longer satisfies
+// the interface a compile error in this file, and not at the first term that
+// uses it.
 var (
 	_ Expression = FieldExpression{}
 	_ Expression = ConstantExpression{}
 )
 
-// FieldExpression is the name of a field, standing for whatever the record
-// being looked at holds in it.
+// FieldExpression is a field name. It evaluates to the value of that field in
+// the current record.
 //
-// It carries no value of its own. The same expression comes to a different
-// value at every record, which is what lets a predicate keep some records and
-// drop others rather than deciding once for the whole table.
+// It holds no value itself. The same expression evaluates to a different
+// value for each record. A predicate can therefore keep some records and drop
+// others, instead of deciding once for the whole table.
 type FieldExpression struct {
 	fieldName string
 }
 
-// NewFieldExpression returns the expression standing for the field of this
-// name.
+// NewFieldExpression returns the expression for the field named fieldName.
 //
-// The name is not checked against a schema here, because an expression is built
-// before it is settled which of a query's tables it will be read against.
-// Whether the field is there at all comes out when it is evaluated.
+// The name is not checked against a schema here. An expression is created
+// before the planner decides which table of the query it is evaluated
+// against. A missing field is reported when the expression is evaluated.
 func NewFieldExpression(fieldName string) FieldExpression {
 	return FieldExpression{
 		fieldName: fieldName,
 	}
 }
 
-// Evaluate returns what the record the scan is on holds in the field.
+// Evaluate returns the value of the field in the current record of s.
 //
-// Which kind of constant that is comes from the scan, which takes it from the
-// schema, so nothing here decides whether the value is a number or text.
+// The scan determines the type of the constant from the schema, so this
+// method does not decide whether the value is an int or a varchar.
 func (e FieldExpression) Evaluate(s Scan) (Constant, error) {
 	return s.GetValue(e.fieldName)
 }
 
-// AppliesTo reports whether schema has the field the expression stands for.
+// AppliesTo reports whether schema has the field of the expression.
 func (e FieldExpression) AppliesTo(schema *recordmanager.Schema) bool {
 	return schema.HasField(e.fieldName)
 }
 
-// FieldName is the name of the field the expression stands for.
+// FieldName returns the name of the field of the expression.
 func (e FieldExpression) FieldName() string {
 	return e.fieldName
 }
 
-// String is the field name on its own, without quotes, so that a printed term
-// reads as the column it names rather than as text that happens to spell it.
+// String returns the field name without quotes, so that a printed term shows
+// a column name and not a string constant with the same spelling.
 func (e FieldExpression) String() string {
 	return e.fieldName
 }
 
-// ConstantExpression is a value written into the query itself: the 10 of
-// "where grade = 10", or the 'math' of "where dept = 'math'".
+// ConstantExpression is a value written in the query itself: the 10 in
+// "where grade = 10", or the 'math' in "where dept = 'math'".
 type ConstantExpression struct {
 	val Constant
 }
 
-// NewConstantExpression returns the expression standing for val.
+// NewConstantExpression returns the expression for val.
 func NewConstantExpression(val Constant) ConstantExpression {
 	return ConstantExpression{
 		val: val,
 	}
 }
 
-// Evaluate returns the constant, whatever the scan is on.
+// Evaluate returns the constant, whatever the current record of the scan is.
 //
-// The scan is taken and not used, which is the whole of the difference between
-// the two kinds of expression. A literal is the same value at every record, and
-// reaching for the scan to say so would make a term of two literals depend on
-// there being a record to read.
+// The scan parameter is not used. This is the only difference between the two
+// kinds of expression. A literal has the same value for every record. If it
+// read the scan, a term of two literals would depend on the existence of a
+// record.
 func (e ConstantExpression) Evaluate(_ Scan) (Constant, error) {
 	return e.val, nil
 }
 
-// AppliesTo reports that the constant can be evaluated against a record of
-// any schema, an empty one included, since evaluating it reads nothing from
-// the record.
+// AppliesTo always reports true. A constant can be evaluated against a record
+// of any schema, including an empty one, because its evaluation reads nothing
+// from the record.
 func (e ConstantExpression) AppliesTo(_ *recordmanager.Schema) bool {
 	return true
 }
 
-// Value is the constant the expression stands for.
+// Value returns the constant of the expression.
 func (e ConstantExpression) Value() Constant {
 	return e.val
 }
 
-// String is the constant's own text, which leaves a varchar quoted.
+// String returns the constant's own text, in which a varchar is quoted.
 //
-// A field and a literal can be spelled the same, so in a printed term the
-// quoting is the only thing telling the two apart.
+// A field and a literal can have the same spelling, so the quotes are the
+// only difference between them in a printed term.
 func (e ConstantExpression) String() string {
 	return e.val.String()
 }

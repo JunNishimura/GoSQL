@@ -13,8 +13,8 @@ import (
 // unassigned marks a pool slot that holds no block in the findExistingBuffer tests.
 const unassigned = -1
 
-// holdBlock puts a buffer in the state it reaches after loading a block, without
-// touching the disk, keeping the manager's block index in sync.
+// holdBlock sets a buffer to the state it has after loading a block, without
+// disk access. It also updates the manager's block index.
 func holdBlock(bm *BufferManager, index, blkNum int) {
 	blk := filemanager.NewBlockId(testDataFile, blkNum)
 	bm.bufferPool[index].blk = blk
@@ -161,8 +161,8 @@ func TestFindExistingBuffer(t *testing.T) {
 				holdBlock(bm, i, blkNum)
 			}
 
-			// A fresh BlockId is passed in so that a match cannot rely on
-			// pointer identity with the one stored in the pool.
+			// A new BlockId is passed, so that a match cannot depend on pointer
+			// identity with the BlockId stored in the pool.
 			got := bm.findExistingBuffer(filemanager.NewBlockId(tt.targetFile, tt.targetBlkNum))
 
 			if tt.wantIndex == -1 {
@@ -203,8 +203,9 @@ func TestFindExistingBuffer(t *testing.T) {
 		}
 	})
 
-	// A failed assignment can leave a buffer naming a block it does not hold.
-	// Replacing that buffer must not disturb the buffer that really holds it.
+	// A failed assignment can leave a buffer with the id of a block it does not
+	// hold. Replacing that buffer must not affect the buffer that holds the
+	// block.
 	t.Run("given another buffer that names a block it does not hold, replacing it leaves the real holder findable", func(t *testing.T) {
 		fm, lm := newTestManagers(t, testBlockSize)
 		prepareDataFile(t, fm, []int32{100, 101})
@@ -232,9 +233,9 @@ func TestFindExistingBuffer(t *testing.T) {
 	})
 }
 
-// prepareDataFile appends one block to the data file per given value and writes
-// that value at offset 0, so that a page loaded from disk can be told apart from
-// one that was never read.
+// prepareDataFile appends one block to the data file for each value and
+// writes that value at offset 0. A page loaded from disk can then be
+// distinguished from a page that was never read.
 func prepareDataFile(t *testing.T, fm *filemanager.FileManager, values []int32) {
 	t.Helper()
 
@@ -637,9 +638,9 @@ func TestBufferManagerAvailable(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// pinBlocks are the block numbers pinned in order.
+		// pinBlocks is the block numbers to pin, in order.
 		pinBlocks []int
-		// unpins is how many of those pins are released, from the first.
+		// unpins is the number of those pins to release, starting from the first.
 		unpins int
 		want   int
 	}{
@@ -776,9 +777,9 @@ func TestFlushAll(t *testing.T) {
 		})
 	}
 
-	// A commit flushes the transaction's buffers before writing its commit
-	// record, and the record must not reach the disk ahead of the data it
-	// commits. Writing the blocks only puts them in the OS's page cache.
+	// A commit flushes the transaction's buffers before it writes its commit
+	// record, and the record must not reach disk before the data it commits.
+	// Writing the blocks only puts them in the OS page cache.
 	t.Run("given a buffer the transaction modified, when its buffers are flushed, then the data file is synced", func(t *testing.T) {
 		fm, lm := newTestManagers(t, testBlockSize)
 		prepareDataFile(t, fm, onDisk)
@@ -800,9 +801,9 @@ func TestFlushAll(t *testing.T) {
 		}
 	})
 
-	// A block written out early to free its buffer no longer carries the
+	// A block that was written early to free its buffer no longer has the
 	// transaction's number, so flushing the transaction's buffers does not
-	// write it again, yet it still has to be on disk before the commit record.
+	// write it again. It must still be on disk before the commit record.
 	t.Run("given a block the transaction modified that was written out to free its buffer, when its buffers are flushed, then the data file is synced", func(t *testing.T) {
 		fm, lm := newTestManagers(t, testBlockSize)
 		prepareDataFile(t, fm, onDisk)
@@ -830,9 +831,9 @@ func TestFlushAll(t *testing.T) {
 	})
 }
 
-// modifyBlock has transaction txNum change block blkNum of the data file
-// through the buffer manager, logging the change first as a transaction does,
-// and leaves the buffer unpinned.
+// modifyBlock modifies block blkNum of the data file as transaction txNum,
+// through the buffer manager. It logs the change first, as a transaction
+// does, and leaves the buffer unpinned.
 func modifyBlock(t *testing.T, bm *BufferManager, lm *logmanager.LogManager, blkNum, txNum int) {
 	t.Helper()
 
@@ -931,9 +932,9 @@ func TestNewBufferManagerWithPolicy(t *testing.T) {
 	})
 }
 
-// TestBufferManagerPinReplacesTheBufferChosenByPolicy drives the pool through a
-// sequence whose outcome is the same under every policy, and then pins one more
-// block so that each policy is forced to pick a different victim:
+// TestBufferManagerPinReplacesTheBufferChosenByPolicy runs a sequence on the
+// pool whose result is the same under every policy. It then pins one more
+// block, and each policy must choose a different victim:
 //
 //	readTime = {6, 2, 8, 4} -> FIFO picks bufferPool[1]
 //	unpinned in the order 2, 3, 1, 0 -> LRU picks bufferPool[2]
@@ -999,7 +1000,7 @@ func TestBufferManagerPinReplacesTheBufferChosenByPolicy(t *testing.T) {
 			bm.Unpin(block2)
 			block5 := pin(5)
 
-			// Release every buffer in an order that differs from both the pool
+			// Unpin every buffer in an order that differs from both the pool
 			// order and the read-in order.
 			bm.Unpin(block5)
 			bm.Unpin(block3)
@@ -1080,11 +1081,11 @@ func TestBufferManagerStats(t *testing.T) {
 
 	flushTests := []struct {
 		name string
-		// modifyTxNum marks the pinned buffer as modified by that transaction,
-		// where unmodified leaves it alone.
+		// modifyTxNum is the transaction that marks the pinned buffer as
+		// modified. The value unmodified leaves the buffer unmodified.
 		modifyTxNum int
-		// flushAll asks the manager to write out flushAllTxNum's buffers instead
-		// of forcing a replacement.
+		// flushAll makes the test call FlushAll for flushAllTxNum instead of
+		// forcing a replacement.
 		flushAll      bool
 		flushAllTxNum int
 		wantFlushes   int

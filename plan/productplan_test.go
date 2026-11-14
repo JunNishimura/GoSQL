@@ -11,14 +11,14 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// otherTableName is a second table for a product to put beside the test table.
-// Its one field, "oid", is an int named apart from every field of the test
-// table, so that the two can be multiplied without a clash.
+// otherTableName is a second table for a product with the test table. Its
+// only field, "oid", is an int. Its name differs from every field of the test
+// table, so that the product has no duplicate field.
 const otherTableName = "other"
 
-// newTestLeftPlan and newTestRightPlan are the two sides the product plan
-// cases multiply. Every number of one differs from every number of the other,
-// so that a case reading the wrong side gives a wrong answer.
+// newTestLeftPlan and newTestRightPlan are the two sides of the product in
+// the product plan cases. Every number of one side differs from every number
+// of the other, so that a case that reads the wrong side gets a wrong result.
 //
 //	left   100 records over 5 blocks, "a" of 10 distinct values, "b" of 4
 //	right   20 records over 3 blocks, "c" of 7 distinct values, "d" of 2
@@ -92,8 +92,8 @@ func TestProductPlanOpen(t *testing.T) {
 	})
 }
 
-// The right side is read from start to end once for every record of the left,
-// on top of the one read of the left itself.
+// The right side is scanned completely once for every record of the left
+// side, in addition to the one read of the left side.
 func TestProductPlanBlocksAccessed(t *testing.T) {
 	t.Run("given a left plan of 100 records over 5 blocks and a right plan of 3 blocks, when their product is asked for the blocks accessed, then they are 5 plus 100 times 3", func(t *testing.T) {
 		p := mustNewProductPlan(t, newTestLeftPlan(t), newTestRightPlan(t))
@@ -114,9 +114,9 @@ func TestProductPlanRecordsOutput(t *testing.T) {
 	})
 }
 
-// Every value a field holds on its own side turns up somewhere in the product,
-// beside every record of the other side, so a product changes no field's count
-// of distinct values. The question is only which side to ask.
+// Every value of a field on its own side appears in the product, paired with
+// every record of the other side. A product therefore changes no field's
+// count of distinct values. The only question is which side has the field.
 func TestProductPlanDistinctValues(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -189,8 +189,8 @@ func newIntSchema(t *testing.T, fieldNames ...string) *recordmanager.Schema {
 	return schema
 }
 
-// createOtherTable makes the other table and writes count records into it,
-// the i-th with an oid of i.
+// createOtherTable creates the other table and writes count records to it.
+// The i-th record has oid i.
 func createOtherTable(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, count int) {
 	t.Helper()
 
@@ -219,8 +219,8 @@ func createOtherTable(t *testing.T, tx *transaction.Transaction, mm *metadataman
 	}
 }
 
-// readIDPairs reads the id and the oid of every record a scan gives back, in
-// the order it gives them.
+// readIDPairs reads the id and the oid of every record of a scan, in the
+// order in which the scan returns them.
 func readIDPairs(t *testing.T, s query.Scan) [][2]int32 {
 	t.Helper()
 

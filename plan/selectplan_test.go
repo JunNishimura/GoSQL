@@ -8,10 +8,10 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// The expressions and terms the select plan cases are built from. "a" holds 10
-// distinct values in newTestFakePlan, "b" holds 4 and "c" holds 7, so that a
-// case reading the wrong field, or the larger of two where the smaller was
-// wanted, gives a wrong answer.
+// The expressions and terms that the select plan cases are built from. In
+// newTestFakePlan, "a" has 10 distinct values, "b" has 4 and "c" has 7. A
+// case that reads the wrong field, or the larger of two where the smaller is
+// expected, therefore gets a wrong result.
 var (
 	fieldA = query.NewFieldExpression("a")
 	fieldB = query.NewFieldExpression("b")
@@ -19,8 +19,8 @@ var (
 	two    = query.NewConstantExpression(query.NewIntConstant(2))
 )
 
-// newTestFakePlan is the plan the select plan cases select from: 100 records
-// over 5 blocks.
+// newTestFakePlan returns the input plan of the select plan cases: 100
+// records in 5 blocks.
 func newTestFakePlan() fakePlan {
 	return fakePlan{
 		blocksAccessed: 5,
@@ -57,9 +57,9 @@ func TestSelectPlanOpen(t *testing.T) {
 	})
 }
 
-// A select reads every block of what it selects from, since it has to look at
-// every record to know which ones to keep. What it keeps changes how many
-// records it gives back, not how much it reads.
+// A select reads every block of its input, because it must read every record
+// to decide which to keep. The predicate changes the number of records that
+// the select returns, not the number of blocks that it reads.
 func TestSelectPlanBlocksAccessed(t *testing.T) {
 	t.Run("given a plan of 5 blocks, when a select on it is asked for the blocks accessed, then they are the 5 of the plan it selects from", func(t *testing.T) {
 		pred := query.NewPredicate(query.NewTerm(fieldA, one))
@@ -134,8 +134,8 @@ func TestSelectPlanDistinctValues(t *testing.T) {
 			fieldName: "a",
 			want:      1,
 		},
-		// Only values both fields hold survive a join on them, so the field of
-		// more values is cut down to the other's.
+		// Only values that both fields have remain after a join on them, so
+		// the count of the field with more values is reduced to the other's.
 		{
 			name:      "given a predicate equating a field of 10 distinct values with one of 4, when the distinct values of the first are asked for, then they are 4",
 			pred:      query.NewPredicate(query.NewTerm(fieldA, fieldB)),

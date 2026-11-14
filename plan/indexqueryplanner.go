@@ -10,16 +10,16 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// IndexQueryPlanner turns a select statement into a plan as BasicQueryPlanner
-// does, except that a table is read through an index wherever the where clause
-// lets it be.
+// IndexQueryPlanner creates a plan for a select statement in the same way as
+// BasicQueryPlanner, except that it reads a table through an index whenever
+// the where clause allows it.
 //
-// A table is read through an index when the where clause equates a field it
-// has an index on with a constant: the records the clause can keep are those
-// the index files under that constant, so reading those alone loses none. The
-// select over the product is planned as before, and tests each record against
-// the whole clause again, so a term the index stands for is tested twice and
-// gives the same records.
+// A table can be read through an index when the where clause equates an
+// indexed field of the table with a constant. Only the records that the index
+// holds for that constant can satisfy the clause, so reading only those
+// records loses no result. The select over the product is planned as before
+// and tests each record against the whole clause. A term that the index
+// already covers is therefore tested twice, with the same result.
 type IndexQueryPlanner struct {
 	mm *metadatamanager.MetadataManager
 }
@@ -34,15 +34,15 @@ func NewIndexQueryPlanner(mm *metadatamanager.MetadataManager) *IndexQueryPlanne
 	}
 }
 
-// CreatePlan returns the plan of the query data: its tables in the order they
-// are named, each read through an index where the where clause lets it be and
-// each joined to those before it through an index where it lets that be, a
-// select over that for the where clause, and a projection onto the columns
-// asked for.
+// CreatePlan returns the plan for the query data. The tables are joined in
+// the order written. Each table is read through an index where the where
+// clause allows it, and joined to the earlier tables through an index where
+// the clause allows that. A select for the where clause and a projection onto
+// the requested columns follow.
 //
 // A name in the from clause that is a view is planned from its definition by
-// this planner, so the tables the view reads are read through their indexes
-// too, as far as the view's own where clause lets them be.
+// this planner. The tables of the view are therefore also read through their
+// indexes, as far as the where clause of the view allows.
 func (qp *IndexQueryPlanner) CreatePlan(data parse.QueryData, tx *transaction.Transaction) (Plan, error) {
 	var p Plan
 	for _, tableName := range data.Tables() {
@@ -67,11 +67,11 @@ func (qp *IndexQueryPlanner) CreatePlan(data parse.QueryData, tx *transaction.Tr
 	return NewProjectPlan(p, data.Fields()...)
 }
 
-// planTable returns the plan of reading one name of a from clause: a view's
-// definition planned again, or a stored table read through whichever of its
-// indexes pred lets it be read through. For a stored table, the plan of
-// reading the whole of it comes back too, since that is what a join through
-// one of its indexes starts from; for a view, nil does.
+// planTable returns the plan for one name of a from clause. For a view, this
+// is the plan of its definition. For a stored table, it is a read through the
+// index that pred allows, if any. For a stored table, planTable also returns
+// the plan of a full table scan, because an index join starts from that plan.
+// For a view it returns nil instead.
 func (qp *IndexQueryPlanner) planTable(tableName string, pred query.Predicate, tx *transaction.Transaction) (Plan, *TablePlan, error) {
 	definition, isView, err := qp.mm.GetViewDefinition(tx, tableName)
 	if err != nil {
@@ -98,15 +98,15 @@ func (qp *IndexQueryPlanner) planTable(tableName string, pred query.Predicate, t
 	return p, tp, err
 }
 
-// join returns the plan of joining right, the plan of reading the next table,
-// to left, the plan of the tables before it.
+// join returns the plan that joins right, the plan of the next table, to
+// left, the plan of the earlier tables.
 //
-// stored is the plan of reading the whole of that table, or nil if it is a
-// view, which has no index to join through. If pred equates an indexed field
-// of the table with a field of left, the two are joined through that index,
-// unless right is already read through an index on a constant and the product
-// with that reads less. Otherwise they are joined by a product, as
-// BasicQueryPlanner joins every table.
+// stored is the plan of a full scan of that table, or nil for a view, which
+// has no index to join through. If pred equates an indexed field of the table
+// with a field of left, the two are joined through that index. The exception
+// is a right side that is already read through an index on a constant, when
+// the product with it reads fewer blocks. In all other cases the two are
+// joined by a product, as BasicQueryPlanner joins every table.
 func (qp *IndexQueryPlanner) join(left, right Plan, stored *TablePlan, pred query.Predicate, tx *transaction.Transaction) (Plan, error) {
 	product, err := NewProductPlan(left, right)
 	if err != nil {
@@ -128,15 +128,14 @@ func (qp *IndexQueryPlanner) join(left, right Plan, stored *TablePlan, pred quer
 	return indexJoin, nil
 }
 
-// chooseJoin returns the plan of joining the table tp reads to left through
-// the index of the table pred lets them be joined through for the fewest
-// blocks, or nil if there is none.
+// chooseJoin returns the plan that joins the table of tp to left through an
+// index of that table. Of the indexes that pred allows, it chooses the one
+// that reads the fewest blocks. It returns nil if pred allows none.
 //
-// pred lets them be joined through an index when it equates the indexed field
-// with a field of left. A field the two sides share a name for is passed over,
-// since which side a term naming it means cannot be told. Of two that cost the
-// same, the one on the field that comes first by name is taken, as it is by
-// chooseIndex.
+// pred allows a join through an index when it equates the indexed field with
+// a field of left. A field name that both sides have is skipped, because a
+// term with that name is ambiguous. If two indexes cost the same, the one
+// whose field name sorts first is chosen, as in chooseIndex.
 func (qp *IndexQueryPlanner) chooseJoin(left Plan, tp *TablePlan, pred query.Predicate, tx *transaction.Transaction) (*IndexJoinPlan, error) {
 	indexes, err := qp.mm.GetIndexInfo(tx, tp.tableName)
 	if err != nil {
@@ -162,15 +161,14 @@ func (qp *IndexQueryPlanner) chooseJoin(left Plan, tp *TablePlan, pred query.Pre
 	return best, nil
 }
 
-// cheaperJoin returns whichever of join, the plan of joining through an index,
-// and product, the plan of the product the same tables would otherwise be
-// joined by, reads fewer blocks, and join if they read as many.
+// cheaperJoin returns the plan that reads fewer blocks: join, the index join,
+// or product, the product of the same tables. It returns join if both read
+// the same number of blocks.
 //
-// Neither is cheaper in every case. A product reads the right side again for
-// every record on the left, so it pays off only when what is on the right is
-// already narrowed to very few records, by an index on a constant; otherwise
-// searching the index on the join field for each record on the left reads
-// less.
+// Neither is cheaper in every case. A product reads its right side again for
+// every left record. It is therefore cheaper only when the right side is
+// already reduced to very few records by an index on a constant. Otherwise an
+// index search on the join field for each left record reads fewer blocks.
 func cheaperJoin(join, product Plan) Plan {
 	if product.BlocksAccessed() < join.BlocksAccessed() {
 		return product
@@ -179,9 +177,9 @@ func cheaperJoin(join, product Plan) Plan {
 	return join
 }
 
-// chooseIndex returns the plan of reading the table tp reads through the index
-// pred lets it be read through for the fewest blocks, as cheapestIndexSelect
-// picks it, or tp itself if pred equates none of its indexed fields with a
+// chooseIndex returns the plan that reads the table of tp through the
+// cheapest index that pred allows, as cheapestIndexSelect chooses it. It
+// returns tp itself if pred equates none of the indexed fields with a
 // constant.
 func (qp *IndexQueryPlanner) chooseIndex(tp *TablePlan, pred query.Predicate, tx *transaction.Transaction) (Plan, error) {
 	indexes, err := qp.mm.GetIndexInfo(tx, tp.tableName)

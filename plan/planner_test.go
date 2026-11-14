@@ -8,12 +8,13 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// errFromPlanner is what the fake planners fail with when a case asks them to,
-// so that a case can tell an error passed up from one the planner made itself.
+// errFromPlanner is the error that the fake planners return when a case asks
+// for a failure. A case can then distinguish an error that the planner passed
+// on from an error that the planner created itself.
 var errFromPlanner = errors.New("error from planner")
 
-// fakeQueryPlanner keeps the query data it was last given, and answers with
-// the plan and error it was set to.
+// fakeQueryPlanner stores the query data of its last call, and returns the
+// plan and the error that the test set.
 type fakeQueryPlanner struct {
 	got  parse.QueryData
 	plan Plan
@@ -27,9 +28,9 @@ func (fq *fakeQueryPlanner) CreatePlan(data parse.QueryData, _ *transaction.Tran
 	return fq.plan, fq.err
 }
 
-// fakeUpdatePlanner keeps which of its methods was last called and the name
-// of the table, view or index it was about. Each method reports a count of its
-// own, so that a case can tell whose count came back.
+// fakeUpdatePlanner stores which of its methods was called last, and the name
+// of the table, view or index of that call. Each method returns a different
+// count, so that a case can identify the method that produced a count.
 type fakeUpdatePlanner struct {
 	called string
 	name   string

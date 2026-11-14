@@ -7,21 +7,21 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// The record every expression test reads from. The two fields differ in kind,
-// and the int is not the number any literal in these tests holds, so an
-// expression that went to the wrong place comes back with the wrong value
-// rather than with the right one by chance.
+// The record that every expression test reads. The two fields have different
+// types, and the int differs from every literal in these tests. An expression
+// that read the wrong source therefore returns a wrong value, and cannot
+// return the right one by chance.
 const (
 	testRecordID   = 42
 	testRecordName = "alice"
 )
 
-// newTestScanOverOneRecord opens a scan over a table holding one record,
-// written at slot 0, and leaves the scan at slot.
+// newTestScanOverOneRecord opens a scan of a table with one record at slot 0,
+// and positions the scan at slot.
 //
-// Passing 0 puts the scan on that record. Passing beforeFirstSlot puts it on
-// none, which is where an expression that reads the scan and one that does not
-// come apart.
+// With slot 0, the scan is on that record. With beforeFirstSlot, the scan is
+// on no record. In that state, an expression that reads the scan behaves
+// differently from one that does not.
 func newTestScanOverOneRecord(t *testing.T, slot int) *TableScan {
 	t.Helper()
 
@@ -58,9 +58,9 @@ func TestFieldExpressionEvaluate(t *testing.T) {
 			slot:      0,
 			want:      NewStringConstant(testRecordName),
 		},
-		// The expression adds no checking of its own, so what the scan refuses
-		// has to reach the caller rather than come back as a value of some
-		// kind.
+		// The expression adds no check of its own. An error from the scan
+		// must therefore reach the caller, and must not be replaced by a
+		// value.
 		{
 			name:      "given a field the table does not have, when the expression is evaluated, then ErrFieldNotFound reaches the caller",
 			fieldName: "missing",
@@ -128,9 +128,9 @@ func TestConstantExpressionEvaluate(t *testing.T) {
 		})
 	}
 
-	// A literal is the same value wherever it is read, so evaluating one must
-	// not go to the scan at all. A scan that is on no record is where that
-	// shows: a field expression fails there, and this one cannot.
+	// A literal has the same value for every record, so its evaluation must not
+	// read the scan. A scan on no record shows this: a field expression fails
+	// there, and a constant expression must not.
 	t.Run("given a scan that is on no record, when a constant expression is evaluated, then it is still the constant it holds", func(t *testing.T) {
 		ts := newTestScanOverOneRecord(t, beforeFirstSlot)
 
@@ -156,9 +156,9 @@ func TestFieldExpressionString(t *testing.T) {
 	})
 }
 
-// A printed predicate has to say which side of a term is a column and which is
-// a value, and the two can be spelled the same. The constant keeps its own
-// quoting, and the field name has none, so the pair is what tells them apart.
+// A printed predicate must show which side of a term is a column and which is
+// a value, and the two can have the same spelling. The constant keeps its
+// quotes and the field name has none, which distinguishes them.
 func TestConstantExpressionString(t *testing.T) {
 	tests := []struct {
 		name string
@@ -233,8 +233,8 @@ func TestFieldExpressionAppliesTo(t *testing.T) {
 	}
 }
 
-// A literal reads nothing from a record, so there is no schema it cannot be
-// evaluated against, an empty one included.
+// A literal reads nothing from a record, so it can be evaluated against any
+// schema, including an empty one.
 func TestConstantExpressionAppliesTo(t *testing.T) {
 	t.Run("given a schema with no fields, when a constant expression is checked against it, then it applies", func(t *testing.T) {
 		schema := recordmanager.NewSchema()

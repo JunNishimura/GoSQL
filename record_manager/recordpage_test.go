@@ -18,14 +18,14 @@ const (
 	testDataFile   = "test.tbl"
 	testBlockSize  = 400
 	testNumBuffers = 3
-	// testStringFieldLength is the character limit of the varchar field the
-	// tests share. It is named rather than written out so that a case about the
-	// limit reads as being about the limit, whatever the number happens to be.
+	// testStringFieldLength is the character limit of the varchar field that
+	// the tests share. It is a named constant so that a case about the limit
+	// refers to the limit by name, whatever its value.
 	testStringFieldLength = 20
 )
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see what another wrote.
+// one test cannot see the data of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -50,9 +50,9 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 	return tx
 }
 
-// newTestLayout builds a layout over the schema the record page tests share:
-// "id" is an int and "name" a varchar of 20 characters. One field of each kind
-// is what lets a test reach for the wrong one on purpose.
+// newTestLayout builds a layout for the schema that the record page tests
+// share: "id" is an int and "name" is a varchar of 20 characters. With one
+// field of each type, a test can deliberately use the wrong one.
 func newTestLayout(t *testing.T) *Layout {
 	t.Helper()
 
@@ -112,7 +112,7 @@ func TestNewRecordPage(t *testing.T) {
 	})
 }
 
-// The numbers the slot tests rely on, spelled out once:
+// The sizes that the slot tests depend on:
 //
 //	a block         400 bytes
 //	a slot           92 bytes, the in-use flag (4) plus id (4) plus name (84)
@@ -122,7 +122,8 @@ const (
 	testSlotsInBlock = testBlockSize / testSlotSize
 )
 
-// The two widths either side of a block, for a layout of one varchar field:
+// The two slot sizes on either side of the block size, for a layout with one
+// varchar field:
 //
 //	varchar(98)  4 + (4 + 392) = 400 bytes, exactly one slot to a block
 //	varchar(99)  4 + (4 + 396) = 404 bytes, and no slot fits at all
@@ -131,8 +132,8 @@ const (
 	overwideFieldLength      = 99
 )
 
-// newLayoutOfOneStringField builds a layout of a single varchar, which is what
-// lets a test put a slot at a width of its choosing.
+// newLayoutOfOneStringField builds a layout with a single varchar field, so
+// that a test can choose the slot size.
 func newLayoutOfOneStringField(t *testing.T, length int) *Layout {
 	t.Helper()
 
@@ -142,15 +143,15 @@ func newLayoutOfOneStringField(t *testing.T, length int) *Layout {
 	return NewLayout(s)
 }
 
-// A layout whose slot does not fit in a block is refused when the record page
-// is made, rather than at the first read or write of it.
+// A layout whose slot does not fit in a block is rejected when the record
+// page is created, not at its first read or write.
 //
-// Nothing can be done with such a layout: slot 0 already runs past the end of
-// the block, so every slot is out of range and the page holds no records at
-// all. Left to be found later it is worse than useless, because the caller that
-// finds it is TableScan.MoveToNewRecord, which reads "no free slot in this
-// block" as "append another block and look again" and does so forever, growing
-// the file until the disk fills.
+// Such a layout is unusable. Slot 0 already extends past the end of the
+// block, so every slot is out of range and the page holds no records. A late
+// failure would be worse than an early one, because the caller that finds it
+// is TableScan.MoveToNewRecord. It handles "no free slot in this block" by
+// appending another block and searching again, and it would repeat that until
+// the disk was full.
 func TestNewRecordPageRejectsASlotWiderThanABlock(t *testing.T) {
 	t.Run("given a layout whose slot is wider than a block, when a record page is made on it, then it reports ErrSlotWiderThanBlock", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -166,9 +167,9 @@ func TestNewRecordPageRejectsASlotWiderThanABlock(t *testing.T) {
 			t.Errorf("error = %v, want %v", err, ErrSlotWiderThanBlock)
 		}
 
-		// The block is left as it was found. Pinning it and then refusing would
-		// hold a buffer for a page that was never handed out, and nothing would
-		// know to give it back.
+		// The block stays unpinned. If it were pinned before the error, a
+		// buffer would stay pinned for a page that was never returned, and no
+		// caller could unpin it.
 		if _, err := tx.GetInt(blk, 0); err == nil {
 			t.Error("GetInt() after the refused record page error = nil, want an error: the block was pinned and left that way")
 		}
@@ -193,8 +194,8 @@ func TestNewRecordPageRejectsASlotWiderThanABlock(t *testing.T) {
 	})
 }
 
-// newTestRecordPage builds a record page over a freshly appended block, so that
-// every slot in it starts out zeroed.
+// newTestRecordPage builds a record page over a newly appended block, so that
+// every slot in it starts zeroed.
 func newTestRecordPage(t *testing.T) *RecordPage {
 	t.Helper()
 
@@ -346,8 +347,8 @@ func TestRecordPageSlotOffset(t *testing.T) {
 	})
 }
 
-// Slot testSlotsInBlock is the first one whose bytes would run past the end of
-// the block, and -1 stands for any slot below the first.
+// Slot testSlotsInBlock is the first slot whose bytes would extend past the
+// end of the block. -1 represents any negative slot.
 func TestRecordPageRejectsASlotOutsideTheBlock(t *testing.T) {
 	tests := []struct {
 		name string
@@ -416,8 +417,8 @@ func TestRecordPageRejectsASlotOutsideTheBlock(t *testing.T) {
 	}
 }
 
-// The test schema has "id" as an int and "name" as a varchar, so each case
-// below reaches for the field of the type its method does not read or write.
+// In the test schema, "id" is an int and "name" is a varchar. Each case below
+// uses the field whose type the method does not read or write.
 func TestRecordPageRejectsTheWrongFieldType(t *testing.T) {
 	tests := []struct {
 		name string
@@ -460,19 +461,20 @@ func TestRecordPageRejectsTheWrongFieldType(t *testing.T) {
 	}
 }
 
-// A varchar field is given room for its character limit in the widest encoding
-// there is, so an over-long string only reaches past the field once it is
-// longer than that: four bytes for every character the field allows. Below
-// that the string is written and read back intact, and the only thing wrong
-// with it is that the field now holds more characters than its schema says it
-// can. Above it, the write runs into whatever follows the field in the block,
-// which for the last field of a slot is the next slot's in-use flag.
+// A varchar field reserves room for its character limit in the widest
+// encoding: four bytes for every character it allows. A string that is too
+// long therefore extends past the field only when it is longer than that.
+// Below that size, the string is written and read back intact. The only
+// problem is that the field then holds more characters than its schema
+// allows. Above that size, the write overwrites the data after the field in
+// the block. For the last field of a slot, that is the in-use flag of the
+// next slot.
 //
-// Both are the same fault, so both are refused by the same rule, and the cases
-// below cover either side of that boundary.
+// Both cases are the same violation, so the same rule rejects both. The cases
+// below cover both sides of that boundary.
 func TestRecordPageRejectsAStringLongerThanItsField(t *testing.T) {
-	// A slot holds the in-use flag, an int and the varchar, so a string long
-	// enough to run past the varchar runs into the slot after it.
+	// A slot holds the in-use flag, an int and the varchar. A string long
+	// enough to extend past the varchar therefore reaches the next slot.
 	const charsPastTheSlot = testStringFieldLength*4 + 1
 
 	tests := []struct {
@@ -497,9 +499,9 @@ func TestRecordPageRejectsAStringLongerThanItsField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			rp := newTestRecordPage(t)
 
-			// The slot after the one written to is marked, so that a write that
-			// reached past its own slot shows up as that mark being gone rather
-			// than as a byte no test can name.
+			// The slot after the written one is marked as in use. A write that
+			// extended past its own slot is then detected as a missing mark, and
+			// not as a changed byte that no test checks.
 			if err := rp.setSlotState(1, slotInUse); err != nil {
 				t.Fatalf("setSlotState() error = %v", err)
 			}
@@ -565,9 +567,9 @@ func TestRecordPageRejectsAnUnknownField(t *testing.T) {
 	}
 }
 
-// readSlotState reads the flag at the front of slot. Nothing exposes it, so a
-// test that wants to see what Delete wrote has to go through the transaction
-// the record page writes with.
+// readSlotState reads the flag at the start of slot. No method exposes the
+// flag, so a test that checks what Delete wrote must read it through the
+// transaction of the record page.
 func readSlotState(t *testing.T, rp *RecordPage, slot int) slotState {
 	t.Helper()
 
@@ -587,8 +589,8 @@ func readSlotState(t *testing.T, rp *RecordPage, slot int) slotState {
 func TestRecordPageSetSlotState(t *testing.T) {
 	tests := []struct {
 		name string
-		// states are written to the same slot in turn, so that a case can
-		// check a slot goes back to a state it has already left.
+		// states are written to the same slot in order, so that a case can
+		// check that a slot returns to a state it had before.
 		states []slotState
 		want   slotState
 	}{
@@ -622,9 +624,9 @@ func TestRecordPageSetSlotState(t *testing.T) {
 }
 
 func TestRecordPageDelete(t *testing.T) {
-	// A block comes back from Append filled with zeroes, which is slotEmpty, so
-	// the slot has to be marked in use before a delete can be seen to have done
-	// anything.
+	// Append returns a block filled with zeros, and zero is slotEmpty. The slot
+	// must therefore be marked as in use first, or the effect of a delete
+	// could not be observed.
 	t.Run("given a slot holding a record, when it is deleted, then the slot reads as free", func(t *testing.T) {
 		rp := newTestRecordPage(t)
 
@@ -759,8 +761,8 @@ func TestRecordPageHasSlot(t *testing.T) {
 	}
 }
 
-// A block starts out as four empty slots, so a case marks the ones it wants in
-// use and leaves the rest. Slot -1 is how a search asks to start at slot 0.
+// A block starts as four empty slots. Each case marks the slots it needs as
+// in use and leaves the rest empty. Slot -1 makes a search start at slot 0.
 func TestRecordPageSearchAfter(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1002,8 +1004,8 @@ func TestRecordPageClaimFreeSlotAfter(t *testing.T) {
 		})
 	}
 
-	// Claiming from the start of the block over and over is what an insert into
-	// a table does, so each claim has to see the marks the ones before it left.
+	// An insert into a table claims repeatedly from the start of the block, so
+	// each claim must see the marks that the earlier claims set.
 	t.Run("when it is asked from the start of the block over and over, then it gives out each slot once and then reports ErrNoSuchSlot", func(t *testing.T) {
 		rp := newTestRecordPage(t)
 
@@ -1056,9 +1058,8 @@ func TestRecordPageClaimFreeSlotAfter(t *testing.T) {
 }
 
 func TestRecordPageInitializeNewBlock(t *testing.T) {
-	// A block that has just been appended is already all zeroes, so the block
-	// is filled in first: an initialize that did nothing at all would pass
-	// otherwise.
+	// A newly appended block is already all zeros. The block is therefore
+	// filled first, or an initialize that did nothing would also pass.
 	t.Run("given a block whose slots all hold records, when it is initialized, then every slot is free and every field its zero value", func(t *testing.T) {
 		rp := newTestRecordPage(t)
 
@@ -1101,9 +1102,9 @@ func TestRecordPageInitializeNewBlock(t *testing.T) {
 		}
 	})
 
-	// The block holds four whole slots and 32 bytes over, which belong to no
-	// slot. A marker is left in them to catch an initialize that runs past the
-	// last one.
+	// The block holds four whole slots and 32 extra bytes that belong to no
+	// slot. A marker is written to those bytes to detect an initialize that
+	// writes past the last slot.
 	t.Run("it leaves the bytes past the last whole slot alone, since no slot owns them", func(t *testing.T) {
 		const marker = 12345
 

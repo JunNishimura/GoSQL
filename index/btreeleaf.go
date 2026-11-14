@@ -9,48 +9,46 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// dirEntry is one directory record: a value, and the child block the entries
-// from that value on are reached through.
+// dirEntry is one directory entry: a key, and the child block that covers the
+// keys from that key upward.
 //
-// It is what a block that has just been split hands up to the directory above
-// it, which files the new block under the first value it holds.
+// A block that has just split returns a dirEntry for the new block. The
+// directory level above inserts it, keyed by the first key in the new block.
 type dirEntry struct {
 	value            query.Constant
 	childBlockNumber int
 }
 
-// btreeLeaf is a leaf block of a B-tree, opened to read or change the entries
-// filed under one value.
+// btreeLeaf is a leaf block of a B-tree. It is opened to read or change the
+// entries for one key.
 //
-// It is opened at the slot before the first entry for that value, as a scan is
-// opened before its first record, and moves forward from there one entry at a
-// time. The entries for one value are next to each other, since a page keeps
-// its records in order, so reading them is moving forward until the value
-// changes.
+// The leaf is opened at the slot before the first entry for that key, as a
+// scan is opened before its first record. It moves forward one entry at a
+// time. A page keeps its records sorted, so the entries for one key are
+// adjacent. Reading them means moving forward until the key changes.
 //
-// A leaf's flag is the number of the block its entries overflow into, or -1
-// if they do not. Entries overflow when so many share one value that they do
-// not fit in a block, and that value is the one the leaf's first entry is filed
-// under. Every entry of an overflow block is filed under it, but the leaf the
-// chain starts from may go on past them to entries for greater values, which
-// the directory sends there as it would to any leaf.
+// The flag of a leaf is the number of its overflow block, or -1 if it has
+// none. A leaf overflows when the entries for one key do not fit in one
+// block. That key, the overflow key, is always the key of the leaf's first
+// entry. Every entry in an overflow block has the overflow key. The leaf
+// itself can also hold entries for greater keys after them, and the directory
+// maps those keys to the leaf as usual.
 type btreeLeaf struct {
 	tx        *transaction.Transaction
 	layout    *recordmanager.Layout
 	searchKey query.Constant
 	contents  *btreePage
-	// currentSlot is the slot of the entry being read, or the slot before the
-	// first entry for searchKey until the first move.
+	// currentSlot is the slot of the current entry. Before the first move it
+	// is the slot before the first entry for searchKey.
 	currentSlot int
-	// previousBlock is the number of the block that overflows into the one
-	// being read, or -1 while the leaf is still in the block it was opened in.
-	// It is what an overflow block left empty is taken out of the chain
-	// through.
+	// previousBlock is the number of the block whose overflow block is the
+	// current block. It is -1 while the leaf is still on the block it was
+	// opened on. It is used to unlink an overflow block that becomes empty.
 	previousBlock int
 }
 
-// newBTreeLeaf opens the leaf in blk to read or change the entries filed under
-// searchKey, before the first of them.
+// newBTreeLeaf opens the leaf in blk to read or change the entries for
+// searchKey. The leaf is positioned before the first of these entries.
 //
 // The block stays pinned until close.
 func newBTreeLeaf(
@@ -81,13 +79,13 @@ func newBTreeLeaf(
 	}, nil
 }
 
-// next moves on to the next entry filed under the search key and reports
-// whether there was one.
+// next moves to the next entry for the search key and reports whether one
+// exists.
 //
-// The entries for the search key in one block end at the first entry filed
-// under a greater value, or at the end of the block. Either may not be the end
-// of them, since they may go on in the block this one overflows into, and then
-// the leaf moves there and goes on from its first entry.
+// Within one block, the entries for the search key end at the first entry
+// with a greater key, or at the end of the block. In either case more entries
+// can follow in the overflow block. If they do, the leaf moves to the
+// overflow block and continues from its first entry.
 func (l *btreeLeaf) next() (bool, error) {
 	for {
 		l.currentSlot++
@@ -114,12 +112,13 @@ func (l *btreeLeaf) next() (bool, error) {
 	}
 }
 
-// moveToOverflow moves the leaf to the block the current one overflows into,
-// before its first entry, if the entries for the search key go on there, and
-// reports whether it did.
+// moveToOverflow moves the leaf to the overflow block of the current block
+// if the entries for the search key continue there. It positions the leaf
+// before the first entry of that block, and reports whether it moved.
 //
-// They go on there only if the block overflows at all and the search key is
-// the value its entries overflow under, which is the value of its first entry.
+// The entries continue there only if the current block has an overflow block
+// and the search key is the overflow key, which is the key of the block's
+// first entry.
 func (l *btreeLeaf) moveToOverflow() (bool, error) {
 	flag, err := l.contents.flag()
 	if err != nil {
@@ -149,18 +148,19 @@ func (l *btreeLeaf) moveToOverflow() (bool, error) {
 	return true, nil
 }
 
-// dataRecordID is the record id of the indexed table the current entry points
-// to.
+// dataRecordID returns the record id of the table record that the current
+// entry points to.
 func (l *btreeLeaf) dataRecordID() (*recordmanager.RecordID, error) {
 	return l.contents.dataRecordID(l.currentSlot)
 }
 
-// delete takes out the entry filing rid under the search key.
+// delete removes the entry that maps the search key to rid.
 //
-// It is meant for a leaf just opened, and moves forward through the entries
-// for the search key to find it. Both halves have to match: the same record id
-// filed under another value is a different entry, and is left alone. One that
-// is not there at all is ErrEntryNotFound, as it is for a hash index.
+// delete expects a leaf that has just been opened. It moves forward through
+// the entries for the search key to find the entry. Both the key and the
+// record id must match: an entry with the same record id but another key is a
+// different entry, and is not removed. If no entry matches, delete returns
+// ErrEntryNotFound, as a hash index does.
 func (l *btreeLeaf) delete(rid *recordmanager.RecordID) error {
 	for {
 		ok, err := l.next()
@@ -189,18 +189,20 @@ func (l *btreeLeaf) delete(rid *recordmanager.RecordID) error {
 	}
 }
 
-// refillIfChainLost brings an entry back from the block the leaf overflows
-// into, if the delete just made in the leaf took out the last entry it held
-// for the search key and so left its chain with nothing to be found by.
+// refillIfChainLost keeps the overflow chain reachable after a delete in the
+// leaf. If the delete removed the leaf's last entry for the search key, it
+// moves one entry from the overflow block back into the leaf.
 //
-// A chain goes on from a leaf only for the value of the leaf's first entry, so
-// once the leaf holds none for it, or none at all, the entries in the chain
-// are still there but no search reaches them. One of them goes back to the
-// front of the leaf, where it stands for the chain again. It is the last of
-// the block's, so that nothing in the block has to move along.
+// An overflow chain is followed only for the key of the leaf's first entry.
+// Once the leaf holds no entry for that key, or no entry at all, the entries
+// in the chain still exist but no search can reach them. Moving one of them
+// to the first slot of the leaf makes the chain reachable again. The entry
+// moved is the last one in the overflow block, so no other entry in that
+// block has to shift.
 //
-// The leaf has room for it, the delete having just made some. If that leaves
-// the block empty, the block is taken out of the chain as unlinkIfEmpty would.
+// The leaf has room for the entry, because the delete has just freed a slot.
+// If the move empties the overflow block, the block is unlinked from the
+// chain, as unlinkIfEmpty does.
 func (l *btreeLeaf) refillIfChainLost() error {
 	if l.currentSlot != 0 {
 		return nil
@@ -255,13 +257,13 @@ func (l *btreeLeaf) refillIfChainLost() error {
 	return l.contents.setFlag(next)
 }
 
-// unlinkIfEmpty takes the block being read out of its chain if it is an
-// overflow block with no entries left, by making the block before it overflow
-// into whichever block it did.
+// unlinkIfEmpty removes the current block from its overflow chain if it is an
+// overflow block with no entries left. It sets the flag of the previous block
+// to the current block's own overflow block.
 //
-// An empty block cannot stay in a chain. Whether a chain goes on into a block
-// is told by the block's first entry, and an empty block has none: what is
-// read there is whatever its last entry left behind.
+// An empty block cannot stay in a chain. A search reads the first entry of a
+// block to decide whether the chain continues past it. An empty block has no
+// first entry: slot 0 holds only the stale bytes of a deleted entry.
 func (l *btreeLeaf) unlinkIfEmpty() error {
 	if l.previousBlock < 0 {
 		return nil
@@ -286,21 +288,22 @@ func (l *btreeLeaf) unlinkIfEmpty() error {
 	return previous.setFlag(flag)
 }
 
-// insert files rid under the search key, ahead of any entries already filed
-// under it.
+// insert adds an entry that maps the search key to rid. The new entry goes
+// before any existing entries for the same key.
 //
-// It is meant for a leaf just opened, which is before the entries for the
-// search key: that is the place that keeps the entries in order, and the
-// insert goes there.
+// insert expects a leaf that has just been opened. Such a leaf is positioned
+// before the entries for the search key, and inserting at the next slot keeps
+// the entries sorted.
 //
-// If the block fills up, it is split and the directory record for the new
-// block comes back, for the directory to file. Otherwise there is nothing for
-// the directory to do, and nil comes back.
+// If the insert fills the block, the block is split. insert then returns the
+// directory entry for the new block, and the caller inserts it into the
+// directory. Otherwise insert returns nil.
 //
-// A leaf that overflows has to start with the entries for the value it
-// overflows under, so an entry for a smaller value cannot go ahead of them.
-// Instead they move out, chain and all, into a new block for the directory to
-// file under their value, and the leaf is left holding the new entry alone.
+// A leaf with an overflow block must start with the entries for its overflow
+// key, so an entry with a smaller key cannot be inserted before them. In that
+// case the existing entries move to a new block together with the overflow
+// chain. insert returns the directory entry for that block, and the leaf
+// keeps only the new entry.
 func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
 	if e, err := l.moveOverflowingOut(rid); err != nil || e != nil {
 		return e, err
@@ -335,14 +338,16 @@ func (l *btreeLeaf) insert(rid *recordmanager.RecordID) (*dirEntry, error) {
 	return l.split(n, firstKey)
 }
 
-// moveOverflowingOut files rid under the search key in a leaf that
-// overflows under a greater value, by moving everything the leaf held into a
-// new block and putting the entry in the leaf alone. It returns the directory
-// record for the new block, or nil if the leaf does not overflow under a
-// greater value and the insert has to go ahead as usual.
+// moveOverflowingOut handles an insert into a leaf whose overflow key is
+// greater than the search key. It moves all entries of the leaf to a new
+// block, and inserts the entry that maps the search key to rid as the only
+// entry of the leaf. It returns the directory entry for the new block.
 //
-// The new block takes the leaf's flag, so the chain goes on from it as it did
-// from the leaf, and the leaf no longer overflows.
+// It returns nil if the leaf has no overflow block, or if its overflow key is
+// not greater than the search key. The caller then does a normal insert.
+//
+// The new block takes over the leaf's flag. The overflow chain therefore
+// continues from the new block, and the leaf no longer has an overflow block.
 func (l *btreeLeaf) moveOverflowingOut(rid *recordmanager.RecordID) (*dirEntry, error) {
 	flag, err := l.contents.flag()
 	if err != nil || flag < 0 {
@@ -374,14 +379,14 @@ func (l *btreeLeaf) moveOverflowingOut(rid *recordmanager.RecordID) (*dirEntry, 
 	return &dirEntry{value: firstKey, childBlockNumber: newBlk.Number()}, nil
 }
 
-// overflow makes room in a full leaf whose entries are all filed under one
-// value, by moving all but the first into a new block the leaf overflows into.
+// overflow makes room in a full leaf whose entries all have the same key. It
+// moves every entry except the first to a new overflow block.
 //
-// Such a leaf cannot be split, since every place to split it would part two
-// entries for that value. The new block goes at the head of the leaf's chain,
-// overflowing into whichever block the leaf did, so the chain stays one line
-// of blocks for that value. Nothing changes for the directory, which still
-// sends a search for that value to the leaf.
+// Such a leaf cannot be split, because any split position would separate two
+// entries for that key. The new block becomes the head of the leaf's overflow
+// chain, and the leaf's old overflow block becomes the overflow block of the
+// new one. The chain therefore stays a single list of blocks for that key.
+// The directory does not change: it still maps that key to the leaf.
 func (l *btreeLeaf) overflow() error {
 	flag, err := l.contents.flag()
 	if err != nil {
@@ -396,17 +401,19 @@ func (l *btreeLeaf) overflow() error {
 	return l.contents.setFlag(int32(newBlk.Number()))
 }
 
-// split moves the second half of a full leaf, which holds n entries starting
-// with one for firstKey, into a new block and returns the directory record for
-// it.
+// split moves the second half of a full leaf to a new block and returns the
+// directory entry for that block. n is the number of entries in the leaf, and
+// firstKey is the key of its first entry.
 //
-// It starts from the middle and moves the split so that it does not part two
-// entries filed under the same value: a search for that value would otherwise
-// be sent to one block and miss the entries in the other. The split moves
-// left, to before the first entry for the middle value, so that they all go to
-// the new block; but if that value is the first in the block, there is nothing
-// to the left of it to keep, and the split moves right past its last entry
-// instead, so that they all stay.
+// The split position starts in the middle and is adjusted so that it does not
+// separate two entries with the same key. Otherwise a search for that key
+// would be sent to one block and miss the entries in the other.
+//
+// Normally the position moves left, to the first entry for the middle key, so
+// that all entries for that key go to the new block. If the middle key is
+// also the first key of the block, moving left would leave no entries in the
+// old block. The position then moves right, past the last entry for that key,
+// so that all of them stay.
 func (l *btreeLeaf) split(n int, firstKey query.Constant) (*dirEntry, error) {
 	splitPos := n / 2
 	splitKey, err := l.contents.dataValue(splitPos)
@@ -448,7 +455,7 @@ func (l *btreeLeaf) split(n int, firstKey query.Constant) (*dirEntry, error) {
 	return &dirEntry{value: splitKey, childBlockNumber: newBlk.Number()}, nil
 }
 
-// close gives back the pin on whichever block the leaf is reading.
+// close unpins the block that the leaf currently holds.
 func (l *btreeLeaf) close() {
 	l.contents.close()
 }

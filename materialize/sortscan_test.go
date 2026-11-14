@@ -149,8 +149,9 @@ func TestSortScanHasField(t *testing.T) {
 	}
 }
 
-// newRun makes a temp table of the test schema holding a record for each id,
-// in the order given, whose name is "name" followed by the id.
+// newRun creates a temp table with the test schema that holds one record for
+// each id, in the order given. The name of a record is "name" followed by its
+// id.
 func newRun(t *testing.T, tx *transaction.Transaction, ids ...int32) *TempTable {
 	t.Helper()
 
@@ -176,7 +177,7 @@ func newRun(t *testing.T, tx *transaction.Transaction, ids ...int32) *TempTable 
 	return tt
 }
 
-// mustNewSortScan opens a sort scan by id over a run for each list of ids.
+// mustNewSortScan opens a sort scan by id over one run for each list of ids.
 func mustNewSortScan(t *testing.T, tx *transaction.Transaction, runIDs ...[]int32) *SortScan {
 	t.Helper()
 
@@ -196,8 +197,8 @@ func mustNewSortScan(t *testing.T, tx *transaction.Transaction, runIDs ...[]int3
 	return s
 }
 
-// readIDs reads the id of every record a scan gives back from its start, in
-// the order it gives them.
+// readIDs reads the id of every record of a scan from its start, in the order
+// in which the scan returns them.
 func readIDs(t *testing.T, s query.Scan) []int32 {
 	t.Helper()
 
@@ -223,8 +224,8 @@ func readIDs(t *testing.T, s query.Scan) []int32 {
 	}
 }
 
-// readIDsAndNames reads every record a scan gives back from its start as
-// "id:name", in the order it gives them.
+// readIDsAndNames reads every record of a scan from its start as "id:name",
+// in the order in which the scan returns them.
 func readIDsAndNames(t *testing.T, s query.Scan) []string {
 	t.Helper()
 
@@ -258,11 +259,11 @@ func TestSortScanRestorePosition(t *testing.T) {
 	tests := []struct {
 		name string
 		runs [][]int32
-		// read is how many records are read before the position is saved.
+		// read is the number of records read before the position is saved.
 		read int
-		// wantCurrent is the id of the record the scan is on once put back.
+		// wantCurrent is the id of the current record after the restore.
 		wantCurrent int32
-		// wantRest is the ids read after it, once put back.
+		// wantRest is the ids read after that record.
 		wantRest []int32
 	}{
 		{
@@ -337,8 +338,8 @@ func TestSortScanRestorePosition(t *testing.T) {
 	}
 }
 
-// readRestOfIDs reads the id of every record a scan gives back from where it
-// is, without moving it back to its start.
+// readRestOfIDs reads the id of every record of a scan from its current
+// position, without a restart.
 func readRestOfIDs(t *testing.T, s query.Scan) []int32 {
 	t.Helper()
 

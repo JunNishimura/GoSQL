@@ -4,35 +4,35 @@ import (
 	"github.com/JunNishimura/GoSQL/query"
 )
 
-// JoinScan reads the pairs of a record of one scan and a record of a table
-// that an index on the table files under what the first record holds in a
-// field, which is a join of the two on that field and the indexed one.
+// JoinScan joins a scan with a table by using an index on the table. It
+// reads each pair of a left record and a table record whose indexed field
+// equals the left record's join field.
 //
-// For each record on the left, the index is searched for the value of the
-// join field, and the table is moved to each record it gives in turn. That
-// reads the records on the right that the join keeps and no others, where a
-// product would read every record on the right for every one on the left and
-// leave the join to a select over it.
+// For each left record, JoinScan searches the index for the value of the join
+// field. It then moves the table to each record id that the index returns.
+// This reads only the right records that the join keeps. A product scan would
+// instead read every right record for every left record, and a select scan
+// over it would filter the pairs.
 type JoinScan struct {
 	lhs       query.Scan
 	idx       Index
 	joinField string
 	rhs       query.UpdateScan
-	// onLeftRecord says whether lhs is on a record, which it is from a move
-	// before the first record until the left side runs out.
+	// onLeftRecord reports whether lhs is positioned on a record. It is true
+	// from the first move until lhs has no more records.
 	onLeftRecord bool
 }
 
 var _ query.Scan = (*JoinScan)(nil)
 
-// NewJoinScan returns a scan of the pairs of a record of lhs and a record of
-// rhs that idx files under what the record of lhs holds in joinField, before
-// the first of them.
+// NewJoinScan returns a scan over the pairs of a record of lhs and a record
+// of rhs, where idx maps the lhs record's value of joinField to the rhs
+// record. The scan is positioned before the first pair.
 //
-// rhs is taken as an UpdateScan because its records are reached by moving it
-// to a record id. The scan owns lhs, idx and rhs from here on, and Close
-// closes them; if the first move fails, they are closed before the error comes
-// back, since there is then no scan for the caller to close.
+// rhs must be an UpdateScan because the scan reaches its records by record
+// id. The scan takes ownership of lhs, idx and rhs, and Close closes them. If
+// the initial positioning fails, NewJoinScan closes them before it returns
+// the error, because the caller then has no scan to close.
 func NewJoinScan(lhs query.Scan, idx Index, joinField string, rhs query.UpdateScan) (*JoinScan, error) {
 	s := &JoinScan{
 		lhs:       lhs,
@@ -50,8 +50,8 @@ func NewJoinScan(lhs query.Scan, idx Index, joinField string, rhs query.UpdateSc
 }
 
 // MoveBeforeFirstRecord moves the left scan to its first record and searches
-// the index for its join value, so that the next move arrives at the first
-// pair.
+// the index for that record's join value. The next call to MoveToNextRecord
+// then moves to the first pair.
 func (s *JoinScan) MoveBeforeFirstRecord() error {
 	if err := s.lhs.MoveBeforeFirstRecord(); err != nil {
 		return err
@@ -60,13 +60,12 @@ func (s *JoinScan) MoveBeforeFirstRecord() error {
 	return s.moveToNextLeftRecord()
 }
 
-// MoveToNextRecord moves on to the next pair and reports whether there was
-// one.
+// MoveToNextRecord moves to the next pair and reports whether one exists.
 //
-// The next pair is the next record the index files under the current left
-// record's value, and once there are none, the first such record of the next
-// left record that has one. A left record nothing on the right matches is
-// passed over.
+// The next pair uses the next index entry for the current left record's join
+// value. When there are no more entries, the scan advances to the next left
+// record that has at least one entry. A left record with no matching right
+// record is skipped.
 func (s *JoinScan) MoveToNextRecord() (bool, error) {
 	for s.onLeftRecord {
 		ok, err := s.idx.MoveToNextMatch()
@@ -93,8 +92,8 @@ func (s *JoinScan) MoveToNextRecord() (bool, error) {
 	return false, nil
 }
 
-// moveToNextLeftRecord moves the left scan on by one record and, if there is
-// one, searches the index for what it holds in the join field.
+// moveToNextLeftRecord advances the left scan by one record. If a record
+// exists, it searches the index for that record's join value.
 func (s *JoinScan) moveToNextLeftRecord() error {
 	ok, err := s.lhs.MoveToNextRecord()
 	if err != nil {
@@ -113,8 +112,8 @@ func (s *JoinScan) moveToNextLeftRecord() error {
 	return s.idx.MoveBeforeFirstMatch(value)
 }
 
-// GetInt reads fieldName of the current pair, from the right record if it has
-// the field and from the left one otherwise.
+// GetInt reads fieldName of the current pair. It reads from the right record
+// if that record has the field, and from the left record otherwise.
 func (s *JoinScan) GetInt(fieldName string) (int32, error) {
 	if s.rhs.HasField(fieldName) {
 		return s.rhs.GetInt(fieldName)
@@ -123,8 +122,8 @@ func (s *JoinScan) GetInt(fieldName string) (int32, error) {
 	return s.lhs.GetInt(fieldName)
 }
 
-// GetString reads fieldName of the current pair, from the right record if it
-// has the field and from the left one otherwise.
+// GetString reads fieldName of the current pair. It reads from the right
+// record if that record has the field, and from the left record otherwise.
 func (s *JoinScan) GetString(fieldName string) (string, error) {
 	if s.rhs.HasField(fieldName) {
 		return s.rhs.GetString(fieldName)
@@ -133,8 +132,8 @@ func (s *JoinScan) GetString(fieldName string) (string, error) {
 	return s.lhs.GetString(fieldName)
 }
 
-// GetValue reads fieldName of the current pair, from the right record if it
-// has the field and from the left one otherwise.
+// GetValue reads fieldName of the current pair. It reads from the right
+// record if that record has the field, and from the left record otherwise.
 func (s *JoinScan) GetValue(fieldName string) (query.Constant, error) {
 	if s.rhs.HasField(fieldName) {
 		return s.rhs.GetValue(fieldName)

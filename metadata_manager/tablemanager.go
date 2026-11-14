@@ -9,11 +9,11 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// ErrTableNotFound reports a table the catalogs have no row for.
+// ErrTableNotFound is returned for a table that has no row in the catalogs.
 var ErrTableNotFound = errors.New("table not found")
 
-// The catalogs are ordinary tables, so they are stored under names of their
-// own, alongside the tables they describe.
+// The catalogs are ordinary tables. They are stored under their own names,
+// together with the tables that they describe.
 const (
 	tableCatalogName = "table_catalog"
 	fieldCatalogName = "field_catalog"
@@ -21,42 +21,47 @@ const (
 
 // The fields of the two catalogs.
 //
-// One row of the table catalog is one table, and one row of the field catalog
-// is one field of one table. That is why there are two catalogs rather than
-// one: a table has any number of fields, and a record has a fixed number of
-// them, so the fields of a table cannot be written into the row that names it.
+// One row of the table catalog describes one table, and one row of the field
+// catalog describes one field of one table. Two catalogs are needed because a
+// table has a variable number of fields and a record has a fixed number. The
+// fields of a table therefore cannot be stored in the row of the table.
 const (
-	// tableNameField is the table a row is about. Both catalogs carry it, and
-	// it is what ties a table's fields back to the table.
+	// tableNameField holds the name of the table that a row describes. Both
+	// catalogs have this field, and it links the fields of a table to the
+	// table.
 	tableNameField = "table_name"
-	// slotSizeField is how wide one slot of that table is.
+	// slotSizeField holds the slot size of that table.
 	slotSizeField = "slot_size"
-	// fieldNameField is the field a field catalog row is about.
+	// fieldNameField holds the name of the field that a field catalog row
+	// describes.
 	fieldNameField = "field_name"
-	// fieldTypeField is that field's type, held as the number a FieldType is.
+	// fieldTypeField holds the type of that field, as the numeric value of a
+	// FieldType.
 	fieldTypeField = "field_type"
-	// fieldLengthField is that field's character limit, and is 0 for an int,
-	// whose width does not vary.
+	// fieldLengthField holds the character limit of that field. It is 0 for
+	// an int, whose size is fixed.
 	fieldLengthField = "field_length"
-	// fieldOffsetField is where that field sits within a slot. It is written
-	// down rather than worked out again on every read, so that records already
-	// on disk keep being read at the offsets they were written to.
+	// fieldOffsetField holds the offset of that field within a slot. The
+	// offset is stored and not computed again on each read, so that existing
+	// records on disk are always read at the offsets they were written with.
 	fieldOffsetField = "field_offset"
 )
 
-// TableManager is what the database knows about its own tables: which tables
-// exist, what fields each of them has, and where those fields sit in a record.
+// TableManager manages the metadata of the tables of the database: which
+// tables exist, which fields each table has, and where the fields are located
+// in a record.
 //
-// It keeps that knowledge in two tables of its own, the table catalog and the
-// field catalog, so that a table definition survives a restart the same way any
-// other record does. Storing catalogs as tables means they are read and written
-// through a TableScan, under a transaction, and are recovered by the same log.
+// It stores this metadata in two tables of its own, the table catalog and the
+// field catalog. A table definition therefore survives a restart in the same
+// way as any other record. Because the catalogs are tables, they are accessed
+// through a TableScan in a transaction, and the same log recovers them.
 //
-// The two layouts here are the catalogs' own. They are held rather than rebuilt
-// per call because reading any table's definition starts by scanning a catalog,
-// and a scan cannot begin without the layout of the table it scans. Those two
-// layouts are the point where that regress stops: they are built in code from
-// schemas fixed by this package, not looked up from a catalog.
+// The two layouts in this type are the layouts of the catalogs. They are
+// stored and not built on each call. Reading the definition of any table
+// starts with a scan of a catalog, and a scan needs the layout of the table
+// that it scans. The layouts of the catalogs cannot be read from a catalog
+// for that reason. They are built in code from schemas that this package
+// defines.
 type TableManager struct {
 	tableCatalogLayout *recordmanager.Layout
 	fieldCatalogLayout *recordmanager.Layout
@@ -64,9 +69,9 @@ type TableManager struct {
 
 // NewTableManager builds the layouts of the two catalogs.
 //
-// It touches no storage, so it neither takes a transaction nor says whether the
-// database is new. Creating the catalogs is CreateCatalogTables, which the
-// caller invokes on a database that has none yet.
+// It accesses no storage. It therefore takes no transaction and does not need
+// to know whether the database is new. CreateCatalogTables creates the
+// catalogs, and the caller invokes it for a database that has none yet.
 func NewTableManager() (*TableManager, error) {
 	tableCatalogSchema, err := newTableCatalogSchema()
 	if err != nil {
@@ -84,13 +89,12 @@ func NewTableManager() (*TableManager, error) {
 	}, nil
 }
 
-// CreateTable writes a table's definition into the catalogs: one row naming the
-// table and giving the width of its records, and one row for each of its fields.
+// CreateTable writes the definition of a table to the catalogs: one row with
+// the table name and the slot size, and one row for each field.
 //
-// The layout is worked out here and written down, rather than left to be worked
-// out again when the table is read back. That is what makes the offsets saved
-// here the ones the table's records are written to for as long as the table
-// exists.
+// The layout is computed here and stored. It is not computed again when the
+// table is read back. The stored offsets are therefore the offsets that the
+// records of the table are written with for as long as the table exists.
 func (tm *TableManager) CreateTable(tx *transaction.Transaction, tableName string, schema *recordmanager.Schema) error {
 	if err := checkNames(tableName, schema); err != nil {
 		return err
@@ -105,12 +109,14 @@ func (tm *TableManager) CreateTable(tx *transaction.Transaction, tableName strin
 	return tm.recordFields(tx, tableName, layout)
 }
 
-// CreateCatalogTables writes the two catalogs into themselves, which is what
-// makes them tables the rest of the database can read like any other.
+// CreateCatalogTables writes the definitions of the two catalogs into the
+// catalogs themselves. The rest of the database can then read them like any
+// other table.
 //
-// It is separate from NewTableManager so that whether a database is new is the
-// caller's to know rather than a flag handed down to a constructor. Calling it
-// on a database that already has catalogs would describe them a second time.
+// It is separate from NewTableManager so that the caller decides whether a
+// database is new, and no flag has to be passed to a constructor. On a
+// database that already has catalogs, this call would write their definitions
+// a second time.
 func (tm *TableManager) CreateCatalogTables(tx *transaction.Transaction) error {
 	if err := tm.CreateTable(tx, tableCatalogName, tm.tableCatalogLayout.Schema()); err != nil {
 		return err
@@ -119,13 +125,13 @@ func (tm *TableManager) CreateCatalogTables(tx *transaction.Transaction) error {
 	return tm.CreateTable(tx, fieldCatalogName, tm.fieldCatalogLayout.Schema())
 }
 
-// GetLayout reads a table's definition back out of the catalogs.
+// GetLayout reads the definition of a table from the catalogs.
 //
-// The layout is rebuilt from what was written down rather than worked out again
-// from the schema, so that the offsets it gives are the ones the table's
-// records were written to. A version of this code that laid fields out
-// differently would otherwise read every record of every older table at the
-// wrong place, and say nothing about it.
+// The layout is restored from the stored values and not computed again from
+// the schema. Its offsets are therefore the offsets that the records of the
+// table were written with. Otherwise a version of this code that placed
+// fields differently would silently read every record of every older table at
+// the wrong offsets.
 func (tm *TableManager) GetLayout(tx *transaction.Transaction, tableName string) (*recordmanager.Layout, error) {
 	slotSize, err := tm.readSlotSize(tx, tableName)
 	if err != nil {
@@ -140,13 +146,14 @@ func (tm *TableManager) GetLayout(tx *transaction.Transaction, tableName string)
 	return recordmanager.NewLayoutFromCatalog(schema, offsets, slotSize)
 }
 
-// checkNames refuses a table or field name the catalogs cannot hold.
+// checkNames returns an error for a table or field name that is too long for
+// the catalogs.
 //
-// Every name is looked at before any of them is written, so that a refusal
-// leaves the catalogs as they were. A record page would refuse the same name on
-// its own, but only once it reached the row carrying it, and by then the rows
-// ahead of it describe a table the catalogs half know about, which nothing
-// later has any reason to clean up.
+// Every name is checked before any of them is written, so that an error
+// leaves the catalogs unchanged. A record page would reject the same name,
+// but only when it writes the row with that name. The rows written before it
+// would then describe a table that is only partly in the catalogs, and no
+// later code would remove them.
 func checkNames(tableName string, schema *recordmanager.Schema) error {
 	if err := checkNameFits("table", tableName); err != nil {
 		return err
@@ -161,7 +168,7 @@ func checkNames(tableName string, schema *recordmanager.Schema) error {
 	return nil
 }
 
-// recordTable writes the table catalog's row for this table.
+// recordTable writes the row of the table catalog for this table.
 func (tm *TableManager) recordTable(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) error {
 	ts, err := query.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
 	if err != nil {
@@ -179,8 +186,8 @@ func (tm *TableManager) recordTable(tx *transaction.Transaction, tableName strin
 	return ts.SetInt(slotSizeField, int32(layout.SlotSize()))
 }
 
-// recordFields writes the field catalog's rows for this table, one per field,
-// in the order the schema lists them.
+// recordFields writes the rows of the field catalog for this table, one per
+// field, in schema order.
 func (tm *TableManager) recordFields(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) error {
 	ts, err := query.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
 	if err != nil {
@@ -190,10 +197,10 @@ func (tm *TableManager) recordFields(tx *transaction.Transaction, tableName stri
 
 	schema := layout.Schema()
 	for _, fieldName := range schema.Fields() {
-		// None of these three can fail: the field came from the schema's own
-		// list, and the layout was built from that schema. They are returned
-		// rather than dropped so that this stays true if they grow another
-		// reason to refuse a field.
+		// None of these three calls can fail, because the field name comes
+		// from the schema's own list and the layout was built from that
+		// schema. The errors are still returned, so that the code stays
+		// correct if one of the calls gains another failure case.
 		fieldType, err := schema.Type(fieldName)
 		if err != nil {
 			return err
@@ -230,8 +237,8 @@ func (tm *TableManager) recordFields(tx *transaction.Transaction, tableName stri
 	return nil
 }
 
-// readSlotSize finds the table catalog's row for this table and returns the
-// slot size on it. A table with no row there is one the database does not have.
+// readSlotSize finds the row of the table catalog for this table and returns
+// its slot size. A table with no row there does not exist in the database.
 func (tm *TableManager) readSlotSize(tx *transaction.Transaction, tableName string) (int, error) {
 	ts, err := query.NewTableScan(tx, tableCatalogName, tm.tableCatalogLayout)
 	if err != nil {
@@ -265,17 +272,17 @@ func (tm *TableManager) readSlotSize(tx *transaction.Transaction, tableName stri
 	}
 }
 
-// readFields walks the whole field catalog and collects the rows belonging to
-// this table, as a schema and the offsets that go with it.
+// readFields scans the whole field catalog and collects the rows of this
+// table. It returns them as a schema and the matching offsets.
 //
-// Every row is looked at, because the rows of one table are not kept together:
-// a row is written wherever the field catalog has a free slot, which for a
-// table created after others is wherever their deleted rows left room.
+// Every row is read, because the rows of one table are not adjacent. A row is
+// written to any free slot of the field catalog. For a table created after
+// others, these can be slots that deleted rows left free.
 //
-// The fields come out in the order their rows were written, which is the order
-// the schema listed them when the table was created. That order is part of the
-// record format, so a layout that had them in another one would not be the same
-// layout even with the same offsets.
+// The fields are returned in the order in which their rows were written,
+// which is the schema order at the time the table was created. That order is
+// part of the record format. A layout with the fields in another order would
+// be a different layout even with the same offsets.
 func (tm *TableManager) readFields(tx *transaction.Transaction, tableName string) (*recordmanager.Schema, map[string]int, error) {
 	ts, err := query.NewTableScan(tx, fieldCatalogName, tm.fieldCatalogLayout)
 	if err != nil {
@@ -327,12 +334,12 @@ func (tm *TableManager) readFields(tx *transaction.Transaction, tableName string
 	}
 }
 
-// newTableCatalogSchema is the schema of the table catalog: one row per table,
-// naming it and saying how wide its slots are.
+// newTableCatalogSchema returns the schema of the table catalog. The catalog
+// has one row per table, with the table name and the slot size.
 //
-// Adding a field cannot fail here, since the names are fixed by this package
-// and no two of them are the same. The error is returned rather than dropped so
-// that this stays true if AddField grows another reason to refuse a field.
+// Adding a field cannot fail here, because this package defines the names and
+// they are all different. The error is still returned, so that the code stays
+// correct if AddField gains another failure case.
 func newTableCatalogSchema() (*recordmanager.Schema, error) {
 	schema := recordmanager.NewSchema()
 
@@ -346,10 +353,12 @@ func newTableCatalogSchema() (*recordmanager.Schema, error) {
 	return schema, nil
 }
 
-// newFieldCatalogSchema is the schema of the field catalog: one row per field
-// of per table, naming the table it belongs to and describing the field.
+// newFieldCatalogSchema returns the schema of the field catalog. The catalog
+// has one row per field of each table, with the table name and the
+// description of the field.
 //
-// Adding a field cannot fail here, for the reason newTableCatalogSchema gives.
+// Adding a field cannot fail here, for the same reason as in
+// newTableCatalogSchema.
 func newFieldCatalogSchema() (*recordmanager.Schema, error) {
 	schema := recordmanager.NewSchema()
 

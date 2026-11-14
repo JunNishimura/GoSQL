@@ -8,7 +8,7 @@ import (
 )
 
 // newTestMetadataManager builds a metadata manager over a database whose
-// catalogs already exist, which is the state every call below starts from.
+// catalogs already exist. Every call below starts from that state.
 func newTestMetadataManager(t *testing.T, tx *transaction.Transaction) *MetadataManager {
 	t.Helper()
 
@@ -23,10 +23,11 @@ func newTestMetadataManager(t *testing.T, tx *transaction.Transaction) *Metadata
 	return mm
 }
 
-// The four managers have to be built over one table manager rather than one
-// each. A table manager holds no state, so two of them would answer alike; a
-// statistics manager does, and two of those would be two sets of measurements,
-// each gathered on its own schedule and neither seeing the other's work.
+// The four managers must share one table manager and one statistics manager.
+// A table manager holds no state, so two of them would give the same answers.
+// A statistics manager holds state. Two of them would hold two sets of
+// statistics, each refreshed on its own schedule and independent of the
+// other.
 func TestNewMetadataManager(t *testing.T) {
 	t.Run("it builds the four managers it stands in front of, over one table manager and one set of statistics", func(t *testing.T) {
 		mm, err := NewMetadataManager()
@@ -62,10 +63,9 @@ func TestNewMetadataManager(t *testing.T) {
 	})
 }
 
-// Three of the four managers keep a catalog, and all three are made here. A
-// database that had some of them would be one where a call went through to a
-// table that was not there, and which of the calls that is depends on which
-// catalog was missed.
+// Three of the four managers have a catalog, and this call creates all three.
+// In a database with only some of them, a call would reach a table that does
+// not exist, and which call fails would depend on which catalog is missing.
 func TestMetadataManagerCreateCatalogTables(t *testing.T) {
 	t.Run("when the catalogs are created, then every catalog the managers read through can be read", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -91,10 +91,10 @@ func TestMetadataManagerCreateCatalogTables(t *testing.T) {
 	})
 }
 
-// Each pair below goes out through one call and back through another, because
-// what this manager adds is the wiring rather than any working of its own. What
-// each manager does with a call is held down by that manager's own tests; what
-// is left to say here is that a call reaches the one that can answer it.
+// Each test below writes through one call and reads through another, because
+// this manager only adds the wiring and no behavior of its own. The tests of
+// each wrapped manager check what that manager does with a call. The tests
+// here only check that a call reaches the manager that can answer it.
 func TestMetadataManagerCreateTableAndGetLayout(t *testing.T) {
 	t.Run("given a table created through this manager, when its layout is asked for, then it is the one the table was created with", func(t *testing.T) {
 		tx := newTestTransaction(t)

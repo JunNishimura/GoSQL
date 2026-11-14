@@ -47,8 +47,9 @@ func TestNewStringConstant(t *testing.T) {
 	})
 }
 
-// The values here are the zero value of either kind, so what the cases turn on
-// is the kind the constant was made as and nothing about what it holds.
+// The values here are the zero values of both types. The cases therefore
+// depend only on the type that the constant was created with, not on its
+// contents.
 func TestConstantType(t *testing.T) {
 	tests := []struct {
 		name string
@@ -93,8 +94,8 @@ func TestConstantAsInt(t *testing.T) {
 			c:    NewIntConstant(-1),
 			want: -1,
 		},
-		// The text is the digits of a number, so a constant that read its
-		// varchar as an int would come back with 42 rather than refuse.
+		// The text is the digits of a number. A constant that read its varchar
+		// as an int would return 42 instead of an error.
 		{
 			name:    "given a varchar constant whose text is digits, it reports ErrConstantTypeMismatch rather than reading the text as a number",
 			c:       NewStringConstant("42"),
@@ -170,14 +171,13 @@ func TestConstantAsString(t *testing.T) {
 	}
 }
 
-// A constant is compared with ==, which is why it is a value rather than a
-// pointer. A term of a predicate is two of these put side by side, so this is
-// the operation the whole of query processing rests on.
+// Constants are compared with ==, which is why Constant is a value and not a
+// pointer. A predicate term compares two constants, so all query processing
+// depends on this operation.
 //
-// The last two cases are what the kind a constant carries is for. Without it a
-// constant would be its two values alone, and the unused one of the two is the
-// zero value of its type, so an int and a varchar that both hold nothing else
-// would read as the same value.
+// The last two cases show why a constant stores its type. Without the type, a
+// constant would consist of its two values only. The unused value is the zero
+// value of its type, so an int 0 and a varchar "" would be equal.
 func TestConstantEquality(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -258,7 +258,7 @@ func TestConstantCompare(t *testing.T) {
 			right: NewIntConstant(42),
 			want:  0,
 		},
-		// Ordered as unsigned, -1 would be the largest int there is.
+		// As an unsigned number, -1 would be the largest int.
 		{
 			name:  "given a negative and a positive int constant, then the negative one comes first",
 			left:  NewIntConstant(-1),
@@ -348,9 +348,9 @@ func TestConstantString(t *testing.T) {
 			c:    NewIntConstant(42),
 			want: "42",
 		},
-		// An error message naming both kinds is the reason there is a
-		// difference to make: quoted, the two cases above read as one value
-		// each rather than as the same one twice.
+		// An error message that shows both types is the reason for the
+		// quotes. With quotes, the two cases above print as two different
+		// values, not as the same value twice.
 		{
 			name: "given a varchar constant whose text is digits, it is quoted, so it does not read as the number",
 			c:    NewStringConstant("42"),

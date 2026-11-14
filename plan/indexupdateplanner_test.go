@@ -17,11 +17,11 @@ import (
 func TestIndexUpdatePlannerExecuteInsert(t *testing.T) {
 	tests := []struct {
 		name string
-		// indexed is the fields of the test table an index is on.
+		// indexed is the fields of the test table that have an index.
 		indexed []string
 		sql     string
-		// want is the records each search finds, by the field searched and
-		// the value searched for.
+		// want is the records that each search returns, keyed by the searched
+		// field and then by the search value.
 		want map[string]map[query.Constant][]testRow
 	}{
 		{
@@ -49,8 +49,9 @@ func TestIndexUpdatePlannerExecuteInsert(t *testing.T) {
 				"name": {query.NewStringConstant("e"): {{id: 5, name: "e"}}},
 			},
 		},
-		// The record holds the empty string in the field it was not given, and
-		// a search for that has to find it like any other value.
+		// The record has the empty string in the field that the insert did
+		// not list, and a search for it must find the record like any other
+		// value.
 		{
 			name:    "given a table indexed on name, when a record is inserted naming only id, then 1 record is reported and the index finds it by the empty string its name was left at",
 			indexed: []string{"name"},
@@ -107,11 +108,11 @@ func TestIndexUpdatePlannerExecuteInsert(t *testing.T) {
 	})
 }
 
-// Each case starts from the 5 records testRows gives, filed in the table's
-// indexes, and every index is searched afterwards for every one of their
-// values: a delete that took out one entry too many, or left another pointing
-// to the wrong record, shows as a value finding something other than its own
-// record.
+// Each case starts with the 5 records from testRows, which are in the indexes
+// of the table. After the delete, every index is searched for every value of
+// those records. If the delete removed one entry too many, or left an entry
+// that points to the wrong record, a search returns something other than its
+// own record.
 func TestIndexUpdatePlannerExecuteDelete(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -215,9 +216,9 @@ func TestIndexUpdatePlannerExecuteDelete(t *testing.T) {
 		})
 	}
 
-	// The index is registered after the records are written, and is not made
-	// to hold them, so it is behind the table: that is what an index left out
-	// of a change looks like.
+	// The index is registered after the records are written and is not
+	// built from them, so it is out of sync with the table. An index that
+	// missed an update is in the same state.
 	t.Run("given a table of 5 records indexed on id by an index that holds none of them, when the record of id 2 is deleted, then it reports ErrEntryNotFound", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -231,11 +232,11 @@ func TestIndexUpdatePlannerExecuteDelete(t *testing.T) {
 	})
 }
 
-// As for a delete, each case starts from the 5 records testRows gives, filed in
-// the table's indexes, and every index is searched afterwards for every value
-// the records held before and hold after. The records are read through the
-// record ids the entries hold, so a record that kept its entry reads back with
-// whatever it was changed to.
+// As for a delete, each case starts with the 5 records from testRows, which
+// are in the indexes of the table. After the update, every index is searched
+// for every value that the records had before and have after. The records are
+// read through the record ids in the entries, so a record that kept its entry
+// is read with its modified values.
 func TestIndexUpdatePlannerExecuteModify(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -276,8 +277,8 @@ func TestIndexUpdatePlannerExecuteModify(t *testing.T) {
 				},
 			},
 		},
-		// The index is on a field the statement does not change, so it is left
-		// as it was, and its entry for 2 reads back the record as changed.
+		// The index is on a field that the statement does not change, so it
+		// is not updated. Its entry for 2 returns the modified record.
 		{
 			name:      "given a table of 5 records indexed on id, when the name of id 2 is set to 'x', then 1 record is reported and the index still finds each record under its id",
 			indexed:   []string{"id"},
@@ -367,7 +368,7 @@ func TestIndexUpdatePlannerExecuteModify(t *testing.T) {
 	}
 
 	// As for a delete, the index is registered after the records are written
-	// and holds none of them.
+	// and contains none of them.
 	t.Run("given a table of 5 records indexed on name by an index that holds none of them, when the name of id 2 is set to 'x', then it reports ErrEntryNotFound", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -431,9 +432,9 @@ func TestIndexUpdatePlannerExecuteCreateView(t *testing.T) {
 	})
 }
 
-// The records are written by createTestTable, past every planner, so the only
-// way an index can come to hold them is by being filled from the table when it
-// is made.
+// createTestTable writes the records without any planner. An index can
+// therefore contain them only if it is built from the table when it is
+// created.
 func TestIndexUpdatePlannerExecuteCreateIndex(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -512,9 +513,9 @@ func TestIndexUpdatePlannerExecuteCreateIndex(t *testing.T) {
 		}
 	})
 
-	// An index the catalog holds for a table or a field that is not there
-	// could never be described, and every planner reading that table would
-	// fail asking for it, so nothing is written for one.
+	// A catalog entry for an index on a missing table or field could never
+	// be described, and every planner that reads the table would fail when
+	// it requests the indexes. Nothing is therefore written for it.
 	t.Run("given no table of the name, when an index on it is created, then it reports ErrTableNotFound and the catalog holds no index for it", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -541,9 +542,9 @@ func TestIndexUpdatePlannerExecuteCreateIndex(t *testing.T) {
 	})
 }
 
-// assertNoIndexes checks that the catalog holds no index for tableName, which
-// asking for its indexes without an error also shows the catalog can still
-// answer for.
+// assertNoIndexes checks that the catalog has no index for tableName. A
+// successful request for the indexes also shows that the catalog is still
+// readable.
 func assertNoIndexes(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, tableName string) {
 	t.Helper()
 
@@ -556,8 +557,8 @@ func assertNoIndexes(t *testing.T, tx *transaction.Transaction, mm *metadatamana
 	}
 }
 
-// insertTestRowsThrough writes rows into the test table through up, so that
-// they are filed in whatever indexes the table has.
+// insertTestRowsThrough inserts rows into the test table through up, so that
+// they are added to the indexes of the table.
 func insertTestRowsThrough(t *testing.T, tx *transaction.Transaction, up *IndexUpdatePlanner, rows []testRow) {
 	t.Helper()
 
@@ -569,8 +570,8 @@ func insertTestRowsThrough(t *testing.T, tx *transaction.Transaction, up *IndexU
 	}
 }
 
-// createTestIndexes registers an index on each of fields of the test table,
-// named after the field.
+// createTestIndexes registers an index on each of fields of the test table.
+// Each index is named after its field.
 func createTestIndexes(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, fields []string) {
 	t.Helper()
 
@@ -581,9 +582,9 @@ func createTestIndexes(t *testing.T, tx *transaction.Transaction, mm *metadatama
 	}
 }
 
-// assertIndexedRows checks, for each field and value of want, that searching
-// the index on that field for that value finds the records want gives, in any
-// order.
+// assertIndexedRows checks, for each field and value in want, that a search
+// of the index on that field for that value returns the expected records, in
+// any order.
 func assertIndexedRows(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, want map[string]map[query.Constant][]testRow) {
 	t.Helper()
 
@@ -598,12 +599,12 @@ func assertIndexedRows(t *testing.T, tx *transaction.Transaction, mm *metadatama
 }
 
 // indexedRows searches the index on field of the test table for value, and
-// reads the record each entry it finds points to.
+// reads the record that each matching entry points to.
 //
-// The records are read by moving a scan of the table to the record id the
-// entry holds, so what comes back is what the record id points to rather than
-// what the index was filed under: an entry pointing to the wrong record reads
-// back as that record.
+// The records are read by moving a table scan to the record id of the entry.
+// The result therefore shows the record that the entry points to, not the key
+// of the entry. An entry that points to the wrong record returns that wrong
+// record.
 func indexedRows(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, field string, value query.Constant) []testRow {
 	t.Helper()
 
@@ -665,8 +666,8 @@ func indexedRows(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.
 	}
 }
 
-// sortedRows is rows in order of id, then of name, so that two lists of the
-// same records compare equal whatever order they were read in.
+// sortedRows returns rows sorted by id and then by name, so that two lists of
+// the same records compare equal whatever order they were read in.
 func sortedRows(rows []testRow) []testRow {
 	return slices.SortedFunc(slices.Values(rows), func(a, b testRow) int {
 		if a.id != b.id {

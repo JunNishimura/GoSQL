@@ -21,8 +21,8 @@ func (r *CheckpointRecord) Op() Op {
 	return Checkpoint
 }
 
-// TxNumber reports noTxNum because a checkpoint is not written on behalf of
-// any transaction.
+// TxNumber returns noTxNum, because a checkpoint is not written for any
+// transaction.
 func (r *CheckpointRecord) TxNumber() int {
 	return noTxNum
 }

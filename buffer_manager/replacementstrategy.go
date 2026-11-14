@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// ReplacementPolicy names the strategy a BufferManager uses to pick the buffer
-// to replace.
+// ReplacementPolicy selects the strategy that a BufferManager uses to choose
+// the buffer to replace.
 type ReplacementPolicy int
 
 const (
@@ -18,11 +18,11 @@ const (
 	LeastRecentlyModifiedPolicy
 )
 
-// replacementStrategy decides which unpinned buffer to reuse when no buffer
-// already holds the requested block. It returns nil when every buffer is pinned.
+// replacementStrategy chooses the unpinned buffer to reuse when no buffer
+// holds the requested block. It returns nil when every buffer is pinned.
 //
-// The manager reports every buffer that becomes pinned or unpinned, so that a
-// strategy may keep an index of the candidates instead of walking the pool.
+// The manager notifies the strategy of every pin and unpin, so a strategy can
+// keep an index of the candidates instead of scanning the pool.
 type replacementStrategy interface {
 	chooseUnpinnedBuffer() *Buffer
 	bufferPinned(buf *Buffer)
@@ -48,8 +48,8 @@ func newReplacementStrategy(policy ReplacementPolicy, pool []*Buffer) (replaceme
 	}
 }
 
-// scanStrategy is the base of the strategies that walk the whole pool on every
-// choice. They keep no index, so the pin notifications tell them nothing.
+// scanStrategy is the base of the strategies that scan the whole pool for
+// every choice. They keep no index, so they ignore the pin notifications.
 type scanStrategy struct {
 	pool []*Buffer
 }
@@ -92,8 +92,8 @@ func oldestUnpinnedBuffer(pool []*Buffer, timestamp func(*Buffer) int) *Buffer {
 	return chosen
 }
 
-// fifoStrategy takes the unpinned buffer whose block was read in the longest
-// time ago, regardless of how recently that buffer was used.
+// fifoStrategy chooses the unpinned buffer whose block was read earliest,
+// regardless of how recently the buffer was used.
 type fifoStrategy struct {
 	scanStrategy
 }
@@ -102,11 +102,11 @@ func (s *fifoStrategy) chooseUnpinnedBuffer() *Buffer {
 	return oldestUnpinnedBuffer(s.pool, func(buf *Buffer) int { return buf.readTime })
 }
 
-// lruStrategy takes the unpinned buffer that was unpinned the longest time ago,
-// on the assumption that it is the least likely to be needed again. It keeps the
-// unpinned buffers queued in that order, so that a choice costs no search of the
-// pool. element locates a buffer's node, so that leaving the queue costs none
-// either.
+// lruStrategy chooses the unpinned buffer that was unpinned earliest, on the
+// assumption that it is the least likely to be needed again. It keeps the
+// unpinned buffers in a queue in that order, so a choice needs no scan of the
+// pool. element maps a buffer to its queue node, so removing a buffer from
+// the queue needs no scan either.
 type lruStrategy struct {
 	queue   *list.List
 	element map[*Buffer]*list.Element
@@ -118,7 +118,7 @@ func newLRUStrategy(pool []*Buffer) *lruStrategy {
 		element: make(map[*Buffer]*list.Element, len(pool)),
 	}
 
-	// Every buffer starts out unpinned, so the queue starts in pool order.
+	// Every buffer starts unpinned, so the queue starts in pool order.
 	for _, buf := range pool {
 		s.element[buf] = s.queue.PushBack(buf)
 	}
@@ -150,8 +150,8 @@ func (s *lruStrategy) bufferUnpinned(buf *Buffer) {
 	s.element[buf] = s.queue.PushBack(buf)
 }
 
-// clockStrategy scans the pool as if it were a circle, starting at the buffer
-// following the one it replaced last.
+// clockStrategy scans the pool as a circle. Each scan starts at the buffer
+// after the one it replaced last.
 type clockStrategy struct {
 	scanStrategy
 	hand int
@@ -168,11 +168,11 @@ func (s *clockStrategy) chooseUnpinnedBuffer() *Buffer {
 	return nil
 }
 
-// unmodifiedFirstStrategy takes a buffer that needs no write-back whenever one
-// is available, so that replacing it costs a single disk read instead of a read
-// plus the write of the page and of the log records protecting it.
+// unmodifiedFirstStrategy chooses a buffer that needs no write-back whenever
+// one is available. Replacing it then costs one disk read, instead of a read
+// plus the writes of the page and of the log records that protect it.
 type unmodifiedFirstStrategy struct {
-	// naiveStrategy supplies the pool and the choice to fall back on when every
+	// naiveStrategy provides the pool, and the fallback choice for when every
 	// unpinned buffer has been modified.
 	naiveStrategy
 }
@@ -186,11 +186,11 @@ func (s *unmodifiedFirstStrategy) chooseUnpinnedBuffer() *Buffer {
 	return s.naiveStrategy.chooseUnpinnedBuffer()
 }
 
-// leastRecentlyModifiedStrategy takes the modified buffer with the lowest LSN.
-// The log records protecting it are the most likely to be on disk already, so
-// writing the buffer out needs no further log flush.
+// leastRecentlyModifiedStrategy chooses the modified buffer with the lowest
+// LSN. The log records that protect it are the most likely to be on disk
+// already, so writing the buffer needs no further log flush.
 type leastRecentlyModifiedStrategy struct {
-	// naiveStrategy supplies the pool and the choice to fall back on when no
+	// naiveStrategy provides the pool, and the fallback choice for when no
 	// unpinned buffer has been modified.
 	naiveStrategy
 }

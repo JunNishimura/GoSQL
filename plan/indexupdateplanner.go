@@ -11,36 +11,35 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// IndexUpdatePlanner carries out the statements that change the database as
-// BasicUpdatePlanner does, and keeps the indexes of the table up to date
-// alongside.
+// IndexUpdatePlanner executes the statements that change the database in the
+// same way as BasicUpdatePlanner, and also updates the indexes of the table.
 //
-// An index is not kept up by the table it is on: a record written, deleted or
-// changed without the index being told leaves the index finding records that
-// are gone and missing ones that are there. Every statement that changes a
-// record of an indexed table has to go through this planner for its indexes to
-// stay right.
+// A table does not maintain its indexes. If a record is inserted, deleted or
+// modified without an update of the index, an index search returns deleted
+// records and misses new ones. Every statement that changes a record of an
+// indexed table must therefore go through this planner.
 type IndexUpdatePlanner struct {
 	mm *metadatamanager.MetadataManager
 }
 
 var _ UpdatePlanner = (*IndexUpdatePlanner)(nil)
 
-// NewIndexUpdatePlanner returns a planner that reads and writes tables, their
-// indexes and their definitions through mm.
+// NewIndexUpdatePlanner returns a planner that accesses tables, their indexes
+// and their definitions through mm.
 func NewIndexUpdatePlanner(mm *metadatamanager.MetadataManager) *IndexUpdatePlanner {
 	return &IndexUpdatePlanner{
 		mm: mm,
 	}
 }
 
-// ExecuteInsert writes one record of the values given, each to the field it
-// was named with, and files it in every index of the table.
+// ExecuteInsert inserts one record with the given values, each in the field
+// that the statement lists for it, and adds an entry for the record to every
+// index of the table.
 //
-// Each index files the record under what its field holds once the record is
-// written, not under the value the statement named. A field not named is left
-// at its zero value, and the record holds that value as much as any other, so a
-// search for it has to find the record.
+// The key of each index entry is the value of the indexed field after the
+// record is written, not the value in the statement. A field that is not
+// listed keeps its zero value. That is a real value of the record, so a
+// search for it must find the record.
 func (up *IndexUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transaction.Transaction) (int, error) {
 	us, err := openUpdateScan(up.mm, data.TableName(), tx)
 	if err != nil {
@@ -76,13 +75,13 @@ func (up *IndexUpdatePlanner) ExecuteInsert(data parse.InsertData, tx *transacti
 	return 1, nil
 }
 
-// ExecuteDelete deletes every record of the table the predicate keeps, and
-// takes out the entry each index of the table files it under.
+// ExecuteDelete deletes every record of the table that satisfies the
+// predicate, and removes its entry from every index of the table.
 //
-// The entries go before the record does, since what they are filed under is
-// read from the record. An index found not to hold the entry for a record is
-// behind the table, and that fails the statement rather than being passed
-// over: what it would go on finding is no longer there to find.
+// The entries are removed before the record is deleted, because their keys
+// are read from the record. If an index has no entry for a record, the index
+// is out of sync with the table. The statement then fails and does not skip
+// the record, because the index can no longer be trusted.
 func (up *IndexUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transaction.Transaction) (int, error) {
 	indexes, err := openIndexes(up.mm, data.TableName(), tx)
 	if err != nil {
@@ -110,14 +109,15 @@ func (up *IndexUpdatePlanner) ExecuteDelete(data parse.DeleteData, tx *transacti
 	})
 }
 
-// openIndexes opens every index of tableName, filed under the field each is
-// on, for a statement to keep up as it goes through the table.
+// openIndexes opens every index of tableName and returns them as a map from
+// the indexed field to its index. A statement updates them while it scans the
+// table.
 //
-// They are opened once for the statement rather than once per record it
-// changes, since opening a B-tree reads its files. An index holds no block
-// between one search and the next, so holding them all open costs nothing
-// while the statement is on some other record. What was opened before a
-// failure is closed again.
+// The indexes are opened once per statement and not once per record, because
+// opening a B-tree reads its files. An index pins no block between two
+// searches, so keeping all of them open costs nothing while the statement
+// processes other records. If an open fails, the indexes already opened are
+// closed.
 func openIndexes(mm *metadatamanager.MetadataManager, tableName string, tx *transaction.Transaction) (map[string]index.Index, error) {
 	infos, err := mm.GetIndexInfo(tx, tableName)
 	if err != nil {
@@ -145,14 +145,14 @@ func closeIndexes(indexes map[string]index.Index) {
 	}
 }
 
-// ExecuteModify sets the target field of every record the predicate keeps to
-// the new value, read against that record as BasicUpdatePlanner reads it, and
-// moves the record's entry in the index on that field from the old value to
-// the new.
+// ExecuteModify sets the target field of every record that satisfies the
+// predicate to the new value. The new value is evaluated against that record,
+// as in BasicUpdatePlanner. In the index on the target field, the entry of
+// the record is moved from the old value to the new value.
 //
-// Only that one index is touched. An index on any other field files the record
-// under a value the statement leaves as it was, and the entry still points to
-// the same record, so it is right as it stands.
+// Only that index is updated. An index on another field has a key that the
+// statement does not change, and its entry still points to the same record,
+// so it stays correct.
 func (up *IndexUpdatePlanner) ExecuteModify(data parse.ModifyData, tx *transaction.Transaction) (int, error) {
 	targetField := data.TargetField()
 
@@ -199,29 +199,29 @@ func (up *IndexUpdatePlanner) ExecuteModify(data parse.ModifyData, tx *transacti
 	})
 }
 
-// ExecuteCreateTable records the table's definition. A new table has no
-// index, so there is nothing to keep up.
+// ExecuteCreateTable stores the definition of the table. A new table has no
+// index, so no index needs an update.
 func (up *IndexUpdatePlanner) ExecuteCreateTable(data parse.CreateTableData, tx *transaction.Transaction) (int, error) {
 	return 0, up.mm.CreateTable(tx, data.TableName(), data.Schema())
 }
 
-// ExecuteCreateView records the view's definition. A view holds no records of
-// its own, so there is nothing to index.
+// ExecuteCreateView stores the definition of the view. A view has no records
+// of its own, so it has nothing to index.
 func (up *IndexUpdatePlanner) ExecuteCreateView(data parse.CreateViewData, tx *transaction.Transaction) (int, error) {
 	return 0, up.mm.CreateView(tx, data.ViewName(), data.ViewDef())
 }
 
-// ExecuteCreateIndex records the index's definition and files every record the
-// table already holds in it.
+// ExecuteCreateIndex stores the definition of the index and adds an entry for
+// every existing record of the table.
 //
-// SimpleDB records the definition alone, which leaves the index blind to every
-// record written before it: a search through it misses them, and deleting one
-// finds no entry to take out. Filling it from the table here is what lets this
-// planner keep it up from then on.
+// SimpleDB stores only the definition. The index then lacks every record that
+// was written before it was created: a search misses those records, and a
+// delete of one finds no entry to remove. Building the index from the table
+// here lets this planner keep it correct afterwards.
 //
-// The table and the field are looked up before anything is written. An index
-// the catalog held for a table or a field that is not there could never be
-// described, and every planner reading that table would fail asking for its
+// The table and the field are looked up before anything is written. A catalog
+// entry for an index on a missing table or field could never be described,
+// and every planner that reads the table would fail when it requests the
 // indexes.
 func (up *IndexUpdatePlanner) ExecuteCreateIndex(data parse.CreateIndexData, tx *transaction.Transaction) (int, error) {
 	layout, err := up.mm.GetLayout(tx, data.TableName())
@@ -239,14 +239,15 @@ func (up *IndexUpdatePlanner) ExecuteCreateIndex(data parse.CreateIndexData, tx 
 	return 0, up.fillIndex(data, layout, tx)
 }
 
-// fillIndex files every record of the table data names in the index data
-// makes, under what the record holds in the indexed field.
+// fillIndex adds an entry to the index of data for every record of the table
+// of data. The key of each entry is the value of the indexed field in the
+// record.
 func (up *IndexUpdatePlanner) fillIndex(data parse.CreateIndexData, layout *recordmanager.Layout, tx *transaction.Transaction) error {
 	infos, err := up.mm.GetIndexInfo(tx, data.TableName())
 	if err != nil {
 		return err
 	}
-	// The index has just been registered on this field, so it is there.
+	// The index was just registered for this field, so the map has it.
 	idx, err := infos[data.FieldName()].Open()
 	if err != nil {
 		return err

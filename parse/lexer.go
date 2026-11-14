@@ -6,11 +6,11 @@ import (
 	"strconv"
 )
 
-// ErrBadSyntax reports that the token the lexer is at is not the one the
-// parser asked to eat.
+// ErrBadSyntax is returned when the current token of the lexer is not the
+// token that the parser requested.
 var ErrBadSyntax = errors.New("bad syntax")
 
-// keywords are the words of SQL that cannot name a table or a field.
+// keywords are the SQL words that cannot be used as a table or field name.
 var keywords = map[string]struct{}{
 	"select":  {},
 	"from":    {},
@@ -32,19 +32,19 @@ var keywords = map[string]struct{}{
 	"on":      {},
 }
 
-// Lexer is what the parser reads SQL through: it holds the token it is at, and
-// lets the parser ask what that token is and take it.
+// Lexer is the interface through which the parser reads SQL. It holds the
+// current token. The parser can check what the token is, and consume it.
 //
-// A Match method looks at the current token and leaves it where it is. An Eat
-// method takes the current token if it is of the kind asked for, and reads the
-// one after it; so reading the next token is part of eating one, and an error
-// from reading it is returned by the Eat that moved there.
+// A Match method checks the current token and does not consume it. An Eat
+// method consumes the current token if it has the requested kind, and reads
+// the next token. Reading the next token is therefore part of an Eat, and the
+// Eat that advanced returns any error from that read.
 type Lexer struct {
 	tz  *tokenizer
 	cur token
 }
 
-// NewLexer returns a lexer at the first token of s.
+// NewLexer returns a lexer positioned at the first token of s.
 func NewLexer(s string) (*Lexer, error) {
 	l := &Lexer{tz: newTokenizer(s)}
 	if err := l.advance(); err != nil {
@@ -69,12 +69,12 @@ func (l *Lexer) MatchStringConstant() bool {
 	return l.cur.kind == tokenString
 }
 
-// MatchKeyword reports whether the current token is the keyword w, which is
-// given in lower case.
+// MatchKeyword reports whether the current token is the keyword w. w must be
+// in lower case.
 //
-// A w that is not a keyword never matches, even where the current token is
-// that very word. Otherwise a keyword misspelled by the parser would match a
-// field that happens to share the misspelling, and the query would parse.
+// If w is not a keyword, MatchKeyword never matches, even if the current
+// token is that exact word. Otherwise a keyword that the parser misspelled
+// would match a field with the same spelling, and the query would parse.
 func (l *Lexer) MatchKeyword(w string) bool {
 	if _, isKeyword := keywords[w]; !isKeyword {
 		return false
@@ -83,8 +83,8 @@ func (l *Lexer) MatchKeyword(w string) bool {
 	return l.cur.kind == tokenWord && l.cur.text == w
 }
 
-// MatchID reports whether the current token is a word that could name a table
-// or a field, which is any word but a keyword.
+// MatchID reports whether the current token is a word that can be a table or
+// field name. This is any word that is not a keyword.
 func (l *Lexer) MatchID() bool {
 	if l.cur.kind != tokenWord {
 		return false
@@ -94,15 +94,15 @@ func (l *Lexer) MatchID() bool {
 	return !isKeyword
 }
 
-// MatchEnd reports whether the input has been read to its end.
+// MatchEnd reports whether the lexer has reached the end of the input.
 //
-// There is no Eat to go with it, since there is no token after the end to
-// move on to.
+// It has no corresponding Eat method, because there is no token after the end
+// to advance to.
 func (l *Lexer) MatchEnd() bool {
 	return l.cur.kind == tokenEOF
 }
 
-// EatDelim takes the delimiter d.
+// EatDelim consumes the delimiter d.
 func (l *Lexer) EatDelim(d rune) error {
 	if !l.MatchDelim(d) {
 		return l.unexpected(fmt.Sprintf("delimiter %q", d))
@@ -111,10 +111,10 @@ func (l *Lexer) EatDelim(d rune) error {
 	return l.advance()
 }
 
-// EatIntConstant takes an int and returns its value.
+// EatIntConstant consumes an int and returns its value.
 //
-// An int that does not fit in an int32 is refused, since that is what a field
-// holds and the constant could never be compared with or written to one.
+// An int that does not fit in an int32 is rejected. A field holds an int32,
+// so such a constant could never be compared with a field or written to one.
 func (l *Lexer) EatIntConstant() (int32, error) {
 	if !l.MatchIntConstant() {
 		return 0, l.unexpected("int constant")
@@ -128,7 +128,7 @@ func (l *Lexer) EatIntConstant() (int32, error) {
 	return int32(n), l.advance()
 }
 
-// EatStringConstant takes a string constant and returns its text.
+// EatStringConstant consumes a string constant and returns its text.
 func (l *Lexer) EatStringConstant() (string, error) {
 	if !l.MatchStringConstant() {
 		return "", l.unexpected("string constant")
@@ -138,7 +138,7 @@ func (l *Lexer) EatStringConstant() (string, error) {
 	return s, l.advance()
 }
 
-// EatKeyword takes the keyword w, which is given in lower case.
+// EatKeyword consumes the keyword w. w must be in lower case.
 func (l *Lexer) EatKeyword(w string) error {
 	if !l.MatchKeyword(w) {
 		return l.unexpected(fmt.Sprintf("keyword %q", w))
@@ -147,7 +147,7 @@ func (l *Lexer) EatKeyword(w string) error {
 	return l.advance()
 }
 
-// EatID takes a word that is not a keyword and returns it in lower case.
+// EatID consumes a word that is not a keyword and returns it in lower case.
 func (l *Lexer) EatID() (string, error) {
 	if !l.MatchID() {
 		return "", l.unexpected("identifier")
@@ -167,8 +167,7 @@ func (l *Lexer) advance() error {
 	return nil
 }
 
-// unexpected is the error for being at the current token when want was asked
-// for.
+// unexpected returns the error for a current token that is not want.
 func (l *Lexer) unexpected(want string) error {
 	if l.cur.kind == tokenEOF {
 		return fmt.Errorf("%w: want %s, got end of input", ErrBadSyntax, want)

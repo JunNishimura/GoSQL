@@ -10,14 +10,14 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// Rows reads the records a query gives back.
+// Rows reads the records that a query returns.
 type Rows struct {
 	scan    query.Scan
 	columns []string
 	schema  *recordmanager.Schema
-	// autoTx is the transaction the query runs in when it was made outside one
-	// begun on the connection, to be committed when the rows are closed. It is
-	// nil for a query run in a transaction begun on the connection.
+	// autoTx is the transaction of a query that was run outside an open
+	// transaction of the connection. It is committed when the rows are closed.
+	// It is nil for a query that runs in the connection's open transaction.
 	autoTx *transaction.Transaction
 }
 
@@ -27,16 +27,16 @@ var (
 	_ driver.RowsColumnTypeLength           = (*Rows)(nil)
 )
 
-// Columns names the fields of the records, in the order of the select list.
+// Columns returns the field names of the records, in the order of the select
+// list.
 func (r *Rows) Columns() []string {
 	return r.columns
 }
 
-// ColumnTypeDatabaseTypeName names the type of the column at index, as INT or
-// VARCHAR.
+// ColumnTypeDatabaseTypeName returns the type name of the column at index:
+// INT or VARCHAR.
 func (r *Rows) ColumnTypeDatabaseTypeName(index int) string {
-	// The columns are the schema's own fields, so asking it about one cannot
-	// fail.
+	// The columns are fields of the schema, so this lookup cannot fail.
 	fieldType, _ := r.schema.Type(r.columns[index])
 	switch fieldType {
 	case recordmanager.FieldTypeInt:
@@ -48,11 +48,10 @@ func (r *Rows) ColumnTypeDatabaseTypeName(index int) string {
 	}
 }
 
-// ColumnTypeLength reports the character limit of the column at index if it is
-// a varchar, and ok as false if it is an int, which has no length.
+// ColumnTypeLength returns the character limit of the column at index if it
+// is a varchar. For an int, which has no length, ok is false.
 func (r *Rows) ColumnTypeLength(index int) (length int64, ok bool) {
-	// The columns are the schema's own fields, so asking it about one cannot
-	// fail.
+	// The columns are fields of the schema, so this lookup cannot fail.
 	if fieldType, _ := r.schema.Type(r.columns[index]); fieldType != recordmanager.FieldTypeVarchar {
 		return 0, false
 	}
@@ -61,8 +60,8 @@ func (r *Rows) ColumnTypeLength(index int) (length int64, ok bool) {
 	return int64(n), true
 }
 
-// Next puts the fields of the next record into dest, an int field as an int64
-// and a varchar field as a string, and reports io.EOF past the last record.
+// Next writes the fields of the next record to dest: an int field as an int64
+// and a varchar field as a string. It returns io.EOF after the last record.
 func (r *Rows) Next(dest []driver.Value) error {
 	ok, err := r.scan.MoveToNextRecord()
 	if err != nil {
@@ -86,7 +85,7 @@ func (r *Rows) Next(dest []driver.Value) error {
 	return nil
 }
 
-// driverValue turns a constant into the kind of value database/sql takes.
+// driverValue converts a constant to a value type that database/sql accepts.
 func driverValue(val query.Constant) (driver.Value, error) {
 	switch val.Type() {
 	case recordmanager.FieldTypeInt:
@@ -102,11 +101,11 @@ func driverValue(val query.Constant) (driver.Value, error) {
 	}
 }
 
-// Close closes the scan, and commits the transaction the query ran in if it was
-// one of its own.
+// Close closes the scan. If the query ran in a transaction of its own, Close
+// also commits that transaction.
 //
-// The transaction is let go of once committed, so closing the rows again does
-// not commit it twice.
+// The transaction is cleared after the commit, so a second Close does not
+// commit it again.
 func (r *Rows) Close() error {
 	r.scan.Close()
 	if r.autoTx == nil {

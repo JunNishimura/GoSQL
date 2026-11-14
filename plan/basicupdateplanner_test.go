@@ -13,14 +13,14 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// testRow is one record of the test table, read back out.
+// testRow is one record of the test table, as read back.
 type testRow struct {
 	id   int32
 	name string
 }
 
-// testRows are the records createTestTable writes, the i-th with id i and name
-// "name" followed by i, for the ids from 0 up to count.
+// testRows returns the records that createTestTable writes: for each i from 0
+// to count-1, a record with id i and the name "name" followed by i.
 func testRows(count int) []testRow {
 	rows := []testRow{}
 	for i := range count {
@@ -162,8 +162,8 @@ func TestBasicUpdatePlannerExecuteModify(t *testing.T) {
 				return rows
 			}(),
 		},
-		// The new value is an expression, read against the record being
-		// changed, so a field on the right is that record's own value.
+		// The new value is an expression that is evaluated against the
+		// modified record, so a field on the right is that record's own value.
 		{
 			name:      "given a table of 20 records, when id is set to the field id itself, then 20 are reported and every record keeps its id",
 			sql:       "update test set id = id",
@@ -267,8 +267,8 @@ func TestBasicUpdatePlannerExecuteCreateIndex(t *testing.T) {
 	})
 }
 
-// mustParseUpdate parses sql as an update command and asserts it to the kind
-// the test is about.
+// mustParseUpdate parses sql as an update command and asserts that it has the
+// type that the test expects.
 func mustParseUpdate[T parse.UpdateCommand](t *testing.T, sql string) T {
 	t.Helper()
 
@@ -289,8 +289,8 @@ func mustParseUpdate[T parse.UpdateCommand](t *testing.T, sql string) T {
 	return data
 }
 
-// readTestRows reads every record of the test table, in the order the table
-// holds them.
+// readTestRows reads every record of the test table, in the order in which
+// the table stores them.
 func readTestRows(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager) []testRow {
 	t.Helper()
 

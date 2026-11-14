@@ -11,12 +11,12 @@ import (
 
 var _ Plan = (*MergeJoinPlan)(nil)
 
-// MergeJoinPlan is the plan of joining the records of two plans on a field of
-// each by sorting both on their field and merging them.
+// MergeJoinPlan is the plan that joins the records of two plans on one field
+// of each. It sorts both plans on their join field and merges them.
 //
-// It gives back the same pairs as a select over the product of the two on a
-// predicate equating the fields, reading each side once rather than the right
-// once for every record of the left.
+// It returns the same pairs as a select over the product of the two plans
+// with a predicate that equates the fields. It reads each side once, where a
+// product reads the right side once for every left record.
 type MergeJoinPlan struct {
 	p1     *SortPlan
 	p2     *SortPlan
@@ -25,11 +25,11 @@ type MergeJoinPlan struct {
 	schema *recordmanager.Schema
 }
 
-// NewMergeJoinPlan returns the plan of joining the records of p1 and p2 whose
-// field1 and field2 hold the same value.
+// NewMergeJoinPlan returns the plan that joins the records of p1 and p2 for
+// which field1 and field2 have the same value.
 //
-// It fails as a product would if the two share a field name, and if either
-// side lacks the field it is joined on.
+// It fails, like a product, if the two plans share a field name. It also
+// fails if either side does not have its join field.
 func NewMergeJoinPlan(tx *transaction.Transaction, p1, p2 Plan, field1, field2 string) (*MergeJoinPlan, error) {
 	if !p1.Schema().HasField(field1) {
 		return nil, fmt.Errorf("merge join on %q of the left side: %w", field1, recordmanager.ErrFieldNotFound)
@@ -55,11 +55,11 @@ func NewMergeJoinPlan(tx *transaction.Transaction, p1, p2 Plan, field1, field2 s
 	}, nil
 }
 
-// Open sorts both plans on their field and returns a scan of the pairs that
-// join, before the first.
+// Open sorts both plans on their join field and returns a scan of the joined
+// pairs, positioned before the first pair.
 //
-// The left side is closed again if the right cannot be opened, since no scan
-// comes back for the caller to close.
+// If the right side cannot be opened, the left side is closed, because no
+// scan is returned that the caller could close.
 func (mp *MergeJoinPlan) Open() (query.Scan, error) {
 	lhs, err := mp.p1.Open()
 	if err != nil {
@@ -76,26 +76,28 @@ func (mp *MergeJoinPlan) Open() (query.Scan, error) {
 	return materialize.NewMergeJoinScan(lhs, rhs, mp.field1, mp.field2)
 }
 
-// BlocksAccessed is the blocks of reading both sorted plans once.
+// BlocksAccessed returns the blocks of one read of both sorted plans.
 //
-// Sorting them is left out, as SortPlan leaves it out, so this is less than
-// what opening the plan costs: a merge join looks cheaper here than it is next
-// to a plan that sorts nothing.
+// The cost of the sorts is not included, as in SortPlan. The result is
+// therefore lower than the cost of opening the plan, and a merge join looks
+// cheaper here than it is when compared with a plan that sorts nothing.
 func (mp *MergeJoinPlan) BlocksAccessed() int {
 	return mp.p1.BlocksAccessed() + mp.p2.BlocksAccessed()
 }
 
-// RecordsOutput is a guess at how many pairs join: every pair of the product,
-// over the number of values of the join field of the side with more of them,
-// taking the values of the other side to be among them and spread evenly.
+// RecordsOutput returns an estimate of the number of joined pairs. It is the
+// number of pairs of the product divided by the larger of the two distinct
+// value counts of the join fields. This assumes that the values of the other
+// side are among those values and are evenly distributed.
 func (mp *MergeJoinPlan) RecordsOutput() int {
 	maxVals := max(mp.p1.DistinctValues(mp.field1), mp.p2.DistinctValues(mp.field2))
 
 	return mp.p1.RecordsOutput() * mp.p2.RecordsOutput() / maxVals
 }
 
-// DistinctValues is a guess at how many different values fieldName holds in
-// the pairs, taken to be what it holds on its own side.
+// DistinctValues returns an estimate of the number of distinct values of
+// fieldName in the pairs. It is assumed to equal the count on the field's own
+// side.
 func (mp *MergeJoinPlan) DistinctValues(fieldName string) int {
 	if mp.p1.Schema().HasField(fieldName) {
 		return mp.p1.DistinctValues(fieldName)
@@ -104,7 +106,7 @@ func (mp *MergeJoinPlan) DistinctValues(fieldName string) int {
 	return mp.p2.DistinctValues(fieldName)
 }
 
-// Schema is the fields of both sides, p1's first.
+// Schema returns the fields of both sides, with those of p1 first.
 func (mp *MergeJoinPlan) Schema() *recordmanager.Schema {
 	return mp.schema
 }

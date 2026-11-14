@@ -72,12 +72,12 @@ func TestMultibufferProductPlanOpen(t *testing.T) {
 	})
 }
 
-// The right side is read once, to copy it into a temp table, and the
-// materialized left side once for every chunk that copy is read in.
+// The right side is read once, for the copy to a temp table. The materialized
+// left side is read once for every chunk of that copy.
 //
-// Both sides have a schema of two ints, a slot of 12 bytes, which fits 66
-// records to a block. Nothing is pinned, so all 8 buffers of the test pool are
-// free, 6 once the reserve is set aside. The left side of 100 records
+// Both sides have a schema of two ints. A slot is 12 bytes, so 66 records fit
+// in a block. Nothing is pinned, so all 8 buffers of the test pool are free,
+// and 6 remain without the reserved buffers. The left side of 100 records
 // materializes to 2 blocks.
 func TestMultibufferProductPlanBlocksAccessed(t *testing.T) {
 	tests := []struct {

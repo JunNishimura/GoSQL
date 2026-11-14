@@ -19,6 +19,34 @@ Write all comments in English. This applies to Go doc comments, inline comments,
 
 Commit message bodies are the exception: those may be written in Japanese.
 
+### Style
+
+Write comments in plain technical English, so that a reader understands each
+sentence on the first pass.
+
+- **One fact per sentence.** Split a sentence that carries a condition, its
+  consequence and the reason for it.
+- **At most one level of relative clause.** A clause nested inside another
+  clause (`a tree whose directory says which leaf a value is in`) becomes a
+  second sentence.
+- **Prefer the technical term to an everyday phrase.** Write "keyed by",
+  "releases", "descends to", not "filed under", "gives back", "goes down".
+- **Put the subject first.** Write "Any index opened before the failure is
+  closed", not "What was opened before a failure is closed again".
+- **Use one term for one concept.** Once a comment calls something the key, it
+  does not later become "the value it is filed under".
+
+```go
+// Bad
+// BTreeIndex is an index that keeps its entries in order of the value they are
+// filed under, in the leaves of a tree whose directory says which leaf a value
+// is in.
+
+// Good
+// BTreeIndex stores its entries in leaf blocks, sorted by key.
+// A directory tree maps each key to the leaf that holds it.
+```
+
 ## Commit Message
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format:
@@ -29,47 +57,45 @@ Use [Conventional Commits](https://www.conventionalcommits.org/) format:
 
 Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`. Scope is optional.
 
-Keep the body to five lines at most. Say why the change was made, not what the
-diff already shows. Longer reasoning belongs in a doc comment or a pull request
-description, where it stays next to the code or the discussion it came from.
+Keep the body to five lines at most. State why the change was made, not what
+the diff already shows. Put longer reasoning in a doc comment or a pull request
+description, where it stays next to the code or the discussion.
 
 ## Unit Tests
 
 ### Where the intent goes
 
-Name the test function after the unit under test and nothing else:
-`TestSchemaAddField`, not `TestSchemaAddFieldKeepsTheCharacterLimit`. What a
-case checks belongs in the case name, so the function name has no work to do
-beyond saying which function is being tested.
+Name the test function after the unit under test only: `TestSchemaAddField`,
+not `TestSchemaAddFieldKeepsTheCharacterLimit`. The case name states what a
+case checks. The function name only identifies the function under test.
 
-Run every case inside `t.Run`, including a test that has only one. The subtest
-name is where the intent lives, so a test with a single case still needs one
-rather than spelling the intent out in the function name.
+Run every case inside `t.Run`, including a test with a single case. The intent
+of a case belongs in the subtest name, so a single case also needs a subtest
+name. Do not put the intent in the function name.
 
 ### Case names
 
-Write a case name as **given / when / then**: the condition it starts from, the
-call it makes, and what that has to produce.
+Write a case name as **given / when / then**: the initial condition, the call
+under test, and the expected result.
 
 ```
 given a schema with an int field, when a varchar field of the same name is added, then it reports ErrDuplicateField
 ```
 
-The three parts are the default, not a form to fill in. What has to hold is that
-a reader can tell what a failing case was checking without opening the body.
-Where a part says nothing, leave it out rather than writing it for the shape of
-it: a name padded out to three clauses is harder to read than the short one it
-was made from, and no clearer.
+The three parts are a default, not a required form. The requirement is that a
+reader can tell what a failing case checked without opening the test body. Omit
+a part that adds no information. A name padded to three clauses is harder to
+read than the short name, and no clearer.
 
-Leave out `given` when there is no condition to state. A pure function of its
-arguments starts from nothing.
+Omit `given` when the case has no initial condition. A pure function of its
+arguments has none.
 
 ```
 when a string of 10 characters is measured, then it takes 4 bytes plus 10 times UTFMax
 ```
 
-Leave out `when` where it would only restate the `then`, which is usual for a
-constructor: there is one call, and the case is about what came out of it.
+Omit `when` if it would only repeat the `then`. This is usual for a
+constructor: the case makes one call and checks its result.
 
 ```
 // Padded
@@ -79,9 +105,9 @@ when a block id is made from a file name and a block number, then it carries bot
 it carries the file name and the block number it was made from
 ```
 
-Repeat a `given` that every case in a table shares rather than stating it once
-elsewhere. A case name is read on its own, in a line of test output, away from
-whatever the table or a comment says around it.
+If every case in a table shares a `given`, repeat it in each case name. Do not
+state it once elsewhere. A case name is read alone, in a line of test output,
+without the table or the comments around it.
 
 ### Table driven tests
 

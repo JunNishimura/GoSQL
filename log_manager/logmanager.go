@@ -60,12 +60,12 @@ func (lm *LogManager) appendNewBlock() (*filemanager.BlockId, error) {
 	return blk, nil
 }
 
-// Flush writes the log out far enough that the record with the given LSN is on
-// disk. A buffer calls this before writing its block, so that the record
-// describing a change is durable before the change itself.
+// Flush writes the log to disk up to and including the record with the given
+// LSN. A buffer calls it before writing its block, so that the log record of
+// a change is durable before the change itself.
 //
-// The log file is synced after the write, since a write alone reaches only the
-// OS's page cache and the OS is free to put the buffer's block on disk first.
+// The log file is synced after the write. A write alone only reaches the OS
+// page cache, and the OS could then write the buffer's block to disk first.
 func (lm *LogManager) Flush(lsn int) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -79,9 +79,9 @@ func (lm *LogManager) Flush(lsn int) error {
 	return lm.fileManager.Sync(lm.logFile)
 }
 
-// flush writes the page out unconditionally, without syncing it. The caller
-// must hold mu: it reads and writes the page and the saved LSN, which Append
-// changes as it goes.
+// flush writes the page to the file unconditionally, without a sync. The
+// caller must hold mu, because flush accesses the page and the saved LSN, and
+// Append modifies both.
 func (lm *LogManager) flush() error {
 	if err := lm.fileManager.Write(lm.currentBlock, lm.logPage); err != nil {
 		return err
@@ -122,21 +122,20 @@ func (lm *LogManager) Append(logRecord []byte) (int, error) {
 	return lm.latestLSN, nil
 }
 
-// Archive moves the log to destPath and starts an empty one in its place. It is
-// meant for after recovery, when nothing in the log is needed any more except
-// to look back at.
+// Archive moves the log to destPath and starts an empty log in its place. It
+// is meant to run after recovery, when the log is only needed for reference.
 //
-// Whatever is still only in the page is written out first, so that the archived
-// file holds every record and can be read as a log on its own.
+// Records that are still only in the page are written first, so that the
+// archived file holds every record and can be read as a complete log.
 //
-// The LSN carries on rather than starting over. Buffers still hold the numbers
-// they were given, and those records are on disk in the archived file, so
-// nothing is waiting to be written: starting over would make every one of them
-// look newer than the log and force a pointless flush.
+// The LSN continues from its current value and does not restart. Buffers
+// still hold the LSNs they were given, and those records are on disk in the
+// archived file. If the LSN restarted, every such buffer would appear newer
+// than the log and would force an unnecessary flush.
 //
-// The manager itself is reused, which is what keeps the buffer pool working:
-// every buffer holds the manager it was built with, so a replacement would
-// leave them writing to the log that was archived.
+// The manager itself is reused, which keeps the buffer pool working. Every
+// buffer holds the manager it was created with, so with a new manager the
+// buffers would still write to the archived log.
 func (lm *LogManager) Archive(destPath string) error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -160,9 +159,9 @@ func (lm *LogManager) Archive(destPath string) error {
 	return nil
 }
 
-// Iterator walks the log backwards, newest record first. The page is written out
-// first so that the iterator, which reads through the file manager, sees the
-// records that were still only in memory.
+// Iterator returns an iterator that reads the log backwards, newest record
+// first. The page is written to the file first, because the iterator reads
+// through the file manager and would otherwise miss the records in memory.
 func (lm *LogManager) Iterator() (*LogIterator, error) {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()

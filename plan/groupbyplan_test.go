@@ -87,8 +87,8 @@ func TestGroupByPlanOpen(t *testing.T) {
 	}
 }
 
-// A group by reads the sort of its input once, so it costs what the sort does.
-// The test schema fits 15 records to a block.
+// A group by reads its sorted input once, so its cost equals the cost of the
+// sort plan. With the test schema, 15 records fit in a block.
 func TestGroupByPlanBlocksAccessed(t *testing.T) {
 	t.Run("given a plan of 16 records, when its group by is asked for the blocks accessed, then they are the 2 blocks of its sort", func(t *testing.T) {
 		src := newTestFakePlanOfTestSchema(t)
@@ -101,7 +101,7 @@ func TestGroupByPlanBlocksAccessed(t *testing.T) {
 	})
 }
 
-// The fake plan's id holds 10 distinct values and its name 4.
+// In the fake plan, id has 10 distinct values and name has 4.
 func TestGroupByPlanRecordsOutput(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -201,8 +201,8 @@ func mustNewGroupByPlan(t *testing.T, src Plan, groupFields []string) *GroupByPl
 	return p
 }
 
-// readGroupsOfIDs reads every group a scan of mustNewGroupByPlan gives back from
-// its start as "id:count:max", with "-" for the id of a scan that does not group
+// readGroupsOfIDs reads every group of a scan from mustNewGroupByPlan, from
+// its start, as "id:count:max". The id is "-" for a scan that does not group
 // on it.
 func readGroupsOfIDs(t *testing.T, s query.Scan) []string {
 	t.Helper()

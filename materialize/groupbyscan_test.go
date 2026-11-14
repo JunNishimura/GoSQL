@@ -11,8 +11,8 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// deptRecord is a record of the table the group by tests group: an int "dept"
-// and a varchar "name".
+// deptRecord is a record of the table that the group by tests use: an int
+// "dept" and a varchar "name".
 type deptRecord struct {
 	dept int32
 	name string
@@ -157,8 +157,8 @@ func TestGroupByScanHasField(t *testing.T) {
 	}
 }
 
-// newDeptTable makes a temp table of dept and name holding the records, in the
-// order given.
+// newDeptTable creates a temp table with the fields dept and name that holds
+// records in the order given.
 func newDeptTable(t *testing.T, tx *transaction.Transaction, records []deptRecord) *TempTable {
 	t.Helper()
 
@@ -192,7 +192,7 @@ func newDeptTable(t *testing.T, tx *transaction.Transaction, records []deptRecor
 	return tt
 }
 
-// mustNewGroupByScan opens a group by over a table of the records, on
+// mustNewGroupByScan opens a group by over a table of records, grouped on
 // groupFields, with a count and a max of name.
 func mustNewGroupByScan(t *testing.T, tx *transaction.Transaction, records []deptRecord, groupFields []string) *GroupByScan {
 	t.Helper()
@@ -216,9 +216,9 @@ func mustNewGroupByScan(t *testing.T, tx *transaction.Transaction, records []dep
 	return s
 }
 
-// readGroups reads every group a scan of mustNewGroupByScan gives back from its
-// start as "dept:count:max", with "-" for the dept of a scan that does not
-// group on it.
+// readGroups reads every group of a scan from mustNewGroupByScan, from its
+// start, as "dept:count:max". The dept is "-" for a scan that does not group
+// on it.
 func readGroups(t *testing.T, s *GroupByScan) []string {
 	t.Helper()
 

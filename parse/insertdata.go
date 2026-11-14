@@ -7,22 +7,22 @@ import (
 	"github.com/JunNishimura/GoSQL/query"
 )
 
-// ErrFieldValueCountMismatch reports an insert that lists a different number
-// of values than of fields.
+// ErrFieldValueCountMismatch is returned for an insert whose value list and
+// field list have different lengths.
 //
-// It is kept apart from ErrBadSyntax because the statement follows the grammar:
-// each list is well formed on its own. What is wrong is that the two do not
-// pair up, since which value goes to which field is settled by position, and a
-// value with no field or a field with no value has nowhere to be written.
+// It is separate from ErrBadSyntax because the statement is grammatical: each
+// list is well formed on its own. The problem is that the lists do not match.
+// Values are assigned to fields by position, so a value without a field, or a
+// field without a value, cannot be written.
 var ErrFieldValueCountMismatch = errors.New("field and value counts differ")
 
 var _ UpdateCommand = InsertData{}
 
-// InsertData is what an insert statement asks for: a record written to a
-// table, with each value going to the field in the same position.
+// InsertData is the content of an insert statement: a record to write to a
+// table, with each value assigned to the field at the same position.
 //
-// The fields and values are handed out as copies, as the fields and tables of
-// QueryData are.
+// The fields and values are returned as copies, like the fields and tables of
+// QueryData.
 type InsertData struct {
 	tableName string
 	fields    []string
@@ -31,18 +31,19 @@ type InsertData struct {
 
 func (InsertData) isUpdateCommand() {}
 
-// TableName is the table the record is written to.
+// TableName returns the table that the record is written to.
 func (d InsertData) TableName() string {
 	return d.tableName
 }
 
-// Fields are the fields the values are written to, in the order written.
+// Fields returns the fields that the values are written to, in the order
+// written.
 func (d InsertData) Fields() []string {
 	return slices.Clone(d.fields)
 }
 
-// Values are the values written, each to the field at the same position of
-// Fields.
+// Values returns the values to write. Each value belongs to the field at the
+// same position in Fields.
 func (d InsertData) Values() []query.Constant {
 	return slices.Clone(d.vals)
 }

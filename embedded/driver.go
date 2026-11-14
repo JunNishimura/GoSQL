@@ -1,5 +1,5 @@
-// Package embedded is a database/sql driver that runs GoSQL in the calling
-// process.
+// Package embedded is a database/sql driver that runs GoSQL inside the
+// calling process.
 package embedded
 
 import (
@@ -16,14 +16,14 @@ const (
 	DefaultNumBuffers = 32
 )
 
-// ErrOpenUnsupported is reported by Driver.Open.
+// ErrOpenUnsupported is returned by Driver.Open.
 var ErrOpenUnsupported = errors.New("embedded: Open is not supported; open connections through OpenConnector")
 
 func init() {
 	sql.Register("gosql", Driver{})
 }
 
-// Driver opens databases by the name of the directory they are kept in.
+// Driver opens databases by the name of the directory that stores them.
 type Driver struct{}
 
 var (
@@ -31,23 +31,24 @@ var (
 	_ driver.DriverContext = Driver{}
 )
 
-// Open is not supported; connections come from the connector OpenConnector
-// returns, which database/sql uses in place of Open.
+// Open is not supported. Connections come from the connector that
+// OpenConnector returns, and database/sql uses that connector instead of
+// Open.
 //
-// A connection opened on its own would need a database of its own: a second
-// buffer pool and lock table over the same files as any other, and nothing
-// left holding the database to close it.
+// A connection opened on its own would need a database of its own. That
+// database would be a second buffer pool and lock table over the same files,
+// and nothing would hold it to close it.
 func (Driver) Open(name string) (driver.Conn, error) {
 	return nil, ErrOpenUnsupported
 }
 
-// OpenConnector opens the database kept in the directory name, with
+// OpenConnector opens the database stored in the directory name, with
 // DefaultBlockSize and DefaultNumBuffers, and returns a connector to it.
 func (Driver) OpenConnector(name string) (driver.Connector, error) {
 	c, err := NewConnector(name, DefaultBlockSize, DefaultNumBuffers)
 	if err != nil {
-		// Returned as it is, the nil *Connector would make a driver.Connector
-		// that is not nil.
+		// A nil *Connector returned directly would become a non-nil
+		// driver.Connector interface value.
 		return nil, err
 	}
 

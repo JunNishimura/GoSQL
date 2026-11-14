@@ -8,15 +8,16 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// The left side is the other table, of oids from 0, and the right the test
-// table, of ids from 0, indexed on id and joined to it on oid equal to id.
+// The left side is the other table, with oids from 0. The right side is the
+// test table, with ids from 0 and an index on id. The join condition is oid =
+// id.
 func TestIndexJoinPlanOpen(t *testing.T) {
 	tests := []struct {
 		name       string
 		numOther   int
 		numRecords int
-		// want is the (id, oid) pairs the plan reads, in the order the left
-		// side gives them.
+		// want is the (id, oid) pairs that the plan returns, in the order of
+		// the left side.
 		want [][2]int32
 	}{
 		{
@@ -50,10 +51,10 @@ func TestIndexJoinPlanOpen(t *testing.T) {
 	}
 }
 
-// The other table holds 3 records in one block, and the guess at the distinct
-// values of oid is 1 + 3/3 = 2. The test table holds 20, and a search of its
-// index on id reads the root and a leaf, 2 blocks, and gives back
-// 20 / (1 + 20/3) = 2 records.
+// The other table holds 3 records in one block, and the estimated number of
+// distinct values of oid is 1 + 3/3 = 2. The test table holds 20 records. A
+// search of its index on id reads the root and a leaf, which is 2 blocks, and
+// returns 20 / (1 + 20/3) = 2 records.
 //
 //	records  3 left records * 2 for each                    = 6
 //	blocks   1 to read the left + 3 searches * 2 + 6 records = 13
@@ -70,8 +71,8 @@ func TestIndexJoinPlanCosts(t *testing.T) {
 		}
 	})
 
-	// A field of the left side holds what it does on the left, and one of the
-	// right what it does in the table: 1 + 20/3 = 7.
+	// A field of the left side keeps the count of the left plan, and a field
+	// of the right side keeps the count of the table: 1 + 20/3 = 7.
 	t.Run("given 3 records of the other table and 20 of the test table indexed on id, when the distinct values of the plan joining them are asked for, then each field holds what it does on its own side", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		p := newTestIndexJoinPlan(t, tx, 3, 20)
@@ -99,9 +100,9 @@ func TestIndexJoinPlanSchema(t *testing.T) {
 	})
 }
 
-// newTestIndexJoinPlan makes the other table of numOther records and the test
-// table of numRecords, indexes the test table on id, and returns the plan
-// joining the two on oid equal to id.
+// newTestIndexJoinPlan creates the other table with numOther records and the
+// test table with numRecords records, and indexes the test table on id. It
+// returns the plan that joins the two on oid = id.
 func newTestIndexJoinPlan(t *testing.T, tx *transaction.Transaction, numOther, numRecords int) *IndexJoinPlan {
 	t.Helper()
 
@@ -127,7 +128,7 @@ func newTestIndexJoinPlan(t *testing.T, tx *transaction.Transaction, numOther, n
 	return p
 }
 
-// mustNewOtherTablePlan returns the plan of reading the other table.
+// mustNewOtherTablePlan returns the plan for a scan of the other table.
 func mustNewOtherTablePlan(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager) *TablePlan {
 	t.Helper()
 

@@ -10,9 +10,9 @@ import (
 )
 
 func TestNewProjectScan(t *testing.T) {
-	// A scan that named a field it could not deliver would have to answer
-	// HasField with one thing and the read of that field with another. Settling
-	// it here is what lets HasField be trusted everywhere else.
+	// A scan that listed a field it could not read would report true from
+	// HasField and then fail the read of that field. The check here makes
+	// HasField reliable everywhere else.
 	t.Run("given a field the scan underneath does not have, when a projection over it is opened, then it reports ErrFieldNotFound", func(t *testing.T) {
 		_, err := NewProjectScan(newTestTableOfRecords(t, 10), "id", "missing")
 
@@ -22,8 +22,8 @@ func TestNewProjectScan(t *testing.T) {
 	})
 }
 
-// newTestProjectionOnARecord opens a projection keeping the named fields over a
-// table of one record, id 20, and moves it onto that record.
+// newTestProjectionOnARecord opens a projection with the named fields over a
+// table with one record, id 20, and moves it to that record.
 func newTestProjectionOnARecord(t *testing.T, fieldNames ...string) *ProjectScan {
 	t.Helper()
 
@@ -43,9 +43,9 @@ func newTestProjectionOnARecord(t *testing.T, fieldNames ...string) *ProjectScan
 	return ps
 }
 
-// A projection is the one scan whose fields are not the fields of what it reads
-// through, so what it answers here is its own list rather than a question
-// passed down.
+// A projection is the only scan whose fields differ from the fields of its
+// underlying scan. It therefore answers HasField from its own list and does
+// not forward the call.
 func TestProjectScanHasField(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -91,8 +91,8 @@ func TestProjectScanGetInt(t *testing.T) {
 		}
 	})
 
-	// The field is there in the record underneath, so a projection that passed
-	// the name straight down would hand it over.
+	// The underlying record has the field, so a projection that forwarded the
+	// name unchanged would return it.
 	t.Run("given a field the projection drops, when it is read, then it reports ErrFieldNotFound rather than reading it from underneath", func(t *testing.T) {
 		ps := newTestProjectionOnARecord(t, "name")
 
@@ -174,8 +174,8 @@ func TestProjectScanGetValue(t *testing.T) {
 	}
 }
 
-// A projection drops fields and keeps every record, which is the other half of
-// what a select does.
+// A projection drops fields and keeps every record. A select does the
+// opposite.
 func TestProjectScanMoveToNextRecord(t *testing.T) {
 	t.Run("given a table of records, when the projection is walked, then it returns every one of them in order", func(t *testing.T) {
 		ps, err := NewProjectScan(newTestTableOfRecords(t, 10, 20, 30), "id")

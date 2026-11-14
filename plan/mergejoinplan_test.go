@@ -108,9 +108,9 @@ func TestMergeJoinPlanOpen(t *testing.T) {
 	}
 }
 
-// A merge join reads each sorted side once, so it costs what the two sorts do.
-// The test schema fits 15 records to a block, and the schema of oid alone, a
-// slot of 8 bytes, 100.
+// A merge join reads each sorted side once, so its cost equals the cost of
+// the two sort plans. With the test schema, 15 records fit in a block. With
+// the schema of oid alone, a slot is 8 bytes and 100 records fit.
 func TestMergeJoinPlanBlocksAccessed(t *testing.T) {
 	t.Run("given a plan of 16 records of id and name and one of 150 of oid, when their merge join is asked for the blocks accessed, then they are the 2 blocks of each sort", func(t *testing.T) {
 		p1 := newTestFakePlanOfTestSchema(t)
@@ -179,8 +179,8 @@ func TestMergeJoinPlanSchema(t *testing.T) {
 	})
 }
 
-// newFakePlanOfOID is a plan of 50 records over 1 block of a single int field,
-// "oid", holding 20 distinct values.
+// newFakePlanOfOID returns a plan with 50 records in 1 block and a single int
+// field, "oid", with 20 distinct values.
 func newFakePlanOfOID(t *testing.T) fakePlan {
 	t.Helper()
 
@@ -207,8 +207,8 @@ func mustNewMergeJoinPlan(t *testing.T, p1, p2 Plan) *MergeJoinPlan {
 	return p
 }
 
-// createOtherTableOfOIDs makes the other table and writes a record for each
-// oid, in the order given.
+// createOtherTableOfOIDs creates the other table and writes one record for
+// each oid, in the order given.
 func createOtherTableOfOIDs(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, oids []int32) {
 	t.Helper()
 

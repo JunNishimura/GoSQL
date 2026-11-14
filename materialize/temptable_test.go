@@ -22,8 +22,8 @@ func TestNewTempTable(t *testing.T) {
 		}
 	})
 
-	// A user's table of the same name would share the temp table's file, and
-	// would be deleted along with the temp tables when the database starts.
+	// A user table with the same name would share the file of the temp table,
+	// and would be deleted with the temp tables when the database starts.
 	t.Run("its name is not one a statement can name a table by", func(t *testing.T) {
 		tx := newTestTransaction(t)
 

@@ -12,8 +12,8 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// thirdTableName is the table a case of three tables adds to the test and the
-// other table. Its one field, tid, is an int.
+// thirdTableName is the table that a case with three tables adds to the test
+// table and the other table. Its only field, tid, is an int.
 const thirdTableName = "third"
 
 func TestHeuristicQueryPlannerCreatePlan(t *testing.T) {
@@ -61,9 +61,9 @@ func TestHeuristicQueryPlannerCreatePlan(t *testing.T) {
 		})
 	}
 
-	// Every term has to be tested somewhere. One naming a field none of the
-	// tables has can be tested nowhere, and leaving it out would keep the
-	// records it was written to drop.
+	// Every term must be tested at some point. A term with a field that none
+	// of the tables has cannot be tested anywhere, and omitting it would keep
+	// the records that it was meant to drop.
 	t.Run("given a table of 20 records, when a query where a field none of its tables has is 1 is planned, then it reports ErrFieldNotFound", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -77,9 +77,9 @@ func TestHeuristicQueryPlannerCreatePlan(t *testing.T) {
 	})
 }
 
-// A view in the from clause is planned from its definition, by the same
-// planner, and then taken as one more table: one with the fields the
-// definition selects and no index of its own.
+// A view in the from clause is planned from its definition by the same
+// planner. It is then treated as one more table, with the fields that the
+// definition selects and no index.
 func TestHeuristicQueryPlannerCreatePlanViews(t *testing.T) {
 	t.Run("given a view of the test table where id is 3, which is indexed on id, when a query reading the view is planned, then the plan reads the table through the index for 3", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -112,8 +112,8 @@ func TestHeuristicQueryPlannerCreatePlanViews(t *testing.T) {
 		}
 	})
 
-	// The view selects id alone, so name is a field of the table under it but
-	// not of the view, and a query reading the view cannot name it.
+	// The view selects only id. name is a field of the underlying table but
+	// not of the view, so a query on the view cannot use it.
 	t.Run("given a view of the ids of the test table, when a query reading the view where name is 'name1' is planned, then it reports ErrFieldNotFound", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -128,9 +128,9 @@ func TestHeuristicQueryPlannerCreatePlanViews(t *testing.T) {
 	})
 }
 
-// The order a plan joins its tables in is read off the plan itself, left to
-// right. The guesses that order turns on are worked out from the statistics,
-// which guess 1 + n/3 distinct values for every field of a table of n records:
+// The join order of a plan is read from the plan itself, from left to right.
+// The estimates that determine the order come from the statistics, which
+// estimate 1 + n/3 distinct values for every field of a table with n records:
 //
 //	a table of 20 records, 7 distinct values; where id is a constant, 20/7 = 2
 //	a table of 30 records, 11 distinct values
@@ -170,9 +170,9 @@ func TestHeuristicQueryPlannerCreatePlanOrder(t *testing.T) {
 			wantOrder:  []string{otherTableName, testTableName},
 			want:       [][2]int32{{0, 0}, {1, 1}, {2, 2}},
 		},
-		// From third, other joined on oid is guessed at 2*30/11 = 5 records,
-		// and test put beside it at 2*2 = 4. The product gives back fewer, but
-		// a join is taken whenever there is one.
+		// Starting from third, the join with other on oid is estimated at
+		// 2*30/11 = 5 records, and the product with test at 2*2 = 4. The
+		// product returns fewer records, but a join is always preferred.
 		{
 			name:       "given a table of 2 records joined to one of 30 and not to one of 20 where id is 5, when a query of the three is planned, then the plan joins the table of 30 before putting the other beside them",
 			testCount:  20,
@@ -182,9 +182,9 @@ func TestHeuristicQueryPlannerCreatePlanOrder(t *testing.T) {
 			wantOrder:  []string{thirdTableName, otherTableName, testTableName},
 			want:       [][2]int32{{5, 0}, {5, 1}},
 		},
-		// From third, other joined on oid is guessed at 1*3/2 = 1 record and
-		// test joined on id at 1*20/7 = 2, so other is joined first though
-		// test is named before it.
+		// Starting from third, the join with other on oid is estimated at
+		// 1*3/2 = 1 record, and the join with test on id at 1*20/7 = 2. other
+		// is therefore joined first, although test comes first in the query.
 		{
 			name:       "given a table of 1 record joined to one of 20 and to one of 3, when a query of the three is planned, then the plan joins the table of 3 first, which gives back fewer records",
 			testCount:  20,
@@ -194,10 +194,10 @@ func TestHeuristicQueryPlannerCreatePlanOrder(t *testing.T) {
 			wantOrder:  []string{thirdTableName, otherTableName, testTableName},
 			want:       [][2]int32{{0, 0}},
 		},
-		// No term joins any two of these. Third, where tid is 0, is guessed at
-		// 1/1 = 1 record, other where oid is 2 at 3/2 = 1, and test where id is
-		// 1 at 2, so third goes first, being named first, and other is put
-		// beside it at 1*1 = 1 before test at 1*2 = 2.
+		// No term joins any two of these tables. third with tid = 0 is
+		// estimated at 1/1 = 1 record, other with oid = 2 at 3/2 = 1, and test
+		// with id = 1 at 2. third comes first because it is written first.
+		// other is then added at 1*1 = 1, before test at 1*2 = 2.
 		{
 			name:       "given a table of 1 record, one of 20 and one of 3, none joined to another, when a query of the three is planned, then the plan puts the table of 3 beside the first before the table of 20, since that product gives back fewer records",
 			testCount:  20,
@@ -245,8 +245,8 @@ func mustCreateHeuristicPlan(t *testing.T, tx *transaction.Transaction, mm *meta
 	return p
 }
 
-// tableOrderOf returns the names of the tables p reads, in the order it joins
-// them: the table it starts from first.
+// tableOrderOf returns the names of the tables that p reads, in join order,
+// starting with the first table of the plan.
 func tableOrderOf(p Plan) []string {
 	switch p := p.(type) {
 	case *ProjectPlan:
@@ -266,8 +266,8 @@ func tableOrderOf(p Plan) []string {
 	}
 }
 
-// createThirdTable makes the third table and writes count records into it,
-// the i-th with a tid of i.
+// createThirdTable creates the third table and writes count records to it.
+// The i-th record has tid i.
 func createThirdTable(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, count int) {
 	t.Helper()
 

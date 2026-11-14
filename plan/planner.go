@@ -7,17 +7,17 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// QueryPlanner turns a parsed select statement into a plan.
+// QueryPlanner creates a plan from a parsed select statement.
 //
-// It is an interface so that the planner behind a Planner can be swapped for
-// one that weighs plans against each other, without the Planner or its
-// callers changing.
+// It is an interface so that the query planner of a Planner can be replaced
+// with one that compares plans, without a change to Planner or its callers.
 type QueryPlanner interface {
 	CreatePlan(data parse.QueryData, tx *transaction.Transaction) (Plan, error)
 }
 
-// UpdatePlanner carries out parsed statements that change the database, one
-// method to a kind of statement. Each reports how many records it changed.
+// UpdatePlanner executes parsed statements that change the database. It has
+// one method per kind of statement, and each method returns the number of
+// records that it changed.
 type UpdatePlanner interface {
 	ExecuteInsert(data parse.InsertData, tx *transaction.Transaction) (int, error)
 	ExecuteDelete(data parse.DeleteData, tx *transaction.Transaction) (int, error)
@@ -32,18 +32,18 @@ var (
 	_ UpdatePlanner = (*BasicUpdatePlanner)(nil)
 )
 
-// Planner is the way in from SQL text: it parses a statement and hands it to
-// whichever planner deals with its kind.
+// Planner is the entry point for SQL text. It parses a statement and passes
+// it to the planner for that kind of statement.
 //
-// It does nothing to a statement itself. What a statement means is the
-// business of the planners behind it, and undoing what a failed one left
-// behind is the business of whoever holds the transaction.
+// Planner does not interpret a statement itself. The planners behind it
+// define what a statement does. The owner of the transaction is responsible
+// for rolling back the changes of a failed statement.
 type Planner struct {
 	qp QueryPlanner
 	up UpdatePlanner
 }
 
-// NewPlanner returns a planner that hands select statements to qp and every
+// NewPlanner returns a planner that passes select statements to qp and every
 // other statement to up.
 func NewPlanner(qp QueryPlanner, up UpdatePlanner) *Planner {
 	return &Planner{
@@ -67,8 +67,8 @@ func (p *Planner) CreateQueryPlan(sql string, tx *transaction.Transaction) (Plan
 	return p.qp.CreatePlan(data, tx)
 }
 
-// ExecuteUpdate parses sql as a statement that changes the database, carries
-// it out, and reports how many records it changed.
+// ExecuteUpdate parses sql as a statement that changes the database, executes
+// it, and returns the number of records that it changed.
 func (p *Planner) ExecuteUpdate(sql string, tx *transaction.Transaction) (int, error) {
 	parser, err := parse.NewParser(sql)
 	if err != nil {
@@ -94,14 +94,14 @@ func (p *Planner) ExecuteUpdate(sql string, tx *transaction.Transaction) (int, e
 	case parse.CreateIndexData:
 		return p.up.ExecuteCreateIndex(data, tx)
 	default:
-		// The parser makes no other kind, so this is reached only if it grows
-		// one that was not added here.
+		// The parser produces no other type. This line is reached only if a
+		// new statement type is added to the parser but not to this switch.
 		return 0, fmt.Errorf("execute %q: no planner method for a %T", sql, cmd)
 	}
 }
 
-// parseViewDefinition parses definition, the select statement view viewName
-// was created with, so that a query planner can plan the view from it.
+// parseViewDefinition parses definition, the select statement that the view
+// viewName was created with, so that a query planner can plan the view.
 func parseViewDefinition(viewName, definition string) (parse.QueryData, error) {
 	parser, err := parse.NewParser(definition)
 	if err != nil {

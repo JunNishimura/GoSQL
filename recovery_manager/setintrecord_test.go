@@ -8,8 +8,9 @@ import (
 )
 
 // newSetIntRecordBytes builds the on-disk bytes of a set int record without
-// going through the log manager. It uses the production encoder, whose output
-// TestSetIntRecordLayout pins to an explicit byte sequence.
+// the log manager. It uses the production encoder, and
+// TestSetIntRecordLayout checks the encoder's output against an explicit byte
+// sequence.
 func newSetIntRecordBytes(t *testing.T, txNum int, blk *filemanager.BlockId, offset int, oldVal int32) []byte {
 	t.Helper()
 	record, err := newSetIntRecord(txNum, blk, offset, oldVal)
@@ -19,9 +20,9 @@ func newSetIntRecordBytes(t *testing.T, txNum int, blk *filemanager.BlockId, off
 	return record
 }
 
-// The layout is written to disk, so it is pinned to explicit bytes rather than
-// to the offsets the encoder itself computes. A mistake made symmetrically in
-// the encoder and the parser would otherwise go unnoticed.
+// The layout is written to disk, so the test compares it with explicit bytes
+// and not with the offsets that the encoder computes. Otherwise a mistake
+// made in both the encoder and the parser would not be detected.
 func TestSetIntRecordLayout(t *testing.T) {
 	t.Run("the bytes on the log read as the op, the transaction, the file name, the block, the offset and the old value, in that order", func(t *testing.T) {
 		record := newSetIntRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, 99)
@@ -90,9 +91,9 @@ func TestNewSetIntRecord(t *testing.T) {
 		})
 	}
 
-	// The file name is stored inline, so how much of the record has to be
-	// present depends on the record itself. Every prefix short of the whole
-	// thing must be rejected rather than read past the end of the slice.
+	// The file name is stored inline, so the required length of a record
+	// depends on its contents. Every proper prefix of the record must be
+	// rejected and not read past the end of the slice.
 	full := newSetIntRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, 99)
 
 	shortRecordTests := []struct {
@@ -135,8 +136,8 @@ func TestNewSetIntRecord(t *testing.T) {
 	}
 }
 
-// Undo writes the pre-image into the page it is handed. The offset and the old
-// value are not otherwise readable, so this is what verifies they survived the
+// Undo writes the pre-image into the page it receives. The offset and the old
+// value have no other accessor, so this test verifies that they survive the
 // round trip through the log format.
 func TestSetIntRecordUndo(t *testing.T) {
 	tests := []struct {
@@ -167,7 +168,7 @@ func TestSetIntRecordUndo(t *testing.T) {
 				t.Fatalf("NewSetIntRecord() error = %v", err)
 			}
 
-			// Stand in for the block as it looks after the change the record
+			// The page represents the block after the change that the record
 			// describes: the offset holds the new value, not the old one.
 			p := filemanager.NewPageByBlockSize(testBlockSize)
 			if err := p.SetInt(tt.offset, tt.overwith); err != nil {

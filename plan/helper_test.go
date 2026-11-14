@@ -16,9 +16,9 @@ import (
 
 const (
 	testLogFile = "test.log"
-	// testBlockSize has to hold a slot of the widest catalog, which is the view
-	// catalog at 476 bytes, since a record page refuses a layout whose slot
-	// does not fit in a block.
+	// testBlockSize must fit a slot of the largest catalog, which is the view
+	// catalog with 476 bytes. A record page rejects a layout whose slot does
+	// not fit in a block.
 	testBlockSize  = 800
 	testNumBuffers = 8
 	// testStringFieldLength is the character limit of the varchar field of the
@@ -26,12 +26,12 @@ const (
 	testStringFieldLength = 10
 )
 
-// testTableName is the table the plan tests read. Its schema is the one
-// newTestSchema builds.
+// testTableName is the table that the plan tests read. newTestSchema builds
+// its schema.
 const testTableName = "test"
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see the tables another made.
+// one test cannot see the tables of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -57,7 +57,7 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 }
 
 // newTestMetadataManager builds a metadata manager over a database whose
-// catalogs already exist, which is the state every plan starts from.
+// catalogs already exist. Every plan test starts from that state.
 func newTestMetadataManager(t *testing.T, tx *transaction.Transaction) *metadatamanager.MetadataManager {
 	t.Helper()
 
@@ -72,8 +72,9 @@ func newTestMetadataManager(t *testing.T, tx *transaction.Transaction) *metadata
 	return mm
 }
 
-// newTestSchema builds the schema of the test table: "id" is an int and "name"
-// a varchar, so that a plan's schema has one field of each kind to get right.
+// newTestSchema builds the schema of the test table: "id" is an int and
+// "name" is a varchar, so that the schema of a plan has one field of each
+// type.
 func newTestSchema(t *testing.T) *recordmanager.Schema {
 	t.Helper()
 
@@ -88,9 +89,9 @@ func newTestSchema(t *testing.T) *recordmanager.Schema {
 	return schema
 }
 
-// createTestTable makes the test table and writes count records into it. The
-// id of the i-th record is i, which is what lets a test say which records a
-// scan came back with.
+// createTestTable creates the test table and writes count records to it. The
+// i-th record has id i, so that a test can identify the records that a scan
+// returned.
 func createTestTable(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, count int) {
 	t.Helper()
 
@@ -122,8 +123,8 @@ func createTestTable(t *testing.T, tx *transaction.Transaction, mm *metadatamana
 	}
 }
 
-// readIDs reads the id of every record a scan gives back, in the order it gives
-// them.
+// readIDs reads the id of every record of a scan, in the order in which the
+// scan returns them.
 func readIDs(t *testing.T, s query.Scan) []int32 {
 	t.Helper()
 
@@ -149,10 +150,10 @@ func readIDs(t *testing.T, s query.Scan) []int32 {
 	}
 }
 
-// fakePlan is a plan whose every answer is whatever the test set it to, so
-// that a plan built on top of it can be checked against numbers chosen for
-// the case rather than ones measured off a table. Opening it gives no scan;
-// a test that reads records builds on a table plan instead.
+// fakePlan is a plan whose estimates are set by the test. A plan built on it
+// can then be checked against numbers chosen for the case, not against
+// numbers measured from a table. Open returns no scan. A test that reads
+// records uses a table plan instead.
 type fakePlan struct {
 	blocksAccessed int
 	recordsOutput  int

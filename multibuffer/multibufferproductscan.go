@@ -10,41 +10,44 @@ import (
 
 var _ query.Scan = (*MultibufferProductScan)(nil)
 
-// MultibufferProductScan is every record of a scan put beside every record of
-// a table, reading the table a chunk of blocks at a time.
+// MultibufferProductScan pairs every record of a scan with every record of a
+// table. It reads the table in chunks of several blocks.
 //
-// For each chunk the left side is read through once, and every record of it
-// is put beside every record of the chunk, which is held in buffers the whole
-// time. So the left is read once a chunk rather than the table once a record
-// of the left, as a plain product would.
+// For each chunk, the left side is scanned once, and each left record is
+// paired with every record of the chunk. The chunk stays in buffers for that
+// whole scan. The left side is therefore scanned once per chunk. A plain
+// product scans the table once per left record.
 //
-// The pairs come out chunk by chunk: those of the first chunk against the
-// whole left, then those of the next. A product says nothing about its order,
-// so that is not the order of a plain product, and nothing should count on it.
+// The pairs are returned chunk by chunk: first the pairs of the first chunk
+// with the whole left side, then those of the next chunk. This differs from
+// the order of a plain product. A product does not define its order, and no
+// caller should depend on it.
 type MultibufferProductScan struct {
 	tx       *transaction.Transaction
 	lhs      query.Scan
 	layout   *recordmanager.Layout
 	fileName string
-	// fileSize is how many blocks the table had when the scan was made.
+	// fileSize is the number of blocks of the table when the scan was created.
 	fileSize int
-	// chunkSize is how many blocks a chunk holds. The last one may hold fewer.
+	// chunkSize is the number of blocks in a chunk. The last chunk can have
+	// fewer.
 	chunkSize int
-	// nextBlock is the first block of the chunk after the one the scan is on.
+	// nextBlock is the first block of the chunk after the current one.
 	nextBlock int
-	// chunk is the chunk the scan is on, and prod the product of the left
-	// side and it. Both are nil only when the table has no blocks.
+	// chunk is the current chunk, and prod is the product of the left side
+	// and that chunk. Both are nil only if the table has no blocks.
 	chunk *ChunkScan
 	prod  *query.ProductScan
 }
 
 // NewMultibufferProductScan returns the product of lhs and the table
-// tableName, whose records layout lays out, placed before its first pair.
+// tableName, whose records use layout. The scan is positioned before its
+// first pair.
 //
-// How many blocks a chunk holds is decided here, from how many buffers are
-// free, and kept for the life of the scan. lhs is the scan's own from here on
-// and is closed with it; if this fails, closing it is left to the caller, who
-// still holds it.
+// The chunk size is computed here from the number of free buffers, and stays
+// fixed for the lifetime of the scan. The scan takes ownership of lhs and
+// closes it in Close. If this function fails, the caller still owns lhs and
+// must close it.
 func NewMultibufferProductScan(tx *transaction.Transaction, lhs query.Scan, tableName string, layout *recordmanager.Layout) (*MultibufferProductScan, error) {
 	fileName := query.TableFileName(tableName)
 	fileSize, err := tx.Size(fileName)
@@ -68,7 +71,7 @@ func NewMultibufferProductScan(tx *transaction.Transaction, lhs query.Scan, tabl
 	return mps, nil
 }
 
-// MoveBeforeFirstRecord puts the scan back before its first pair, on the
+// MoveBeforeFirstRecord positions the scan before its first pair, on the
 // first chunk of the table.
 func (mps *MultibufferProductScan) MoveBeforeFirstRecord() error {
 	mps.nextBlock = 0
@@ -77,9 +80,9 @@ func (mps *MultibufferProductScan) MoveBeforeFirstRecord() error {
 	return err
 }
 
-// MoveToNextRecord moves on to the next pair and reports whether there was
-// one. When the pairs of a chunk run out, the next chunk is pinned in place of
-// it and the left side is read again from the start.
+// MoveToNextRecord moves to the next pair and reports whether one exists.
+// When the pairs of a chunk are exhausted, the next chunk replaces it and the
+// left side restarts.
 func (mps *MultibufferProductScan) MoveToNextRecord() (bool, error) {
 	if mps.prod == nil {
 		return false, nil
@@ -98,16 +101,16 @@ func (mps *MultibufferProductScan) MoveToNextRecord() (bool, error) {
 	}
 }
 
-// useNextChunk pins the chunk starting at nextBlock in place of the one the
-// scan is on, puts the left side beside it from the start, and reports
-// whether there was such a chunk.
+// useNextChunk replaces the current chunk with the chunk that starts at
+// nextBlock, and restarts the left side for it. It reports whether such a
+// chunk exists.
 //
-// The old chunk is closed before the new one is pinned, so that the buffers it
-// held are free for the new one: the chunk size was chosen to fit what was
-// free with no chunk pinned.
+// The old chunk is closed before the new one is pinned, so that its buffers
+// are free for the new chunk. The chunk size was chosen to fit the buffers
+// that were free while no chunk was pinned.
 //
-// The product scan is made again rather than closed, since closing it would
-// close the left side as well, which is read again for every chunk.
+// The product scan is replaced, not closed. Closing it would also close the
+// left side, which is scanned again for every chunk.
 func (mps *MultibufferProductScan) useNextChunk() (bool, error) {
 	if mps.nextBlock >= mps.fileSize {
 		return false, nil
@@ -132,8 +135,8 @@ func (mps *MultibufferProductScan) useNextChunk() (bool, error) {
 	return true, nil
 }
 
-// closeChunk gives back the chunk the scan is on, if it is on one, leaving the
-// left side open.
+// closeChunk closes the current chunk, if there is one, and leaves the left
+// side open.
 func (mps *MultibufferProductScan) closeChunk() {
 	if mps.chunk == nil {
 		return
@@ -144,8 +147,8 @@ func (mps *MultibufferProductScan) closeChunk() {
 	mps.prod = nil
 }
 
-// GetInt returns the int field fieldName of the pair the scan is on, from
-// whichever side has it.
+// GetInt returns the int field fieldName of the current pair, from the side
+// that has the field.
 func (mps *MultibufferProductScan) GetInt(fieldName string) (int32, error) {
 	if mps.prod == nil {
 		return 0, query.ErrNoCurrentRecord
@@ -154,8 +157,8 @@ func (mps *MultibufferProductScan) GetInt(fieldName string) (int32, error) {
 	return mps.prod.GetInt(fieldName)
 }
 
-// GetString returns the varchar field fieldName of the pair the scan is on,
-// from whichever side has it.
+// GetString returns the varchar field fieldName of the current pair, from the
+// side that has the field.
 func (mps *MultibufferProductScan) GetString(fieldName string) (string, error) {
 	if mps.prod == nil {
 		return "", query.ErrNoCurrentRecord
@@ -164,8 +167,8 @@ func (mps *MultibufferProductScan) GetString(fieldName string) (string, error) {
 	return mps.prod.GetString(fieldName)
 }
 
-// GetValue returns the field fieldName of the pair the scan is on, from
-// whichever side has it.
+// GetValue returns the field fieldName of the current pair as a constant,
+// from the side that has the field.
 func (mps *MultibufferProductScan) GetValue(fieldName string) (query.Constant, error) {
 	if mps.prod == nil {
 		return query.Constant{}, query.ErrNoCurrentRecord
@@ -179,7 +182,7 @@ func (mps *MultibufferProductScan) HasField(fieldName string) bool {
 	return mps.lhs.HasField(fieldName) || mps.layout.Schema().HasField(fieldName)
 }
 
-// Close closes the left side and the chunk the scan is on.
+// Close closes the left side and the current chunk.
 func (mps *MultibufferProductScan) Close() {
 	mps.lhs.Close()
 	mps.closeChunk()

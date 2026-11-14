@@ -19,15 +19,16 @@ const (
 	testNumBuffers = 3
 )
 
-// newTestDeps builds the pieces a transaction is given: the ones it keeps, and
-// the log manager and lock table it only needs to build its own managers.
+// newTestDeps builds the dependencies of a transaction: the ones it keeps,
+// and the log manager and lock table that it only uses to create its own
+// managers.
 func newTestDeps(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager, *concurrencymanager.LockTable) {
 	t.Helper()
 	return newTestDepsWithPool(t, testNumBuffers)
 }
 
-// newTestDepsWithPool is newTestDeps for tests that need the pool to be a known
-// size, so that they can tell a transaction is holding a buffer.
+// newTestDepsWithPool is newTestDeps with a pool of a known size, for tests
+// that need to detect that a transaction holds a buffer.
 func newTestDepsWithPool(t *testing.T, numBuffers int) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager, *concurrencymanager.LockTable) {
 	t.Helper()
 	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
@@ -93,9 +94,9 @@ func TestNewTransaction(t *testing.T) {
 		})
 	}
 
-	// The start record is what puts the transaction on the log from the moment
-	// it begins. It is also the only thing that shows txNum reached the
-	// recovery manager, whose own copy is not reachable from here.
+	// The start record puts the transaction on the log from the moment it
+	// begins. It is also the only evidence that txNum reached the recovery
+	// manager, whose own copy is not accessible from here.
 	t.Run("it puts a start record on the log carrying the transaction number", func(t *testing.T) {
 		const txNum = 7
 
@@ -129,9 +130,9 @@ func TestNewTransaction(t *testing.T) {
 		}
 	})
 
-	// Transactions share the pool and the lock table, which is how they
-	// coordinate, but each tracks its own pins and locks. Sharing those would
-	// let one transaction release what another one holds.
+	// Transactions share the pool and the lock table, and coordinate through
+	// them. Each transaction tracks its own pins and locks. If these were
+	// shared, one transaction could release what another one holds.
 	t.Run("given two transactions over the same pool and lock table, each keeps its own pins and locks", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
 
@@ -159,8 +160,8 @@ func TestNewTransaction(t *testing.T) {
 	})
 }
 
-// appendBlock adds a block to the data file so that a transaction has something
-// real to pin.
+// appendBlock adds a block to the data file, so that a transaction has a real
+// block to pin.
 func appendBlock(t *testing.T, fm *filemanager.FileManager) *filemanager.BlockId {
 	t.Helper()
 	blk, err := fm.Append(testDataFile)
@@ -170,9 +171,9 @@ func appendBlock(t *testing.T, fm *filemanager.FileManager) *filemanager.BlockId
 	return blk
 }
 
-// newTestTransaction returns a started transaction along with the pieces a test
-// needs to check what it did: the file to read blocks back from, the log to
-// find its records in, and the pool to flush through.
+// newTestTransaction returns a started transaction and the components that a
+// test needs to check its effects: the file manager to read blocks back, the
+// log manager to find its records, and the buffer manager to flush through.
 func newTestTransaction(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager, *Transaction) {
 	t.Helper()
 	fm, lm, bm, lt := newTestDeps(t)
@@ -183,8 +184,8 @@ func newTestTransaction(t *testing.T) (*filemanager.FileManager, *logmanager.Log
 	return fm, lm, bm, tx
 }
 
-// lastLogRecord rebuilds the most recently appended record, since the log
-// iterator walks the log backwards.
+// lastLogRecord returns the most recently appended record. The log iterator
+// reads the log backwards, so this is the first record it returns.
 func lastLogRecord(t *testing.T, lm *logmanager.LogManager) recoverymanager.LogRecord {
 	t.Helper()
 	it, err := lm.Iterator()
@@ -205,8 +206,8 @@ func lastLogRecord(t *testing.T, lm *logmanager.LogManager) recoverymanager.LogR
 	return rec
 }
 
-// undonePage applies a record's pre-image to an empty page, which is how a test
-// reads the value the record captured.
+// undonePage applies the pre-image of a record to an empty page. A test uses
+// it to read the value that the record captured.
 func undonePage(t *testing.T, rec recoverymanager.LogRecord) *filemanager.Page {
 	t.Helper()
 	undoable, ok := rec.(recoverymanager.Undoable)
@@ -220,8 +221,9 @@ func undonePage(t *testing.T, rec recoverymanager.LogRecord) *filemanager.Page {
 	return p
 }
 
-// runInBackground calls f in a goroutine and hands back a channel carrying its
-// error, so that a test can tell waiting for a lock apart from returning.
+// runInBackground calls f in a goroutine and returns a channel that receives
+// its error. A test uses it to distinguish a call that waits for a lock from
+// one that returns.
 func runInBackground(f func() error) <-chan error {
 	done := make(chan error, 1)
 	go func() {
@@ -253,8 +255,8 @@ func assertReturns(t *testing.T, done <-chan error, what string) {
 }
 
 func TestTransactionPin(t *testing.T) {
-	// Pinning has to go through the transaction's own list rather than straight
-	// to the pool, or the pin would not be released when the transaction ends.
+	// A pin must go through the transaction's own list and not directly to the
+	// pool. Otherwise the pin would not be released when the transaction ends.
 	t.Run("it records the pin against the transaction, not only in the pool", func(t *testing.T) {
 		fm, _, _, tx := newTestTransaction(t)
 		blk := appendBlock(t, fm)
@@ -272,8 +274,8 @@ func TestTransactionPin(t *testing.T) {
 		}
 	})
 
-	// A pin that failed must be reported rather than swallowed, and must leave
-	// nothing recorded for the transaction to release later.
+	// A failed pin must be reported, not ignored. It must also leave no record
+	// that the transaction would release later.
 	t.Run("given a block that cannot be read, it reports the failure and records nothing", func(t *testing.T) {
 		_, _, _, tx := newTestTransaction(t)
 		// The data file has no blocks, so reading this one cannot succeed.
@@ -311,10 +313,10 @@ func TestTransactionAvailableBuffers(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// pinsByOther is how many blocks another transaction pins before this
-		// one asks.
+		// pinsByOther is the number of blocks that another transaction pins
+		// before this one calls AvailableBuffers.
 		pinsByOther int
-		// pinsBySelf is how many blocks this transaction pins before it asks.
+		// pinsBySelf is the number of blocks that this transaction pins first.
 		pinsBySelf int
 		want       int
 	}{
@@ -415,9 +417,9 @@ func TestTransactionSetAndGet(t *testing.T) {
 }
 
 func TestTransactionSetInt(t *testing.T) {
-	// The record has to capture what the value was, which means logging it
-	// before the write. Writing first would log the new value and make undo a
-	// no-op.
+	// The record must capture the previous value, so the value is logged
+	// before the write. If the write came first, the record would hold the new
+	// value and an undo would change nothing.
 	t.Run("when a value is written over another, then the record on the log holds the one that was there before", func(t *testing.T) {
 		fm, lm, _, tx := newTestTransaction(t)
 		blk := appendBlock(t, fm)
@@ -441,8 +443,9 @@ func TestTransactionSetInt(t *testing.T) {
 		}
 	})
 
-	// The buffer has to be stamped with this transaction's number, or the pool
-	// will not write it out when the transaction commits and the change is lost.
+	// The buffer must be marked with this transaction's number. Otherwise the
+	// pool does not write it when the transaction commits, and the change is
+	// lost.
 	t.Run("it stamps the buffer with the transaction, so a flush of that transaction writes the block out", func(t *testing.T) {
 		fm, _, bm, tx := newTestTransaction(t)
 		blk := appendBlock(t, fm)
@@ -466,9 +469,9 @@ func TestTransactionSetInt(t *testing.T) {
 		}
 	})
 
-	// A write takes an exclusive lock, so nobody else may look at the block
-	// until this transaction releases it. Pinning is what waits: a transaction
-	// that may not read the block has no business holding a buffer for it
+	// A write takes an exclusive lock, so no other transaction can read the
+	// block until this transaction releases it. The other transaction waits in
+	// Pin: a transaction that cannot read a block must not hold a buffer for it
 	// either.
 	t.Run("given a block this transaction has written, another transaction waits to pin it until the lock is released", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
@@ -525,9 +528,9 @@ func TestTransactionSetString(t *testing.T) {
 	})
 }
 
-// Reading or writing a block the transaction never pinned is a bug in the
-// caller. There is no buffer to work through, so it has to be reported rather
-// than reaching for whatever the pool happens to hold.
+// A read or write of a block that the transaction never pinned is a bug in
+// the caller. The transaction has no buffer for the block, so it must report
+// an error and must not use an arbitrary buffer from the pool.
 func TestTransactionValueAccessWithoutPinning(t *testing.T) {
 	tests := []struct {
 		name string
@@ -576,9 +579,9 @@ func TestTransactionValueAccessWithoutPinning(t *testing.T) {
 }
 
 func TestTransactionGetInt(t *testing.T) {
-	// A read takes a shared lock, so several transactions may read the same
-	// block at once. An exclusive lock here would serialise readers for no
-	// reason.
+	// A read takes a shared lock, so several transactions can read the same
+	// block at the same time. An exclusive lock here would serialize readers
+	// without need.
 	t.Run("given a block this transaction has read, another transaction may read it too rather than waiting", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
 		first, err := NewTransaction(fm, lm, bm, lt, 1)
@@ -645,8 +648,8 @@ func TestTransactionSize(t *testing.T) {
 		})
 	}
 
-	// Reading the length takes a shared lock, so several transactions may read
-	// it at once.
+	// Reading the length takes a shared lock, so several transactions can read
+	// it at the same time.
 	t.Run("given a transaction that has read the length, another may read it too rather than waiting", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
 		first, err := NewTransaction(fm, lm, bm, lt, 1)
@@ -698,9 +701,10 @@ func TestTransactionAppend(t *testing.T) {
 		}
 	})
 
-	// The length of a file is guarded by a lock on a block that does not exist,
-	// one past the end. Appending changes the length, so it takes that lock
-	// exclusively and nobody may read the length until the transaction ends.
+	// The length of a file is protected by a lock on a dummy block that does
+	// not exist in the file. Append changes the length, so it takes that lock
+	// exclusively. No other transaction can read the length until the
+	// transaction ends.
 	t.Run("given a transaction that has appended, another waits to read the length until the lock is released", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
 		appender, err := NewTransaction(fm, lm, bm, lt, 1)
@@ -727,8 +731,8 @@ func TestTransactionAppend(t *testing.T) {
 		assertReturns(t, done, "Size()")
 	})
 
-	// The block that guards the length is not one of the file's own, so
-	// extending the file leaves the blocks already in it free to read.
+	// The dummy block that protects the length is not a block of the file,
+	// so extending the file does not block reads of the existing blocks.
 	t.Run("when a transaction extends a file, then the blocks already in it stay free to read", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
 		appender, err := NewTransaction(fm, lm, bm, lt, 1)
@@ -756,8 +760,8 @@ func TestTransactionAppend(t *testing.T) {
 	})
 }
 
-// writeInt puts a value straight into a block on disk, standing for what was
-// already there before a transaction touched it.
+// writeInt writes a value directly to a block on disk. It represents data
+// that existed before a transaction modified the block.
 func writeInt(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId, val int32) {
 	t.Helper()
 	page := filemanager.NewPageByBlockSize(testBlockSize)
@@ -778,9 +782,9 @@ func readInt(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId
 	return page.GetInt(0)
 }
 
-// Ending a transaction is what lets the next one in. Whichever way it ends, the
-// locks it held and the buffers it pinned have to go back, or the pool and the
-// lock table would leak for the rest of the run.
+// The end of a transaction lets other transactions proceed. However it ends,
+// its locks and its pinned buffers must be released. Otherwise the pool and
+// the lock table would leak for the rest of the run.
 func TestTransactionEndReleasesLocksAndPins(t *testing.T) {
 	tests := []struct {
 		name string
@@ -835,8 +839,8 @@ func TestTransactionEndReleasesLocksAndPins(t *testing.T) {
 }
 
 func TestTransactionCommit(t *testing.T) {
-	// The commit record is what tells recovery the transaction finished, so a
-	// transaction that says it committed has to have put one on the log.
+	// The commit record tells recovery that the transaction finished, so a
+	// transaction that reports a commit must have appended one to the log.
 	t.Run("it puts a commit record on the log carrying the transaction number", func(t *testing.T) {
 		const txNum = 1
 
@@ -894,8 +898,8 @@ func TestTransactionRollback(t *testing.T) {
 }
 
 func TestTransactionRecover(t *testing.T) {
-	// Recovery runs under its own transaction and undoes the work of every
-	// transaction the log shows as unfinished.
+	// Recovery runs as its own transaction and undoes the changes of every
+	// transaction that the log shows as unfinished.
 	t.Run("given a transaction the log shows as unfinished, its writes are undone", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDeps(t)
 		blk := appendBlock(t, fm)
@@ -912,7 +916,7 @@ func TestTransactionRecover(t *testing.T) {
 			t.Fatalf("SetInt() error = %v", err)
 		}
 		// The change reached disk before the crash, but the transaction never
-		// committed, so recovery has to take it back out.
+		// committed, so recovery must undo it.
 		if err := bm.FlushAll(1); err != nil {
 			t.Fatalf("FlushAll() error = %v", err)
 		}
@@ -931,13 +935,13 @@ func TestTransactionRecover(t *testing.T) {
 	})
 }
 
-// Taking the lock before the buffer is the point of locking at pin time. A
-// transaction blocked on a lock holds no buffer, so contention over one block
-// cannot empty the pool for everybody else.
+// Pin takes the lock before the buffer, which is the reason for locking in
+// Pin. A transaction blocked on a lock holds no buffer, so contention on one
+// block cannot exhaust the pool for other transactions.
 //
-// The writer unpins but keeps its lock, which is the ordinary shape of a write:
-// the buffer goes back to the pool while the lock is held until the transaction
-// ends.
+// The writer unpins but keeps its lock. This is the normal state after a
+// write: the buffer returns to the pool, and the lock is held until the
+// transaction ends.
 func TestTransactionPinDoesNotHoldABufferWhileWaiting(t *testing.T) {
 	t.Run("given a pool of one buffer and a transaction waiting for a lock, a third transaction can still take that buffer", func(t *testing.T) {
 		fm, lm, bm, lt := newTestDepsWithPool(t, 1)
@@ -969,15 +973,16 @@ func TestTransactionPinDoesNotHoldABufferWhileWaiting(t *testing.T) {
 		})
 		assertStillWaiting(t, blocked, "Pin()")
 
-		// The pool holds one buffer and nobody is using it, so a transaction with
-		// no interest in the locked block must still be able to work.
+		// The pool holds one buffer and it is unpinned, so a transaction that
+		// does not use the locked block must still be able to work.
 		done := runInBackground(func() error {
 			return other.Pin(free)
 		})
 		assertReturns(t, done, "Pin()")
 
-		// Give the buffer back before releasing the lock, or the waiting pin would
-		// only swap one thing to wait for with another.
+		// The buffer is unpinned before the lock is released. Otherwise the
+		// waiting pin would stop waiting for the lock and start waiting for a
+		// buffer.
 		other.Unpin(free)
 
 		writer.concurrencyManager.Release()

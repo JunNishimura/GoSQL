@@ -8,63 +8,60 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// IndexInfo is what is known about one index: which field of which table it is
-// on, and what a plan that went through it would cost.
+// IndexInfo describes one index: the table and field it is on, and the
+// estimated cost of a plan that uses it.
 //
-// Those are two different kinds of thing to hold in one place, and the name is
-// vague because of it. An index is described here so that a planner can find
-// out one index exists on a field, and costed here so that it can work out
-// whether going through it beats reading the table. The two are kept together
-// because the second is answered from the first: what an index costs follows
-// from the shape of the records it holds, which follows from the field it is
-// on.
+// These are two different responsibilities in one type, which is why the name
+// is vague. The description lets a planner find out that an index exists on a
+// field. The cost estimate lets the planner decide whether the index is
+// cheaper than a table scan. Both are in one type because the cost is derived
+// from the description: the cost of an index depends on the layout of its
+// records, and the layout depends on the indexed field.
 //
-// It holds a transaction, where the managers in this package take one per call.
-// They are built once and live as long as the database, so a transaction of
-// theirs would be one they had outlived. This is built for one query out of
-// what a manager read under that query's transaction, and answers only while
-// that query is being planned, so the transaction is as short-lived as it is.
-// Both of the things it has to do with one, opening the index and costing a
-// search through it, would otherwise be handed back the same transaction it was
-// described under.
+// An IndexInfo holds a transaction, while the managers in this package take
+// one per call. A manager is created once and lives as long as the database,
+// so it would outlive any transaction it held. An IndexInfo is created for
+// one query, from data that a manager read in the transaction of that query.
+// It is used only while that query is planned, so it lives no longer than the
+// transaction. Opening the index and estimating a search both need a
+// transaction, and the caller would otherwise have to pass the same one back.
 //
-// What that buys is paid for if one of these is kept past its query: it would
-// go on reading through a transaction that had ended. Nothing here stops that,
-// and nothing should hold one longer than the plan it was made for.
+// The cost of this design is that an IndexInfo must not be kept after its
+// query. It would then read through a transaction that has ended. Nothing
+// here prevents that, so no caller should hold an IndexInfo longer than the
+// plan it was created for.
 type IndexInfo struct {
-	// tx is the transaction this was described under, and the one it reads
-	// through.
+	// tx is the transaction in which this info was read. The info also reads
+	// through it.
 	tx *transaction.Transaction
-	// indexName is what the index is called. It is the name of the table its
-	// own records are kept in, since an index is stored as a table like
-	// anything else.
+	// indexName is the name of the index. It is also the name of the table
+	// that stores the index records, because an index is stored as a table.
 	indexName string
-	// fieldName is the field of the indexed table this index is on. One index
-	// covers one field.
+	// fieldName is the indexed field of the table. One index covers one
+	// field.
 	fieldName string
-	// tableSchema is the schema of the table being indexed. It is what says
-	// how wide the indexed field is, which is what the index's own records are
-	// laid out from.
+	// tableSchema is the schema of the indexed table. It gives the type and
+	// length of the indexed field, which determine the layout of the index
+	// records.
 	tableSchema *recordmanager.Schema
-	// tableStatistics is what is known about the indexed table. The cost of
-	// going through the index follows from how many records the table holds,
-	// so the answer comes from here rather than from the index itself.
+	// tableStatistics holds the statistics of the indexed table. The cost of
+	// an index search depends on the number of records in the table, so the
+	// estimate uses these statistics and not the index itself.
 	tableStatistics *TableStatistics
-	// indexLayout is the shape of the index's own records, which is worked out
-	// from the indexed field rather than fixed. It is what says how many index
-	// records go in a block, and that is what a search through the index costs.
+	// indexLayout is the layout of the index records. It is derived from the
+	// indexed field and is not fixed. It determines how many index records
+	// fit in a block, which determines the cost of an index search.
 	indexLayout *recordmanager.Layout
 }
 
-// NewIndexInfo returns what is known about the index named indexName, which is
-// on fieldName of a table whose schema is tableSchema and whose measurements
-// are tableStatistics.
+// NewIndexInfo returns the info for the index named indexName. The index is
+// on fieldName of a table with the schema tableSchema and the statistics
+// tableStatistics.
 //
-// The shape of the index's records is worked out here rather than when it is
-// first needed, so that an index on a field the table does not have is refused
-// where it is described. Such an index is nothing at all: it has no records to
-// hold and no shape for the records it does not hold, and every call on it
-// would fail one at a time for the same reason.
+// The layout of the index records is computed here and not on first use. An
+// index on a field that the table does not have is therefore rejected where
+// it is described. Such an index is unusable: it has no records and no
+// layout, and every call on it would fail for the same reason.
 func NewIndexInfo(
 	tx *transaction.Transaction,
 	indexName string,
@@ -77,12 +74,12 @@ func NewIndexInfo(
 		return nil, err
 	}
 
-	// An index whose own records do not fit in a block is refused here. A record
-	// page would refuse it too, so it could never be opened, but the cost of a
-	// search through it is asked before it is opened, and that is worked out by
-	// dividing by how many of its records go in a block. For this one that is
-	// none, and dividing by it would take the database down rather than report
-	// an index nobody can have.
+	// An index whose records do not fit in a block is rejected here. A record
+	// page would reject it too, so it could never be opened. However, the
+	// cost of a search is requested before the index is opened, and the cost
+	// divides by the number of index records per block. For such an index
+	// that number is zero, and the division would panic instead of reporting
+	// an invalid index.
 	if slotSize := indexLayout.SlotSize(); slotSize > tx.BlockSize() {
 		return nil, fmt.Errorf(
 			"describe an index on field %q, whose records are %d bytes and a block of %d bytes cannot hold one of: %w",
@@ -100,27 +97,27 @@ func NewIndexInfo(
 	}, nil
 }
 
-// createIndexLayout works out the shape of the records an index on fieldName
-// holds.
+// createIndexLayout computes the layout of the records of an index on
+// fieldName.
 //
-// Two of the three fields are the same for every index, since every index says
-// where a record is in the same way. The third is the value the record is filed
-// under, and it takes its type and width from the indexed field: what an index
-// files is whatever that field holds. That is why this is worked out per index
-// rather than written down once.
+// Two of the three fields are the same for every index, because every index
+// stores a record id in the same way. The third field is the key. It takes
+// its type and length from the indexed field, because the key is a copy of
+// that field's value. The layout is therefore computed per index and is not a
+// constant.
 //
-// It is a function rather than a method because the constructor calls it. As a
-// method it could only be reached through the constructor, and a test of it
-// would have to go through the thing it is part of building.
+// This is a function and not a method because the constructor calls it. A
+// method could only be called on a constructed value, so a test of it would
+// have to go through the constructor that it is part of.
 func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*recordmanager.Layout, error) {
 	fieldType, err := tableSchema.Type(fieldName)
 	if err != nil {
 		return nil, fmt.Errorf("lay out an index on field %q: %w", fieldName, err)
 	}
 
-	// Length cannot fail here: Type has already found the field in the same
-	// schema. The error is returned rather than dropped so that this stays true
-	// if it grows another reason to refuse one.
+	// Length cannot fail here, because Type has already found the field in the
+	// same schema. The error is still returned, so that the code stays correct
+	// if Length gains another failure case.
 	length, err := tableSchema.Length(fieldName)
 	if err != nil {
 		return nil, err
@@ -128,16 +125,16 @@ func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*re
 
 	schema := recordmanager.NewSchema()
 
-	// Adding a field cannot fail here either, since the three names are fixed
-	// by this package and no two of them are the same.
+	// Adding a field cannot fail here either, because this package defines the
+	// three names and they are all different.
 	if err := schema.AddIntField(index.BlockNumberField); err != nil {
 		return nil, err
 	}
 	if err := schema.AddIntField(index.SlotField); err != nil {
 		return nil, err
 	}
-	// The length is passed whatever the type is, since a schema ignores it for
-	// an int and holds 0 for one, which is what the indexed field gives back.
+	// The length is passed for either type. A schema ignores it for an int and
+	// stores 0, which is also the length that the indexed int field returns.
 	if err := schema.AddField(index.IndexedValueField, fieldType, length); err != nil {
 		return nil, err
 	}
@@ -145,11 +142,11 @@ func createIndexLayout(tableSchema *recordmanager.Schema, fieldName string) (*re
 	return recordmanager.NewLayout(schema), nil
 }
 
-// Open opens the index described here, through the transaction it was
-// described under. Every index is a B-tree index.
+// Open opens the index, in the transaction in which this info was read. Every
+// index is a B-tree index.
 //
-// It can fail, since opening a B-tree reads its files, and makes them the
-// first time the index is opened.
+// Open can fail, because opening a B-tree reads its files, and creates them
+// the first time the index is opened.
 func (info *IndexInfo) Open() (index.Index, error) {
 	idx, err := index.NewBTreeIndex(info.tx, info.indexName, info.indexLayout)
 	if err != nil {
@@ -159,22 +156,23 @@ func (info *IndexInfo) Open() (index.Index, error) {
 	return idx, nil
 }
 
-// BlocksAccessed is how many blocks a search through this index touches.
+// BlocksAccessed returns the estimated number of blocks that a search through
+// this index reads.
 //
-// It starts from the size of the index in blocks: one index record stands for
-// one record of the table, so how many blocks they take follows from how many
-// of them go in one. That is worked out from the index's own records rather
-// than the table's, and those are three fields against however many the table
-// has, which is the whole reason a search through an index beats reading the
-// table.
+// The estimate starts from the size of the index in blocks. The index has one
+// record per table record, so its size follows from the number of index
+// records per block. That number comes from the layout of the index records,
+// not of the table records. An index record has three fields, and a table
+// record usually has more. This difference is why an index search is cheaper
+// than a table scan.
 //
-// A search does not read all of it, and how much it does read is the index's
-// own business, so the answer is handed to the index. Every index is a B-tree,
-// as it is in Open, and a search through one reads a block per level of its
-// directory and then a leaf.
+// A search does not read the whole index. How much it reads depends on the
+// index type, so the index type computes the final estimate. Every index is a
+// B-tree, as in Open. A B-tree search reads one block per directory level and
+// then one leaf.
 //
-// The division rounds up, since records that fill a block and start another are
-// in two blocks, and the second is read like the first.
+// The division rounds up. Records that fill one block and start another
+// occupy two blocks, and the second block is read like the first.
 func (info *IndexInfo) BlocksAccessed() int {
 	recordsPerBlock := info.tx.BlockSize() / info.indexLayout.SlotSize()
 	numBlocks := ceilDivide(info.tableStatistics.RecordsOutput(), recordsPerBlock)
@@ -182,31 +180,31 @@ func (info *IndexInfo) BlocksAccessed() int {
 	return index.BTreeIndexSearchCost(numBlocks, recordsPerBlock)
 }
 
-// RecordsOutput is how many records a search through this index gives back.
+// RecordsOutput returns the estimated number of records that a search through
+// this index returns.
 //
-// A search is for one value, so what comes back is the records holding that
-// value rather than the whole table: the records spread over the values the
-// indexed field takes, and one value's worth of them.
+// A search is for one value, so it returns the records with that value and
+// not the whole table. The estimate is the number of records divided by the
+// number of distinct values of the indexed field.
 //
-// This is what an index is for. A table of a hundred records whose indexed
-// field takes thirty-four different values gives back two of them per search,
-// and it is against that two that reading all hundred is weighed.
+// This is the benefit of an index. For a table of a hundred records whose
+// indexed field has thirty-four distinct values, a search returns about two
+// records. A planner compares those two with a scan of all hundred.
 func (info *IndexInfo) RecordsOutput() int {
 	return info.tableStatistics.RecordsOutput() / info.tableStatistics.DistinctValues(info.fieldName)
 }
 
-// DistinctValues is how many different values fieldName takes among the records
-// a search through this index gives back.
+// DistinctValues returns the estimated number of distinct values of fieldName
+// among the records that a search through this index returns.
 //
-// For the indexed field it is one. Every record that came back was filed under
-// the value that was searched for, so that field holds that one value across
-// all of them however many the table holds.
+// For the indexed field the result is one. Every returned record has the
+// value that was searched for, whatever the size of the table.
 //
-// For any other field it is whatever the table says. Picking out the records
-// that share one value of the indexed field says nothing about how varied some
-// other field is among them, and this layer has no way to find out; taking the
-// table's answer amounts to supposing the two fields have nothing to do with
-// each other, which is the most that can be said without looking.
+// For any other field the result is the table's estimate. Selecting the
+// records with one value of the indexed field gives no information about the
+// variety of another field among them, and this layer cannot measure it.
+// Using the table's estimate assumes that the two fields are independent,
+// which is the best available assumption without reading the data.
 func (info *IndexInfo) DistinctValues(fieldName string) int {
 	if fieldName == info.fieldName {
 		return 1
@@ -215,10 +213,11 @@ func (info *IndexInfo) DistinctValues(fieldName string) int {
 	return info.tableStatistics.DistinctValues(fieldName)
 }
 
-// ceilDivide is dividend/divisor rounded up.
+// ceilDivide returns dividend/divisor, rounded up.
 //
-// Blocks are counted this way because a part of a block is read as a whole one:
-// records that fill one and start another are in two, and both are read.
+// Blocks are counted this way because a partly used block is read as a whole
+// block. Records that fill one block and start another occupy two blocks, and
+// both are read.
 func ceilDivide(dividend int, divisor int) int {
 	return (dividend + divisor - 1) / divisor
 }

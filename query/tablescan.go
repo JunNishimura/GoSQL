@@ -9,79 +9,81 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// ErrNoCurrentRecord reports reading or writing a scan that is not on a record:
-// one that has not been moved to its first record yet, or one that has run past
-// the last.
+// ErrNoCurrentRecord is returned when a scan is read or written while it is
+// not on a record: before the first move to a record, or after the last
+// record.
 //
-// It is kept apart from recordmanager.ErrSlotOutOfRange, which the record page
-// raises for the same slot number, because the two say different things to
-// whoever gets them. Out of range means a slot that could not exist; this one
-// means the scan has not been asked to go anywhere.
+// It is separate from recordmanager.ErrSlotOutOfRange, which a record page
+// returns for the same slot number, because the two errors mean different
+// things to the caller. Out of range means that the slot cannot exist. This
+// error means that the scan has not been moved to a record.
 var ErrNoCurrentRecord = errors.New("no current record")
 
-// tableFileExtension is what a table's name is turned into a file name with.
-// One table is one file, so the name of the table is enough to find it.
+// tableFileExtension is appended to a table name to form its file name. One
+// table is one file, so the table name is enough to find the file.
 const tableFileExtension = ".tbl"
 
-// TableFileName is the file the records of tableName are kept in.
+// TableFileName returns the name of the file that stores the records of
+// tableName.
 //
-// It is exported for the scans that reach a table's blocks by number rather
-// than through a TableScan, such as one that pins a chunk of them at once, so
-// that they find the same file this one does.
+// It is exported for scans that access the blocks of a table by number and
+// not through a TableScan, such as a scan that pins several blocks at once.
+// They then use the same file as a TableScan.
 func TableFileName(tableName string) string {
 	return tableName + tableFileExtension
 }
 
-// beforeFirstSlot is where a scan sits when it has moved to a block but has not
-// yet looked at any of its slots.
+// beforeFirstSlot is the slot position of a scan that has moved to a block
+// but has not read any slot yet.
 //
-// It is one before the first slot rather than the first, because the searches a
-// record page offers start past the slot they are given: the scan can hand this
-// back and be given slot 0.
+// It is one less than the first slot, because the searches of a record page
+// start after the slot they are given. A search from this value returns
+// slot 0.
 const beforeFirstSlot = -1
 
-// A table is the scan every other one is built out of, so it is the first thing
-// UpdateScan has to fit. Nothing reads this: it is here so that a method whose
-// name or signature drifts away from the interface is a compile error in this
-// file, rather than at whichever caller first tried to use the two together.
+// A table scan is the scan that every other scan is built on, so it must
+// satisfy UpdateScan. This variable is never read. It makes a method whose
+// name or signature no longer matches the interface a compile error in this
+// file, and not at the first caller that uses the type as an UpdateScan.
 var _ UpdateScan = (*TableScan)(nil)
 
-// TableScan is a walk over every record of one table, block by block.
+// TableScan scans every record of one table, block by block.
 //
-// A record page sees one block, and a table is a file of them, so this is what
-// carries a reader from the end of one block to the start of the next, and what
-// adds a block when a record has to go somewhere and none of the existing ones
+// A record page covers one block, and a table is a file of blocks. A table
+// scan moves a reader from the end of one block to the start of the next. It
+// also appends a block when a record must be inserted and no existing block
 // has room.
 //
-// It holds one block pinned at a time: the one it is on. Moving off a block
-// gives that pin back, which is what keeps a scan of a large table from
-// emptying the buffer pool.
+// It keeps one block pinned at a time: the current block. Moving to another
+// block unpins the previous one, so a scan of a large table does not exhaust
+// the buffer pool.
 type TableScan struct {
 	tx     *transaction.Transaction
 	layout *recordmanager.Layout
-	// rp is the block the scan is on, or nil before it has moved to one.
+	// rp is the record page of the current block, or nil before the first move.
 	rp *recordmanager.RecordPage
-	// fileName is the table's file, kept rather than the table's name because
-	// nothing below this asks for a table.
+	// fileName is the file of the table. The scan keeps it instead of the
+	// table name, because the lower layers only use file names.
 	fileName string
-	// currentSlot is the slot of rp the scan is on, or beforeFirstSlot.
+	// currentSlot is the current slot in rp, or beforeFirstSlot.
 	currentSlot int
-	// blockCount is how many blocks the table's file had when this scan last
-	// looked. Asking the file is a call to stat, and a walk asks once per block
-	// it leaves, so the answer is kept between those.
+	// blockCount is the number of blocks that the file had when the scan last
+	// checked. Reading the file size is a stat call, and a scan needs the
+	// size once for each block it leaves, so the result is cached.
 	//
-	// It can only be behind, never ahead: blocks are added and never taken
-	// away. No other transaction can add one, since opening the scan took a
-	// shared lock on the file's length, but this transaction can, through this
-	// scan or through another one over the same table.
+	// The cached count can be too low but never too high, because blocks are
+	// appended and never removed. No other transaction can append a block,
+	// because the scan took a shared lock on the file length when it was
+	// opened. This transaction can, through this scan or through another scan
+	// of the same table.
 	blockCount int
 }
 
-// NewTableScan opens a scan over tableName, placed before the first record.
+// NewTableScan opens a scan of tableName, positioned before the first record.
 //
-// A table whose file has no blocks yet gets one, so that a scan always has a
-// block to work on and whoever inserts into it does not have to treat an empty
-// table as a special case.
+// If the file of the table has no blocks, one is appended. A scan then always
+// has a block to work on, and code that inserts records needs no special case
+// for an empty table.
 func NewTableScan(tx *transaction.Transaction, tableName string, layout *recordmanager.Layout) (*TableScan, error) {
 	ts := &TableScan{
 		tx:       tx,
@@ -110,20 +112,20 @@ func NewTableScan(tx *transaction.Transaction, tableName string, layout *recordm
 	return ts, nil
 }
 
-// Close gives back the block the scan is holding. Every scan has to be closed,
-// or the buffer it is on stays taken until the transaction ends, however long
-// ago the scan was finished with.
+// Close unpins the current block. Every scan must be closed. Otherwise its
+// buffer stays pinned until the transaction ends, long after the scan was
+// last used.
 //
-// It returns nothing because nothing here can fail: giving a pin back is a
-// count going down. It can be called on a scan that is already closed, so a
-// caller may defer it and close early on the paths where it wants the buffer
-// back sooner.
+// Close returns no error because it cannot fail: an unpin only decrements a
+// count. It can be called on a scan that is already closed. A caller can
+// therefore defer it and also close early where it needs the buffer sooner.
 //
-// A closed scan is on no block, so reading or writing one is ErrNoCurrentRecord
-// rather than a use of whatever the buffer went on to hold.
+// A closed scan is on no block. Reading or writing it returns
+// ErrNoCurrentRecord and does not access the block that the buffer holds
+// later.
 //
-// Moving to another block closes the scan as its first step, for the same
-// reason a caller does: the block being left is one nothing is going to read.
+// A move to another block starts with Close, for the same reason that a
+// caller closes a scan: the previous block is no longer read.
 func (ts *TableScan) Close() {
 	if ts.rp == nil {
 		return
@@ -133,32 +135,33 @@ func (ts *TableScan) Close() {
 	ts.rp = nil
 }
 
-// MoveBeforeFirstRecord puts the scan back at the start of the table, before
+// MoveBeforeFirstRecord positions the scan at the start of the table, before
 // its first record.
 //
-// It leaves the scan on no record rather than on the first one: reading a field
-// straight after this is ErrNoCurrentRecord, and it takes a move to the next
-// record to arrive at the first. That is what lets a walk over a table be one
-// loop, with the first record reached the same way as every other.
+// The scan is then on no record, not on the first one. A field read directly
+// after this call returns ErrNoCurrentRecord, and MoveToNextRecord moves to
+// the first record. A scan of a table can therefore be a single loop that
+// reaches the first record in the same way as every other record.
 //
-// The table is not changed. The first block is opened as it stands, records and
-// all, so this can be called as often as a query needs to read the table again.
+// The table is not changed. The first block is opened with its existing
+// records, so a query can call this as often as it needs to read the table
+// again.
 func (ts *TableScan) MoveBeforeFirstRecord() error {
 	return ts.moveToBlock(0)
 }
 
-// MoveToNextRecord puts the scan on the record after the one it is on, and
-// reports whether there was one. False means the table has been read to the
-// end, not that anything went wrong.
+// MoveToNextRecord moves the scan to the record after the current one, and
+// reports whether one exists. False means that the scan has reached the end
+// of the table. It is not an error.
 //
-// Empty slots are passed over, and so are whole blocks of them: a table that
-// has had records deleted reads as the records it still holds, with no gaps for
-// the caller to step around.
+// Empty slots are skipped, and so are blocks with only empty slots. A table
+// with deleted records is read as the records it still holds, and the caller
+// sees no gaps.
 //
-// Running off the end of a block goes on to the next rather than stopping,
-// which is what makes a table look like one run of records rather than a file
-// of blocks. Only the block being read is held, so a walk over a large table
-// takes one buffer however long it runs.
+// At the end of a block the scan continues with the next block and does not
+// stop. A table therefore appears as one sequence of records, not as a file
+// of blocks. Only the current block is pinned, so a scan of a large table
+// uses one buffer however long it runs.
 func (ts *TableScan) MoveToNextRecord() (bool, error) {
 	if err := ts.requireCurrentBlock(); err != nil {
 		return false, err
@@ -174,9 +177,8 @@ func (ts *TableScan) MoveToNextRecord() (bool, error) {
 			return false, err
 		}
 
-		// The block holds no more records. Whether that is the end of the
-		// table or only the end of a block is the one thing this cannot tell
-		// from the block itself.
+		// The block holds no more records. The block itself does not show
+		// whether this is the end of the table or only the end of a block.
 		onLastBlock, err := ts.isOnLastBlock()
 		if err != nil {
 			return false, err
@@ -191,19 +193,19 @@ func (ts *TableScan) MoveToNextRecord() (bool, error) {
 	}
 }
 
-// MoveToNewRecord puts the scan on a record of its own, taken from the first
-// free slot at or after where it is, and leaves the fields at the values an
-// empty slot holds. Filling them in is the caller's next step.
+// MoveToNewRecord moves the scan to a new record in the first free slot at or
+// after its current position. The fields keep the values of an empty slot,
+// and the caller is expected to set them next.
 //
-// It searches from where the scan is rather than from the start of the table,
-// so a caller inserting a run of records does not read past the ones it has
-// just written for each of them. A caller that wants the earliest free slot,
-// and so wants the space of deleted records back, asks to be moved before the
-// first record first.
+// The search starts at the current position, not at the start of the table.
+// A caller that inserts many records therefore does not read past the records
+// it has just written for each insert. A caller that wants the earliest free
+// slot, to reuse the space of deleted records, first calls
+// MoveBeforeFirstRecord.
 //
-// Where MoveToNextRecord stops at the end of the table, this adds a block: a
-// record has to go somewhere, and having run out of slots is what a table
-// growing looks like.
+// MoveToNextRecord stops at the end of the table. MoveToNewRecord appends a
+// block there, because the record must be stored somewhere. A table grows
+// when it has no free slot left.
 func (ts *TableScan) MoveToNewRecord() error {
 	if err := ts.requireCurrentBlock(); err != nil {
 		return err
@@ -237,9 +239,9 @@ func (ts *TableScan) MoveToNewRecord() error {
 	}
 }
 
-// DeleteCurrentRecord takes the record the scan is on out of the table. The
-// scan stays where it is, on a slot that now holds no record, so a walk carries
-// on from there and never returns the record again.
+// DeleteCurrentRecord deletes the current record from the table. The scan
+// stays on the same slot, which is now empty. A scan that continues from
+// there does not return the record again.
 func (ts *TableScan) DeleteCurrentRecord() error {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return err
@@ -248,8 +250,8 @@ func (ts *TableScan) DeleteCurrentRecord() error {
 	return ts.rp.Delete(ts.currentSlot)
 }
 
-// CurrentRecordID names the record the scan is on, so that a caller can come
-// back to it later without keeping the scan where it is.
+// CurrentRecordID returns the record id of the current record, so that a
+// caller can return to the record later without keeping the scan on it.
 func (ts *TableScan) CurrentRecordID() (*recordmanager.RecordID, error) {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return nil, err
@@ -258,17 +260,18 @@ func (ts *TableScan) CurrentRecordID() (*recordmanager.RecordID, error) {
 	return recordmanager.NewRecordID(ts.rp.BlockID().Number(), ts.currentSlot), nil
 }
 
-// MoveToRecordID puts the scan straight onto the record rid names, without
-// reading the ones before it. That is what makes an index worth having: it
-// gives out record ids, and this is how a table is read from one.
+// MoveToRecordID moves the scan directly to the record that rid identifies,
+// without reading the records before it. An index depends on this: it returns
+// record ids, and this method reads the table records for them.
 //
-// The scan lands on the record rather than before it, unlike the other moves,
-// because rid says which record is wanted rather than where to start.
+// Unlike the other moves, this one positions the scan on the record and not
+// before it, because rid identifies the wanted record and not a starting
+// point.
 //
-// A slot that does not fit the block is refused here rather than at the first
-// read. A record id carries no file name, so one belonging to another table
-// cannot be told apart by its type, and a table whose records are a different
-// size is exactly where the number comes out wrong.
+// A slot that is outside the block is rejected here, not at the first read. A
+// record id has no file name, so its type does not show that it belongs to
+// another table. A table with a different record size is exactly the case in
+// which the slot number is wrong.
 func (ts *TableScan) MoveToRecordID(rid *recordmanager.RecordID) error {
 	if err := ts.moveToBlock(rid.BlockNumber()); err != nil {
 		return err
@@ -282,15 +285,14 @@ func (ts *TableScan) MoveToRecordID(rid *recordmanager.RecordID) error {
 	return nil
 }
 
-// isOnLastBlock reports whether the scan is on the final block of the table,
-// which is where a walk that finds no more records has to stop rather than move
-// on.
+// isOnLastBlock reports whether the scan is on the last block of the table. A
+// scan that finds no more records stops there and does not move on.
 //
-// The count it keeps is enough to say no: a block it already knows comes after
-// this one is proof there is more to read. Saying yes is what the count cannot
-// be trusted for, since it may have been left behind by an append this
-// transaction made elsewhere, so that answer is settled against the file and
-// the count brought up to date.
+// The cached count is enough to answer no: if the count shows a block after
+// the current one, there is more to read. The cached count is not enough to
+// answer yes, because an append by this transaction through another scan can
+// have made it stale. For that answer the method reads the file size and
+// updates the count.
 func (ts *TableScan) isOnLastBlock() (bool, error) {
 	if err := ts.requireCurrentBlock(); err != nil {
 		return false, err
@@ -309,8 +311,8 @@ func (ts *TableScan) isOnLastBlock() (bool, error) {
 	return ts.rp.BlockID().Number() == size-1, nil
 }
 
-// requireCurrentBlock reports that the scan is on no block, which is the state
-// a failed move leaves it in.
+// requireCurrentBlock returns an error if the scan is on no block. A failed
+// move leaves the scan in that state.
 func (ts *TableScan) requireCurrentBlock() error {
 	if ts.rp == nil {
 		return fmt.Errorf("the scan of %s is on no block: %w", ts.fileName, ErrNoCurrentRecord)
@@ -319,9 +321,9 @@ func (ts *TableScan) requireCurrentBlock() error {
 	return nil
 }
 
-// requireCurrentRecord reports why the scan has no record to read or write, and
-// nil when it has one. The four field methods all need the same thing of it, so
-// they ask here rather than each deciding what counts as being on a record.
+// requireCurrentRecord returns an error that explains why the scan has no
+// current record, or nil if it has one. The four field methods all call it,
+// so that the definition of "on a record" is in one place.
 func (ts *TableScan) requireCurrentRecord() error {
 	if err := ts.requireCurrentBlock(); err != nil {
 		return err
@@ -334,7 +336,7 @@ func (ts *TableScan) requireCurrentRecord() error {
 	return nil
 }
 
-// GetInt returns the int field fieldName of the record the scan is on.
+// GetInt returns the int field fieldName of the current record.
 func (ts *TableScan) GetInt(fieldName string) (int32, error) {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return 0, err
@@ -343,7 +345,7 @@ func (ts *TableScan) GetInt(fieldName string) (int32, error) {
 	return ts.rp.GetInt(ts.currentSlot, fieldName)
 }
 
-// SetInt writes val to the int field fieldName of the record the scan is on.
+// SetInt writes val to the int field fieldName of the current record.
 func (ts *TableScan) SetInt(fieldName string, val int32) error {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return err
@@ -352,7 +354,7 @@ func (ts *TableScan) SetInt(fieldName string, val int32) error {
 	return ts.rp.SetInt(ts.currentSlot, fieldName, val)
 }
 
-// GetString returns the varchar field fieldName of the record the scan is on.
+// GetString returns the varchar field fieldName of the current record.
 func (ts *TableScan) GetString(fieldName string) (string, error) {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return "", err
@@ -361,8 +363,7 @@ func (ts *TableScan) GetString(fieldName string) (string, error) {
 	return ts.rp.GetString(ts.currentSlot, fieldName)
 }
 
-// SetString writes val to the varchar field fieldName of the record the scan is
-// on.
+// SetString writes val to the varchar field fieldName of the current record.
 func (ts *TableScan) SetString(fieldName string, val string) error {
 	if err := ts.requireCurrentRecord(); err != nil {
 		return err
@@ -371,23 +372,22 @@ func (ts *TableScan) SetString(fieldName string, val string) error {
 	return ts.rp.SetString(ts.currentSlot, fieldName, val)
 }
 
-// HasField reports whether the table has a field of this name.
+// HasField reports whether the table has a field named fieldName.
 //
-// It answers from the schema rather than from a record, so it can be asked of a
-// scan that is on none. A query settles which of the scans it draws from a
-// field belongs to before it has read anything at all, which is where this gets
-// asked.
+// The answer comes from the schema, not from a record, so the method works on
+// a scan that is on no record. A query decides which of its scans a field
+// belongs to before it reads any record, and it calls HasField for that.
 func (ts *TableScan) HasField(fieldName string) bool {
 	return ts.layout.Schema().HasField(fieldName)
 }
 
-// GetValue returns the field of the record the scan is on as a constant, of
-// whichever kind the schema says the field is.
+// GetValue returns the field fieldName of the current record as a constant of
+// the type that the schema declares for the field.
 //
-// The kind has to come from the schema because the bytes of a slot read as
-// either. A varchar holding "42" and an int holding 42 are told apart by what
-// the table says they are and by nothing else, so a scan that decided from the
-// bytes would hand back the wrong kind for one of the two.
+// The type must come from the schema, because the bytes of a slot can be read
+// as either type. A varchar "42" and an int 42 differ only in the type that
+// the table declares. A scan that derived the type from the bytes would
+// return the wrong type for one of them.
 func (ts *TableScan) GetValue(fieldName string) (Constant, error) {
 	fieldType, err := ts.layout.Schema().Type(fieldName)
 	if err != nil {
@@ -414,20 +414,20 @@ func (ts *TableScan) GetValue(fieldName string) (Constant, error) {
 	}
 }
 
-// SetValue writes val to the field of the record the scan is on, as whichever
-// kind of value the constant holds.
+// SetValue writes val to the field fieldName of the current record, according
+// to the type of the constant.
 //
-// The kind is taken from the constant rather than from the schema, so this asks
-// the schema nothing: the record page already checks the field against the type
-// being written, and a constant of the wrong kind for the field comes back with
-// the same ErrFieldTypeMismatch a typed setter aimed at the wrong field would.
-// One error to explain rather than two, and one lookup fewer.
+// The type comes from the constant and not from the schema, so SetValue does
+// not query the schema. The record page already checks the field against the
+// type that is written. A constant of the wrong type for the field causes the
+// same ErrFieldTypeMismatch as a typed setter on the wrong field. This gives
+// one error to document instead of two, and saves one schema lookup.
 func (ts *TableScan) SetValue(fieldName string, val Constant) error {
 	switch val.Type() {
 	case recordmanager.FieldTypeInt:
-		// AsInt cannot fail here, since the switch has just settled the kind.
-		// The error is returned rather than dropped so that this stays true if
-		// it grows another reason to.
+		// AsInt cannot fail here, because the switch has just checked the type.
+		// The error is still returned, so that the code stays correct if AsInt
+		// gains another failure case.
 		intVal, err := val.AsInt()
 		if err != nil {
 			return err
@@ -446,8 +446,8 @@ func (ts *TableScan) SetValue(fieldName string, val Constant) error {
 	}
 }
 
-// moveToBlock puts the scan on a block the table already has, before its first
-// slot.
+// moveToBlock moves the scan to an existing block of the table, before its
+// first slot.
 func (ts *TableScan) moveToBlock(blkNum int) error {
 	ts.Close()
 
@@ -462,12 +462,12 @@ func (ts *TableScan) moveToBlock(blkNum int) error {
 	return nil
 }
 
-// moveToNewBlock adds a block to the end of the table's file and puts the scan
-// on it, before its first slot.
+// moveToNewBlock appends a block to the file of the table and moves the scan
+// to it, before its first slot.
 //
-// The new block is initialized, which the one moveToBlock reaches is not. A
-// block that has just been appended has never been read as slots, so nothing
-// has yet written the flags that say which of them are free.
+// The new block is initialized, unlike a block that moveToBlock opens. A
+// block that was just appended has never been used as slots, so the flags
+// that mark its slots as free have not been written yet.
 func (ts *TableScan) moveToNewBlock() error {
 	ts.Close()
 
@@ -491,8 +491,9 @@ func (ts *TableScan) moveToNewBlock() error {
 	return nil
 }
 
-// blockID is the block the scan is on. It is here rather than inline so that
-// the file name and the block number are put together in one place.
+// blockID returns the id of block blkNum in the file of the table. It is a
+// separate method so that the file name and the block number are combined in
+// one place.
 func (ts *TableScan) blockID(blkNum int) *filemanager.BlockId {
 	return filemanager.NewBlockId(ts.fileName, blkNum)
 }

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// newTestLexer makes a lexer over s, failing the test if the first token
+// newTestLexer creates a lexer over s, and fails the test if the first token
 // cannot be read.
 func newTestLexer(t *testing.T, s string) *Lexer {
 	t.Helper()
@@ -164,16 +164,17 @@ func TestLexerMatchKeyword(t *testing.T) {
 			keyword: "from",
 			want:    false,
 		},
-		// Only a keyword is matched as one, so a keyword misspelled by the
-		// caller cannot match a field of the same name in the input.
+		// Only real keywords match as keywords. A keyword that the caller
+		// misspelled therefore cannot match a field with that name in the
+		// input.
 		{
 			name:    "given a lexer at a word that is not a keyword, when that word is matched as a keyword, then it does not match",
 			input:   "sname",
 			keyword: "sname",
 			want:    false,
 		},
-		// A string constant is a value, so its text being a keyword makes it
-		// no more a keyword than any other value.
+		// A string constant is a value. If its text is a keyword, it is still
+		// a value and not a keyword.
 		{
 			name:    "given a lexer at a string constant whose text is select, when select is matched, then it does not match",
 			input:   "'select'",
@@ -204,8 +205,8 @@ func TestLexerMatchID(t *testing.T) {
 			input: "sname",
 			want:  true,
 		},
-		// The tokenizer reads keywords and identifiers alike as words, so this
-		// is the case where the lexer tells the two apart.
+		// The tokenizer reads both keywords and identifiers as words, so in
+		// this case the lexer must distinguish them.
 		{
 			name:  "given a lexer at a keyword, then it does not match",
 			input: "select",
@@ -279,8 +280,8 @@ func TestLexerMatchEnd(t *testing.T) {
 	})
 }
 
-// What follows the token being eaten is always a keyword, so that each case
-// can tell that the lexer moved on by matching it.
+// The token after the consumed one is always a keyword. Each case matches it
+// to verify that the lexer advanced.
 func TestLexerEatDelim(t *testing.T) {
 	t.Run("given a lexer at a comma, when a comma is eaten, then it moves on to the next token", func(t *testing.T) {
 		l := newTestLexer(t, ", from")
@@ -329,8 +330,8 @@ func TestLexerEatIntConstant(t *testing.T) {
 			input: "-2147483648 from",
 			want:  -2147483648,
 		},
-		// A field holds an int32, so a number one past what it can hold is not
-		// a constant that could ever be compared with or written to one.
+		// A field holds an int32. A number one above the int32 maximum could
+		// never be compared with a field or written to one.
 		{
 			name:    "given a lexer at an int one past the largest int32, then it reports ErrBadSyntax",
 			input:   "2147483648",
@@ -459,8 +460,8 @@ func TestLexerEatID(t *testing.T) {
 			input:   "select",
 			wantErr: ErrBadSyntax,
 		},
-		// Reading the token after the one eaten is part of eating it, so a
-		// token that cannot be read shows up here and not at the next match.
+		// Reading the next token is part of an Eat. A token that cannot be
+		// read is therefore reported here and not at the next match.
 		{
 			name:    "given a lexer at a word followed by a string constant with no closing quote, then it reports ErrUnterminatedString",
 			input:   "sname 'Joe",

@@ -9,12 +9,12 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// fourBlocks is a file of four blocks of two records each, the ids counting up
-// from block 0, so that which blocks a chunk read shows in the ids it gives.
+// fourBlocks is a file of four blocks with two records each. The ids count up
+// from block 0, so the ids that a chunk returns show which blocks it read.
 var fourBlocks = [][]int32{{1, 2}, {3, 4}, {5, 6}, {7, 8}}
 
 // newTestChunkScan writes blocks to the test file and opens a chunk scan of
-// startBlock to endBlock of it, closed when the test ends.
+// its blocks startBlock to endBlock. The scan is closed when the test ends.
 func newTestChunkScan(t *testing.T, tx *transaction.Transaction, blocks [][]int32, startBlock, endBlock int) *ChunkScan {
 	t.Helper()
 

@@ -11,9 +11,9 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// newTestRows returns the rows of sql run on c's database in tx, made without
-// going through QueryContext. autoTx is what the rows hold as the transaction
-// to commit when closed.
+// newTestRows returns the rows of sql, run on the database of c in tx. It
+// does not use QueryContext. The rows hold autoTx as the transaction to
+// commit when they are closed.
 func newTestRows(t *testing.T, c *Conn, tx *transaction.Transaction, sql string, autoTx *transaction.Transaction) *Rows {
 	t.Helper()
 
@@ -26,8 +26,9 @@ func newTestRows(t *testing.T, c *Conn, tx *transaction.Transaction, sql string,
 }
 
 func TestConnQueryContext(t *testing.T) {
-	// The query holds shared locks on what it read until its transaction ends,
-	// so a writer after it waits on them unless closing the rows committed it.
+	// The query holds shared locks on the data it read until its transaction
+	// ends. A later writer waits for them unless closing the rows committed
+	// the transaction.
 	t.Run("given a connection with no transaction and a table holding a record, when it is queried, then the rows give the record and closing them leaves a later transaction free to write the table", func(t *testing.T) {
 		c := newTestConnWithTableOutsideTx(t)
 		executeAndCommit(t, c, "insert into test (id) values (7)")
@@ -82,8 +83,9 @@ func TestConnQueryContext(t *testing.T) {
 		}
 	})
 
-	// Planning reads the catalogs under shared locks, so a query that fails to
-	// plan has to end its transaction too, or making a table afterwards waits.
+	// Planning reads the catalogs under shared locks. A query that fails to
+	// plan must therefore end its transaction too, or a later create table
+	// would wait.
 	t.Run("given a connection with no transaction, when a table that does not exist is queried, then it reports an error and a later transaction can make a table", func(t *testing.T) {
 		c := newTestConnWithTableOutsideTx(t)
 
@@ -157,16 +159,16 @@ func TestRowsClose(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewTransaction() error = %v", err)
 		}
-		// Opening the scan takes a shared lock on the table's first block,
-		// which is all the write below needs to be kept waiting.
+		// Opening the scan takes a shared lock on the first block of the
+		// table. That lock alone makes the write below wait.
 		rows := newTestRows(t, c, tx, "select id from test", tx)
 
 		if err := rows.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
 
-		// Checked first, since a transaction left uncommitted would hold the
-		// locks the write below has to wait for.
+		// This is checked first, because an uncommitted transaction would hold
+		// the locks that the write below waits for.
 		if rows.autoTx != nil {
 			t.Fatal("the rows still hold their transaction after Close")
 		}

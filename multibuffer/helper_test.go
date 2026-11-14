@@ -18,10 +18,10 @@ const (
 	testBlockSize         = 400
 	testNumBuffers        = 8
 	testStringFieldLength = 10
-	// testTableName is the table the blocks a test writes belong to, read
+	// testTableName is the table of the blocks that a test writes and reads
 	// through chunks.
 	testTableName = "chunk"
-	// testLeftTableName is the table the left side of a product is read from.
+	// testLeftTableName is the table of the left side of a product.
 	testLeftTableName = "left"
 )
 
@@ -29,7 +29,7 @@ const (
 var testFileName = query.TableFileName(testTableName)
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see the tables another made.
+// one test cannot see the tables of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -55,7 +55,7 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 }
 
 // newTestLayout builds the layout of records with an int "id" and a varchar
-// "name", one field of each kind.
+// "name": one field of each type.
 func newTestLayout(t *testing.T) *recordmanager.Layout {
 	t.Helper()
 
@@ -70,15 +70,15 @@ func newTestLayout(t *testing.T) *recordmanager.Layout {
 	return recordmanager.NewLayout(schema)
 }
 
-// nameOf is the name written beside id, so that a test can tell from the id
-// alone what the string field should read.
+// nameOf returns the name written with id, so that a test can derive the
+// expected string field from the id.
 func nameOf(id int32) string {
 	return fmt.Sprintf("name%d", id)
 }
 
-// writeBlocks appends a block to fileName for each element of blocks and fills
-// it with records of those ids, so that a test decides which block each record
-// is in. An empty element is a block with no records.
+// writeBlocks appends one block to fileName for each element of blocks and
+// fills it with records for those ids. A test thereby chooses the block of
+// each record. An empty element creates a block with no records.
 func writeBlocks(t *testing.T, tx *transaction.Transaction, fileName string, layout *recordmanager.Layout, blocks [][]int32) {
 	t.Helper()
 
@@ -112,9 +112,9 @@ func writeBlocks(t *testing.T, tx *transaction.Transaction, fileName string, lay
 	}
 }
 
-// openLeftScan writes a record of each of lids into a table of one int field
-// "lid", and returns a scan of it before its first record, for the left side
-// of a product. The scan holds one buffer pinned.
+// openLeftScan writes one record for each of lids into a table with one int
+// field "lid". It returns a scan of that table, positioned before its first
+// record, for the left side of a product. The scan keeps one buffer pinned.
 func openLeftScan(t *testing.T, tx *transaction.Transaction, lids []int32) *query.TableScan {
 	t.Helper()
 
@@ -141,15 +141,14 @@ func openLeftScan(t *testing.T, tx *transaction.Transaction, lids []int32) *quer
 	return ts
 }
 
-// pair is a record of a product, as the lid of its left side and the id of its
-// right.
+// pair is one record of a product: the lid of its left side and the id of
+// its right side.
 type pair struct {
 	lid int32
 	id  int32
 }
 
-// readPairs moves s through the records it has left and returns their lids
-// and ids.
+// readPairs reads the remaining records of s and returns their lids and ids.
 func readPairs(t *testing.T, s query.Scan) []pair {
 	t.Helper()
 
@@ -175,7 +174,7 @@ func readPairs(t *testing.T, s query.Scan) []pair {
 	}
 }
 
-// readIDs moves s through the records it has left and returns their ids.
+// readIDs reads the remaining records of s and returns their ids.
 func readIDs(t *testing.T, s query.Scan) []int32 {
 	t.Helper()
 

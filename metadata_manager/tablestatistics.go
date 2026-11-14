@@ -1,33 +1,33 @@
 package metadatamanager
 
-// distinctValuesDivisor is what the guess at a field's distinct values divides
-// the record count by: a field is taken to repeat each of its values about this
-// many times.
+// distinctValuesDivisor is the divisor in the estimate of the distinct values
+// of a field: the record count is divided by it. The estimate assumes that
+// each value of a field occurs about this many times.
 //
-// The number is not measured from anything. It stands in for a count nobody
-// keeps, and it is the same for every field of every table.
+// The number is not measured. It replaces a count that nothing maintains, and
+// it is the same for every field of every table.
 const distinctValuesDivisor = 3
 
-// TableStatistics is what a planner is told about one table when it works out
-// what a query will cost: how many blocks reading it touches, how many records
-// come out, and how many different values a field holds.
+// TableStatistics holds the figures that a planner uses to estimate the cost
+// of a query on one table: the number of blocks a scan reads, the number of
+// records it returns, and the number of distinct values of a field.
 //
-// None of it has to be right. A plan chosen from numbers that are out of date
-// is a plan that may be slower than the best one, not a plan that gives a wrong
-// answer, and that is what makes it worth keeping these in memory and letting
-// them go stale rather than writing them to a catalog and keeping them true.
+// The figures do not have to be exact. A plan chosen from stale figures can
+// be slower than the best plan, but it does not give a wrong result. It is
+// therefore acceptable to keep the figures in memory and let them become
+// stale, instead of storing them in a catalog and keeping them exact.
 //
-// The counts are of the table as it was when they were gathered, and nothing
-// updates them as records are written. Deciding when to gather them again is
-// the job of whatever holds them, which is where the cost of being out of date
-// is weighed against the cost of reading every table over.
+// The figures describe the table at the time they were gathered, and nothing
+// updates them when records are written. The holder of the statistics decides
+// when to gather them again. It weighs the cost of stale figures against the
+// cost of a scan of every table.
 type TableStatistics struct {
 	numBlocks  int
 	numRecords int
 }
 
-// NewTableStatistics returns what is known about a table of numBlocks blocks holding
-// numRecords records.
+// NewTableStatistics returns the statistics of a table with numBlocks blocks
+// and numRecords records.
 func NewTableStatistics(numBlocks int, numRecords int) *TableStatistics {
 	return &TableStatistics{
 		numBlocks:  numBlocks,
@@ -35,34 +35,37 @@ func NewTableStatistics(numBlocks int, numRecords int) *TableStatistics {
 	}
 }
 
-// BlocksAccessed is how many blocks reading the whole table touches.
+// BlocksAccessed returns the number of blocks that a scan of the whole table
+// reads.
 //
-// It is the number of blocks the table takes up, since a scan of a table reads
-// every one of them. It is named for what it costs rather than for what it
-// counts, because what a planner compares plans by is the reading.
+// This is the number of blocks of the table, because a table scan reads all
+// of them. The method is named after the cost and not after the count,
+// because a planner compares plans by the blocks they read.
 func (stats *TableStatistics) BlocksAccessed() int {
 	return stats.numBlocks
 }
 
-// RecordsOutput is how many records reading the whole table gives back.
+// RecordsOutput returns the number of records that a scan of the whole table
+// returns.
 func (stats *TableStatistics) RecordsOutput() int {
 	return stats.numRecords
 }
 
-// DistinctValues is a guess at how many different values fieldName holds.
+// DistinctValues returns an estimate of the number of distinct values of
+// fieldName.
 //
-// It is only a guess, and a crude one: the field is named but not looked at, so
-// every field of a table is guessed the same. Nothing here knows what is in a
-// field, and finding out would mean reading the table one field at a time,
-// which costs more than the plans it would improve are worth.
+// The estimate is crude. The field name is not used, so every field of a
+// table gets the same estimate. Nothing here knows the contents of a field,
+// and measuring them would require a scan of the table for each field. That
+// would cost more than the improved plans would save.
 //
-// A table with no records still guesses one. A query divides by this to work
-// out how many records a condition on the field leaves, and none of the tables
-// it has to weigh should be the one that makes that a division by zero.
+// For a table with no records the estimate is still one. A query divides by
+// this value to estimate how many records a condition on the field keeps, and
+// an empty table must not cause a division by zero.
 //
-// The field is named in the call even though it goes unread, so that a caller
-// asks the question it means, and so that a later version that does look can
-// answer it without every call site changing.
+// The method takes the field name although it does not use it. A caller then
+// asks the question it means, and a later version that does use the field can
+// answer it without a change at any call site.
 func (stats *TableStatistics) DistinctValues(fieldName string) int {
 	return 1 + stats.numRecords/distinctValuesDivisor
 }

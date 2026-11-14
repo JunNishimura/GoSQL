@@ -6,37 +6,37 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// ProductScan is every record of one scan put beside every record of another.
+// ProductScan pairs every record of one scan with every record of another.
 //
-// It is what two tables are joined out of, but it is not the join. A join is a
-// select over a product: the product says which pairs there are, and the
-// predicate says which of them to keep. Keeping the two apart is what lets a
-// query be joined on any condition that can be written as a predicate, rather
-// than only the ones a join operator was taught.
+// A join is built from a product, but a product is not a join. A join is a
+// select over a product: the product produces all pairs, and the predicate
+// chooses which pairs to keep. This separation allows a join on any condition
+// that a predicate can express, not only on conditions built into a join
+// operator.
 //
-// The right side is read from start to end once for every record of the left,
-// which is what a product costs with nothing to go on. Only the record of the
-// left and wherever the right has reached are held at a time, so the two scans
-// between them hold the blocks and the product holds none of its own.
+// The right side is scanned completely once for each record of the left
+// side, which is the cost of a product without an index. The product holds
+// only the current left record and the current position of the right side.
+// The two scans hold the blocks, and the product holds none itself.
 type ProductScan struct {
 	s1 Scan
 	s2 Scan
-	// onLeftRecord is whether s1 is on a record. A left side that has run out,
-	// or that had no records to begin with, leaves the product with nothing to
-	// read the right side against.
+	// onLeftRecord reports whether s1 is on a record. If the left side is
+	// exhausted, or had no records at all, the product has no left record to
+	// pair the right side with.
 	onLeftRecord bool
 }
 
 var _ Scan = (*ProductScan)(nil)
 
-// NewProductScan returns the product of s1 and s2, placed before its first
-// record.
+// NewProductScan returns the product of s1 and s2, positioned before its
+// first record.
 //
-// It reads from s1 before returning, because the product's first record is the
-// first of the left beside the first of the right, so the left has to be on one
-// already for the right to be read against it. That is a change to a scan the
-// caller handed over, which is fair: a product takes its two sides as its own
-// and closes them.
+// It reads from s1 before it returns. The first record of the product pairs
+// the first left record with the first right record, so the left side must
+// already be on a record when the right side is read. This changes a scan
+// that the caller passed in. That is acceptable, because a product takes
+// ownership of both sides and closes them.
 func NewProductScan(s1, s2 Scan) (*ProductScan, error) {
 	ps := &ProductScan{
 		s1: s1,
@@ -50,16 +50,15 @@ func NewProductScan(s1, s2 Scan) (*ProductScan, error) {
 	return ps, nil
 }
 
-// MoveBeforeFirstRecord puts the product back before its first pair.
+// MoveBeforeFirstRecord positions the product before its first pair.
 //
-// The left side is left on its first record rather than before it, which is the
-// one place the two sides are not treated alike. Only the right side is walked
-// by the next move, so the left has to be somewhere for that walk to mean
-// anything.
+// The left side is positioned on its first record, not before it. This is the
+// one place where the two sides are treated differently. The next move
+// advances only the right side, so the left side must already be on a record.
 //
-// A left side with no records at all is remembered here. There is then nothing
-// for the right to be read against, and the product is empty however many
-// records the right side holds.
+// A left side with no records is recorded here. The right side then has no
+// left record to pair with, and the product is empty whatever the right side
+// holds.
 func (ps *ProductScan) MoveBeforeFirstRecord() error {
 	if err := ps.s1.MoveBeforeFirstRecord(); err != nil {
 		return err
@@ -74,17 +73,17 @@ func (ps *ProductScan) MoveBeforeFirstRecord() error {
 	return ps.s2.MoveBeforeFirstRecord()
 }
 
-// MoveToNextRecord moves on to the next pair and reports whether there was one.
+// MoveToNextRecord moves to the next pair and reports whether one exists.
 //
-// The next pair is the next record of the right side against the record of the
-// left. When the right side runs out, the left moves on by one and the right is
-// read again from the start.
+// The next pair is the next right record with the current left record. When
+// the right side is exhausted, the left side advances by one record and the
+// right side restarts.
 //
-// That is a loop rather than a single step because a right side with no records
-// would otherwise end the walk at the first record of the left. Read again for
-// the next record of the left it is empty again, and so on until the left runs
-// out, which is the answer wanted — a product with an empty side is empty —
-// reached by the same path every other product takes.
+// This is a loop and not a single step. With an empty right side, a single
+// step would end the scan at the first left record. In the loop, the right
+// side is empty again for each left record, until the left side is exhausted.
+// The result is correct, because a product with an empty side is empty, and
+// it is reached by the same code path as any other product.
 func (ps *ProductScan) MoveToNextRecord() (bool, error) {
 	for ps.onLeftRecord {
 		onRightRecord, err := ps.s2.MoveToNextRecord()
@@ -112,8 +111,8 @@ func (ps *ProductScan) MoveToNextRecord() (bool, error) {
 	return false, nil
 }
 
-// GetInt returns the int field of the pair the product is on, from whichever
-// side has it.
+// GetInt returns the int field fieldName of the current pair, from the side
+// that has the field.
 func (ps *ProductScan) GetInt(fieldName string) (int32, error) {
 	side, err := ps.sideFor(fieldName)
 	if err != nil {
@@ -123,8 +122,8 @@ func (ps *ProductScan) GetInt(fieldName string) (int32, error) {
 	return side.GetInt(fieldName)
 }
 
-// GetString returns the varchar field of the pair the product is on, from
-// whichever side has it.
+// GetString returns the varchar field fieldName of the current pair, from the
+// side that has the field.
 func (ps *ProductScan) GetString(fieldName string) (string, error) {
 	side, err := ps.sideFor(fieldName)
 	if err != nil {
@@ -134,8 +133,8 @@ func (ps *ProductScan) GetString(fieldName string) (string, error) {
 	return side.GetString(fieldName)
 }
 
-// GetValue returns the field of the pair the product is on as a constant, from
-// whichever side has it.
+// GetValue returns the field fieldName of the current pair as a constant,
+// from the side that has the field.
 func (ps *ProductScan) GetValue(fieldName string) (Constant, error) {
 	side, err := ps.sideFor(fieldName)
 	if err != nil {
@@ -145,29 +144,27 @@ func (ps *ProductScan) GetValue(fieldName string) (Constant, error) {
 	return side.GetValue(fieldName)
 }
 
-// HasField reports whether either side has the field. A product has the fields
-// of both, which is what makes two tables readable as one run of records.
+// HasField reports whether either side has the field. A product has the
+// fields of both sides, so two tables can be read as one sequence of records.
 func (ps *ProductScan) HasField(fieldName string) bool {
 	return ps.s1.HasField(fieldName) || ps.s2.HasField(fieldName)
 }
 
-// Close closes both sides. A product holding one of them open would leave that
-// side's buffer taken for the rest of the transaction, however long ago the
-// query was finished with.
+// Close closes both sides. If one side stayed open, its buffer would remain
+// pinned until the end of the transaction, long after the query finished.
 func (ps *ProductScan) Close() {
 	ps.s1.Close()
 	ps.s2.Close()
 }
 
-// sideFor is the side a field is read from, and the error when it is on
-// neither.
+// sideFor returns the side that a field is read from, or an error if neither
+// side has it.
 //
-// The left is asked first, so a name both sides have is read from the left. A
-// name two tables share is ambiguous in the query that used it, and nothing
-// here can say which was meant, since a field name carries no table with it.
-// Answering from the left is a rule rather than a resolution: it makes the
-// ambiguity come out the same way every time instead of following whichever
-// side the code happened to reach first.
+// The left side is checked first, so a name that both sides have is read from
+// the left. A name shared by two tables is ambiguous in the query. This code
+// cannot resolve it, because a field name carries no table name. Reading from
+// the left is a fixed rule, not a resolution. It makes the result
+// deterministic instead of dependent on the order of the code.
 func (ps *ProductScan) sideFor(fieldName string) (Scan, error) {
 	if ps.s1.HasField(fieldName) {
 		return ps.s1, nil

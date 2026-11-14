@@ -12,15 +12,15 @@ import (
 )
 
 const (
-	// testBlockSize has to hold a slot of the widest catalog, which is the view
-	// catalog at 476 bytes, since a record page refuses a layout whose slot
-	// does not fit in a block.
+	// testBlockSize must fit a slot of the largest catalog, which is the view
+	// catalog with 476 bytes. A record page rejects a layout whose slot does
+	// not fit in a block.
 	testBlockSize  = 800
 	testNumBuffers = 8
 )
 
-// openFDs reports how many files the test process has open, skipping the test
-// where the system does not list them under /proc.
+// openFDs returns the number of files that the test process has open. It
+// skips the test on a system that does not list them under /proc.
 func openFDs(t *testing.T) int {
 	t.Helper()
 
@@ -32,9 +32,9 @@ func openFDs(t *testing.T) int {
 	return len(entries)
 }
 
-// newTestConnector returns a connector to a database of its own, opened
-// without going through NewConnector, so that a test of the connector's other
-// methods does not hang on that one.
+// newTestConnector returns a connector to a database of its own. It does not
+// use NewConnector, so that a test of the other methods of the connector does
+// not depend on that function.
 func newTestConnector(t *testing.T) *Connector {
 	t.Helper()
 
@@ -46,7 +46,8 @@ func newTestConnector(t *testing.T) *Connector {
 	return &Connector{db: db}
 }
 
-// executeUpdates runs every statement in sqls through db's planner in tx.
+// executeUpdates runs every statement in sqls through the planner of db, in
+// tx.
 func executeUpdates(t *testing.T, db *server.DB, tx *transaction.Transaction, sqls ...string) {
 	t.Helper()
 
@@ -57,7 +58,7 @@ func executeUpdates(t *testing.T, db *server.DB, tx *transaction.Transaction, sq
 	}
 }
 
-// idsIn reports the id of every record of the table test, read in tx.
+// idsIn returns the id of every record of the table test, read in tx.
 func idsIn(t *testing.T, db *server.DB, tx *transaction.Transaction) []int32 {
 	t.Helper()
 
@@ -88,8 +89,8 @@ func idsIn(t *testing.T, db *server.DB, tx *transaction.Transaction) []int32 {
 	}
 }
 
-// committedIDs reports the id of every record of the table test, read in a
-// transaction of its own that it then commits.
+// committedIDs returns the id of every record of the table test. It reads
+// them in a separate transaction that it then commits.
 func committedIDs(t *testing.T, db *server.DB) []int32 {
 	t.Helper()
 
@@ -105,9 +106,9 @@ func committedIDs(t *testing.T, db *server.DB) []int32 {
 	return ids
 }
 
-// newTestConnWithTable returns a connection to a database of its own that holds
-// the committed, empty table test, with a transaction begun on the connection
-// without going through Begin.
+// newTestConnWithTable returns a connection to a database of its own. The
+// database holds the committed, empty table test. The connection has an open
+// transaction that was set without a call to Begin.
 func newTestConnWithTable(t *testing.T) *Conn {
 	t.Helper()
 
@@ -129,11 +130,11 @@ func newTestConnWithTable(t *testing.T) *Conn {
 	return &Conn{db: c.db, tx: tx}
 }
 
-// maxTestRows bounds how many records readAll reads, so that rows that never
-// report io.EOF fail the test rather than hang it.
+// maxTestRows limits the number of records that readAll reads. Rows that
+// never return io.EOF then fail the test instead of blocking it.
 const maxTestRows = 100
 
-// readAll reads every record rows gives back.
+// readAll reads every record that rows returns.
 func readAll(t *testing.T, rows driver.Rows) [][]driver.Value {
 	t.Helper()
 

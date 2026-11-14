@@ -26,8 +26,8 @@ func TestDriverOpenConnector(t *testing.T) {
 }
 
 func TestDriverOpen(t *testing.T) {
-	// A connection opened on its own would need a database of its own, which
-	// nothing would be left holding to close.
+	// A connection opened on its own would need a database of its own, and
+	// nothing would hold that database to close it.
 	t.Run("when a connection is opened on a name directly, then it reports an error", func(t *testing.T) {
 		conn, err := Driver{}.Open(t.TempDir())
 
@@ -37,8 +37,8 @@ func TestDriverOpen(t *testing.T) {
 	})
 }
 
-// TestRegister checks the driver through database/sql, which is how it is
-// meant to be used.
+// TestRegister checks the driver through database/sql, which is its intended
+// use.
 func TestRegister(t *testing.T) {
 	t.Run("given the driver registered as gosql, when a database is opened through database/sql and pinged, then a connection is made", func(t *testing.T) {
 		db, err := sql.Open("gosql", t.TempDir())

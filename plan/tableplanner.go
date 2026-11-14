@@ -10,31 +10,30 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// tablePlanner works out the plans of one name of a from clause for a
-// heuristic query planner: reading it on its own, joining it to what is
-// already planned, and putting it beside what is already planned.
+// tablePlanner creates the plans for one name of a from clause, for a
+// heuristic query planner. The plans are a read of the table alone, a join
+// with the current plan, and a product with the current plan.
 //
-// Each plan tests the terms of the query's predicate that can be tested where
-// it reads, so that what it hands on is as small as the predicate lets it be.
+// Each plan tests the terms of the query predicate that can be tested at that
+// point, so that its output is as small as the predicate allows.
 //
-// The name may be a view as well as a stored table. A view is taken as a table
-// whose records are those its plan gives back and which has no index, so it
-// is read in full and joined by a product, under the same terms a table would
-// be.
+// The name can be a view or a stored table. A view is treated as a table that
+// has the records of its plan and no index. It is therefore read completely
+// and joined by a product, with the same terms as a table.
 type tablePlanner struct {
 	tx   *transaction.Transaction
 	pred query.Predicate
-	// p is the plan of reading the whole of the table, or of the view.
+	// p is the plan of a full read of the table or view.
 	p Plan
-	// stored is p, for a stored table, and nil for a view.
+	// stored is p for a stored table, and nil for a view.
 	stored *TablePlan
-	// indexes are the indexes of the table, by the field each is on, and none
-	// for a view.
+	// indexes holds the indexes of the table, keyed by the indexed field. It
+	// is empty for a view.
 	indexes map[string]*metadatamanager.IndexInfo
 }
 
-// newViewPlanner returns the planner of a view, whose definition p is the plan
-// of, under the query predicate pred.
+// newViewPlanner returns the planner for a view under the query predicate
+// pred. p is the plan of the view's definition.
 func newViewPlanner(tx *transaction.Transaction, p Plan, pred query.Predicate) *tablePlanner {
 	return &tablePlanner{
 		tx:   tx,
@@ -43,8 +42,9 @@ func newViewPlanner(tx *transaction.Transaction, p Plan, pred query.Predicate) *
 	}
 }
 
-// newTablePlanner returns the planner of the stored table tableName under the
-// query predicate pred, reading the table's statistics and indexes through mm.
+// newTablePlanner returns the planner for the stored table tableName under
+// the query predicate pred. It reads the statistics and indexes of the table
+// through mm.
 func newTablePlanner(tx *transaction.Transaction, tableName string, pred query.Predicate, mm *metadatamanager.MetadataManager) (*tablePlanner, error) {
 	stored, err := NewTablePlan(tx, tableName, mm)
 	if err != nil {
@@ -65,14 +65,15 @@ func newTablePlanner(tx *transaction.Transaction, tableName string, pred query.P
 	}, nil
 }
 
-// schema is the fields of the records of the table, or of the view.
+// schema returns the fields of the records of the table or view.
 func (tp *tablePlanner) schema() *recordmanager.Schema {
 	return tp.p.Schema()
 }
 
-// makeSelectPlan returns the plan of reading the table on its own: through an
-// index where the predicate equates an indexed field with a constant, and
-// under a select of the terms that can be tested against its records alone.
+// makeSelectPlan returns the plan that reads the table alone. It reads
+// through an index if the predicate equates an indexed field with a constant.
+// It adds a select for the terms that can be tested against the table's
+// records alone.
 func (tp *tablePlanner) makeSelectPlan() Plan {
 	p := tp.p
 	if indexSelect, ok := cheapestIndexSelect(tp.stored, tp.indexes, tp.pred); ok {
@@ -82,14 +83,14 @@ func (tp *tablePlanner) makeSelectPlan() Plan {
 	return tp.addSelectPred(p)
 }
 
-// makeJoinPlan returns the plan of joining the table to current, and whether
-// the predicate has a term that joins them at all.
+// makeJoinPlan returns the plan that joins the table to current, and reports
+// whether the predicate has a term that joins the two.
 //
-// The join goes through an index of the table where a join term equates its
-// indexed field with a field of current, unless putting the two beside each
-// other and testing the join terms over that reads fewer blocks, as
-// cheaperJoin weighs them. Either way, the terms on the table alone are tested
-// on its side of the join and the join terms over the join.
+// The join uses an index of the table if a join term equates its indexed
+// field with a field of current. The exception is when a product with the
+// join terms tested over it reads fewer blocks, as cheaperJoin decides. In
+// both cases the terms on the table alone are tested on the table's side, and
+// the join terms are tested over the join.
 func (tp *tablePlanner) makeJoinPlan(current Plan) (Plan, bool, error) {
 	joinPred, ok := tp.pred.JoinSubPred(tp.schema(), current.Schema())
 	if !ok {
@@ -113,15 +114,16 @@ func (tp *tablePlanner) makeJoinPlan(current Plan) (Plan, bool, error) {
 	return cheaperJoin(indexJoin, productJoin), true, nil
 }
 
-// makeIndexJoin returns the plan of joining the table to current through
-// whichever of its indexes a term of joinPred equates with a field of current
-// for the fewest blocks, with the terms on the table alone and the join terms
-// tested over it, or nil if there is none.
+// makeIndexJoin returns the plan that joins the table to current through an
+// index of the table. Of the indexes whose field a term of joinPred equates
+// with a field of current, it chooses the one that reads the fewest blocks.
+// The plan tests the terms on the table alone and the join terms over the
+// join. makeIndexJoin returns nil if no index qualifies.
 //
 // joinPred holds only terms with a field of the table on one side and a field
-// of current on the other, so the field a term equates an indexed field with
-// is one of current's. Of two that cost the same, the one on the field that
-// comes first by name is taken, as it is by cheapestIndexSelect.
+// of current on the other. The field that a term equates with an indexed
+// field is therefore a field of current. If two indexes cost the same, the
+// one whose field name sorts first is chosen, as in cheapestIndexSelect.
 func (tp *tablePlanner) makeIndexJoin(current Plan, joinPred query.Predicate) (Plan, error) {
 	var best Plan
 	for _, fieldName := range slices.Sorted(maps.Keys(tp.indexes)) {
@@ -144,25 +146,25 @@ func (tp *tablePlanner) makeIndexJoin(current Plan, joinPred query.Predicate) (P
 	return best, nil
 }
 
-// makeProductPlan returns the plan of putting every record of current beside
-// every record of the table, read as makeSelectPlan reads it.
+// makeProductPlan returns the plan for the product of current and the table.
+// The table is read as in makeSelectPlan.
 //
-// The table is read through an index where the predicate lets it be, unlike
-// SimpleDB, which reads it in full under a select. A product reads its right
-// side once for each chunk of the left, so the fewer records it is narrowed
-// to before that, the less is read; and it is when an index has narrowed it to
-// very few that a product is cheaper than a join through an index at all.
+// The table is read through an index where the predicate allows it. SimpleDB
+// differs here: it scans the table completely under a select. A product reads
+// its right side once for each chunk of the left side, so a smaller right
+// side means fewer block reads. A product is cheaper than an index join only
+// when an index has reduced the right side to very few records.
 //
-// current goes on the left, where it is materialized, since it is a plan of
-// one or more tables already joined and working it out again for every chunk
-// would cost more than reading back what it gave the first time.
+// current is the left side, which is materialized. It is a plan of one or
+// more joined tables, and computing it again for every chunk would cost more
+// than reading its stored result.
 func (tp *tablePlanner) makeProductPlan(current Plan) (Plan, error) {
 	return NewMultibufferProductPlan(tp.tx, current, tp.makeSelectPlan())
 }
 
-// addSelectPred returns p under a select of the terms of the predicate that
-// can be tested against the table's records alone, or p itself if there are
-// none.
+// addSelectPred returns p under a select for the terms of the predicate that
+// can be tested against the table's records alone. It returns p itself if
+// there are no such terms.
 func (tp *tablePlanner) addSelectPred(p Plan) Plan {
 	selectPred, ok := tp.pred.SelectSubPred(tp.schema())
 	if !ok {
@@ -172,13 +174,14 @@ func (tp *tablePlanner) addSelectPred(p Plan) Plan {
 	return NewSelectPlan(p, selectPred)
 }
 
-// cheapestIndexSelect returns the plan of reading the table tp reads through
-// whichever of indexes pred equates with a constant for the fewest blocks,
-// and whether there is one.
+// cheapestIndexSelect returns the plan that reads the table of tp through an
+// index. Of the indexes whose field pred equates with a constant, it chooses
+// the one that reads the fewest blocks. It also reports whether such an index
+// exists.
 //
-// Of two that cost the same, the one on the field that comes first by name is
-// taken, so that which one a query is read through does not turn on the order
-// the indexes happen to be listed in.
+// If two indexes cost the same, the one whose field name sorts first is
+// chosen. The choice then does not depend on the iteration order of the
+// indexes.
 func cheapestIndexSelect(tp *TablePlan, indexes map[string]*metadatamanager.IndexInfo, pred query.Predicate) (*IndexSelectPlan, bool) {
 	var best *IndexSelectPlan
 	for _, fieldName := range slices.Sorted(maps.Keys(indexes)) {

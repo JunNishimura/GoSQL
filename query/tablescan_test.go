@@ -10,8 +10,9 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// testTableName is the table the scan tests work on. Its file is testDataFile,
-// which is what a test that wants to reach past the scan appends to directly.
+// testTableName is the table that the scan tests use. Its file is
+// testDataFile. A test that needs to bypass the scan appends to that file
+// directly.
 const testTableName = "test"
 
 func TestNewTableScan(t *testing.T) {
@@ -53,9 +54,9 @@ func TestNewTableScan(t *testing.T) {
 		}
 	})
 
-	// Every slot of an appended block reads as free already, since the block
-	// comes back zeroed, so what tells the two branches apart is the other
-	// direction: a block the table already has must keep the records in it.
+	// An appended block is zeroed, so all its slots are already free. The
+	// two branches therefore differ only in the other direction: an existing
+	// block of the table must keep its records.
 	t.Run("given a table that already has a block, it opens on that one and keeps the records in it", func(t *testing.T) {
 		const id = 42
 
@@ -111,10 +112,10 @@ func TestNewTableScan(t *testing.T) {
 	})
 }
 
-// Opening the scan is where a layout too wide for a block has to be caught,
-// because every later call assumes the scan is on a block it can hold records
-// in. MoveToNewRecord in particular would take "no free slot here" as a reason
-// to append another block, and would never stop.
+// A layout that is too large for a block must be rejected when the scan is
+// opened, because every later call assumes that the block of the scan can
+// hold records. MoveToNewRecord in particular would handle "no free slot" by
+// appending another block, and would never stop.
 func TestNewTableScanRejectsASlotWiderThanABlock(t *testing.T) {
 	t.Run("given a layout whose slot is wider than a block, when a scan is opened on the table, then recordmanager.ErrSlotWiderThanBlock reaches the caller", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -158,8 +159,8 @@ func TestTableScanMoveToBlock(t *testing.T) {
 	})
 }
 
-// newTestTableScanAt opens a scan over a table with one empty block and puts it
-// on slot, which is what Next will do for it once that exists.
+// newTestTableScanAt opens a scan of a table with one empty block and
+// positions it at slot, as MoveToNextRecord would.
 func newTestTableScanAt(t *testing.T, slot int) *TableScan {
 	t.Helper()
 
@@ -208,9 +209,9 @@ func TestTableScanSetIntAndGetInt(t *testing.T) {
 		})
 	}
 
-	// The four field methods take no slot, so what they read and write has to
-	// follow the scan. Writing at two slots and coming back to the first is
-	// what tells that apart from always working on the same one.
+	// The four field methods take no slot, so they must read and write at the
+	// position of the scan. Writing at two slots and returning to the first
+	// distinguishes this from always using the same slot.
 	t.Run("given two records written through the scan, when it is put back on the first, then it reads that one rather than the last written", func(t *testing.T) {
 		ts := newTestTableScanAt(t, 0)
 
@@ -299,10 +300,10 @@ func TestTableScanHasField(t *testing.T) {
 		})
 	}
 
-	// A field belongs to the table rather than to a record, so asking about one
-	// is not a read of the record the scan is on and must not need there to be
-	// one. A query settles which scan a field comes from before it reads any
-	// records at all, which is where this gets asked.
+	// A field belongs to the table, not to a record. HasField therefore does
+	// not read the current record and must not require one. A query decides
+	// which scan a field comes from before it reads any record, and it calls
+	// HasField for that.
 	t.Run("given a scan that is on no record, when it is asked for a field the table has, then it still reports the table has it", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -312,12 +313,12 @@ func TestTableScanHasField(t *testing.T) {
 	})
 }
 
-// The kind of the constant that comes back is settled by the schema, since the
-// scan has nothing else to go on: the bytes in the slot read as either.
+// The schema determines the type of the returned constant. The scan has no
+// other source, because the bytes in the slot can be read as either type.
 //
-// The record is written with the typed setters rather than with SetValue, so
-// that a fault in SetValue shows up as its own test failing rather than as
-// these passing on two mistakes that cancel out.
+// The record is written with the typed setters and not with SetValue. A bug
+// in SetValue then fails its own test, and these cases cannot pass because
+// two mistakes cancel out.
 func TestTableScanGetValue(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -337,9 +338,8 @@ func TestTableScanGetValue(t *testing.T) {
 			field: "name",
 			want:  NewStringConstant("alice"),
 		},
-		// The text is the digits of a number, so a scan that decided the kind
-		// from the bytes rather than from the schema would hand back an int
-		// here.
+		// The text is the digits of a number. A scan that derived the type
+		// from the bytes and not from the schema would return an int here.
 		{
 			name:  "given a record whose varchar field holds digits, when the field is asked for as a value, then it is a varchar constant rather than an int one",
 			write: func(ts *TableScan) error { return ts.SetString("name", "42") },
@@ -408,9 +408,9 @@ func TestTableScanSetValue(t *testing.T) {
 		})
 	}
 
-	// What SetValue writes has to be the same bytes the typed setter would
-	// write, or a record would read differently depending on which of the two
-	// a caller happened to use.
+	// SetValue must write the same bytes as the typed setter. Otherwise a
+	// record would read differently depending on which of the two a caller
+	// used.
 	t.Run("given an int constant written as a value, when the field is read with the typed getter, then it is the number the constant held", func(t *testing.T) {
 		ts := newTestTableScanAt(t, 0)
 
@@ -485,8 +485,8 @@ func TestTableScanRejectsFieldsBeforeTheFirstRecord(t *testing.T) {
 	}
 }
 
-// The scan adds no checking of its own on the field, so what the record page
-// refuses has to reach the caller unchanged.
+// The scan adds no check of its own on the field, so an error from the record
+// page must reach the caller unchanged.
 func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -530,9 +530,9 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 			},
 			wantErr: recordmanager.ErrStringTooLong,
 		},
-		// A constant carries its own kind, so writing one names a type twice:
-		// once in the constant and once in the schema. Where the two disagree
-		// the write is refused, whichever way round the disagreement is.
+		// A constant has its own type, so a write involves two types: the
+		// type of the constant and the type in the schema. If they differ,
+		// the write is rejected, whichever of the two is the int.
 		{
 			name: "given an int field, when a varchar constant is written to it, then ErrFieldTypeMismatch reaches the caller",
 			call: func(ts *TableScan) error {
@@ -576,8 +576,8 @@ func TestTableScanPassesOnTheRecordPagesFieldErrors(t *testing.T) {
 }
 
 func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
-	// The scan is taken to a second block and put part way into it, so that
-	// going back to the start has both a block and a slot to undo.
+	// The scan is moved to a second block and to a slot inside it, so that a
+	// restart must reset both a block and a slot.
 	t.Run("given a scan part way into a later block, it returns to the first block without appending one or wiping it", func(t *testing.T) {
 		const id = 42
 
@@ -621,8 +621,8 @@ func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
 		}
 	})
 
-	// Going back to the start has to reset the slot even when the scan has not left
-	// the first block, which an implementation that returns early would miss.
+	// A restart must reset the slot even if the scan is still on the first block.
+	// An implementation that returns early in that case would not reset it.
 	t.Run("given a scan part way into the first block, it still resets the slot, so a field read reports ErrNoCurrentRecord", func(t *testing.T) {
 		ts := newTestTableScanAt(t, 2)
 
@@ -643,14 +643,14 @@ func TestTableScanMoveBeforeFirstRecord(t *testing.T) {
 	})
 }
 
-// claimTestRecord marks slot of the block the scan is on as holding a record
-// and writes id into it, going round the scan so that a test can put records in
-// slots of its choosing rather than in the ones MoveToNewRecord would pick.
+// claimTestRecord marks slot of the current block as in use and writes id to
+// it. It bypasses the scan, so that a test can place records in slots of its
+// choice and not in the slots that MoveToNewRecord would choose.
 //
-// The claim is made from the slot before the one wanted, since a record page
-// searches past the slot it is given. Landing anywhere else means the slot was
-// already taken, which is the test setting up something other than what it
-// meant to, so it is reported here rather than left to confuse the case.
+// The claim starts from the slot before the wanted one, because a record page
+// searches after the slot it is given. If the claim returns another slot, the
+// wanted slot was already in use. That means the test set up a different
+// state than it intended, so the helper reports it immediately.
 func claimTestRecord(t *testing.T, ts *TableScan, slot int, id int32) {
 	t.Helper()
 
@@ -667,12 +667,12 @@ func claimTestRecord(t *testing.T, ts *TableScan, slot int, id int32) {
 	}
 }
 
-// walkTestRecords reads the id of every record from where the scan is to the
-// end of it.
+// walkTestRecords reads the id of every record from the current position of
+// the scan to its end.
 //
-// It takes a Scan rather than a TableScan so that a scan built over another one
-// can be read the same way, which is how a select is checked against the table
-// it draws from.
+// It takes a Scan and not a TableScan, so that a scan built on another scan
+// can be read in the same way. A select is compared with its underlying table
+// this way.
 func walkTestRecords(t *testing.T, s Scan) []int32 {
 	t.Helper()
 
@@ -695,8 +695,8 @@ func walkTestRecords(t *testing.T, s Scan) []int32 {
 }
 
 func TestTableScanMoveToNextRecord(t *testing.T) {
-	// Slot 1 is left free between the two records, so a walk that reported
-	// every slot rather than every record would come back with three ids.
+	// Slot 1 is free between the two records. A scan that returned every
+	// slot instead of every record would return three ids.
 	t.Run("given records with a free slot between them, the walk returns the records and passes over the gap", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -713,8 +713,8 @@ func TestTableScanMoveToNextRecord(t *testing.T) {
 		}
 	})
 
-	// The first record is in the last slot of block 0 and the second in block 1, so
-	// the walk has to carry on past the end of a block to find both.
+	// The first record is in the last slot of block 0 and the second is in block
+	// 1, so the scan must continue past the end of a block to find both.
 	t.Run("given records either side of a block boundary, the walk crosses into the next block to find them all", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -735,8 +735,8 @@ func TestTableScanMoveToNextRecord(t *testing.T) {
 		}
 	})
 
-	// Block 0 holds nothing at all, so the walk has to move on from a block it
-	// found no records in rather than take that for the end of the table.
+	// Block 0 holds no records. The scan must move on from a block without
+	// records and must not treat it as the end of the table.
 	t.Run("given a block with no records before one that has them, the walk carries on rather than taking the empty block for the end", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -767,8 +767,8 @@ func TestTableScanMoveToNextRecord(t *testing.T) {
 		}
 	})
 
-	// A walk that has ended stays ended: asking again must not wrap round to the
-	// start or run off the end of the file.
+	// A scan that has reached its end stays at the end. Another move must
+	// neither restart the scan nor read past the end of the file.
 	t.Run("given a walk that has reached the end, when it is asked again, then it stays at the end rather than starting over", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -790,9 +790,9 @@ func TestTableScanMoveToNextRecord(t *testing.T) {
 		}
 	})
 
-	// Two scans over the same table in one transaction, one of which appends a
-	// block. The other has to find the records in it, which is what stops a scan
-	// from settling on a block count it read when it opened.
+	// Two scans of the same table run in one transaction, and one of them
+	// appends a block. The other scan must find the records in that block, so
+	// it cannot rely on the block count that it read when it was opened.
 	t.Run("given another scan in the same transaction that appended a block, the walk still finds the records in it", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		layout := newTestLayout(t)
@@ -837,8 +837,8 @@ func TestTableScanMoveToNewRecord(t *testing.T) {
 			t.Errorf("the scan is on block %d, want 0", got)
 		}
 
-		// The slot has to hold a record now, not merely be where the scan sits,
-		// which is only visible from a walk that starts over.
+		// The slot must now hold a record, and not only be the position of the
+		// scan. Only a scan that restarts can show this.
 		if err := ts.SetInt("id", 5); err != nil {
 			t.Fatalf("SetInt() error = %v", err)
 		}
@@ -852,8 +852,8 @@ func TestTableScanMoveToNewRecord(t *testing.T) {
 		}
 	})
 
-	// One more record than a block holds, so the last one has nowhere to go until
-	// the table grows.
+	// The test inserts one more record than a block holds, so the last record
+	// has no slot until the table grows.
 	t.Run("given a table with no room left, it appends a block rather than failing", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -884,9 +884,9 @@ func TestTableScanMoveToNewRecord(t *testing.T) {
 		}
 	})
 
-	// The block is filled, one record in the middle is deleted, and the scan is put
-	// back to the start. The space that record held has to be used again rather
-	// than the table growing.
+	// The block is filled, one record in the middle is deleted, and the scan is
+	// restarted. The next insert must reuse the space of the deleted record, and
+	// the table must not grow.
 	t.Run("given a block whose records fill it and one deleted, when the scan is put back to the start, then the freed slot is used again rather than the table growing", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -977,8 +977,8 @@ func TestTableScanClose(t *testing.T) {
 		}
 	})
 
-	// Closing twice is what a caller that defers Close and also closes early on
-	// some path ends up doing, so the second one has to be harmless.
+	// A caller that defers Close and also closes early on some path closes
+	// twice, so the second Close must be harmless.
 	t.Run("when a scan that is already closed is closed again, then nothing happens, so a caller may both defer it and close early", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -1038,9 +1038,9 @@ func TestTableScanCurrentRecordID(t *testing.T) {
 }
 
 func TestTableScanMoveToRecordID(t *testing.T) {
-	// Noting a record, reading past it, and coming back is what a record id is
-	// for, so the round trip is what has to hold rather than either half on its
-	// own.
+	// A record id exists so that a caller can save a position, read past it,
+	// and return to it. The test therefore checks the whole round trip, not
+	// each half separately.
 	t.Run("given a record noted while walking, when the scan is moved back to it after reading past it, then it reads that record again", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 
@@ -1058,7 +1058,7 @@ func TestTableScanMoveToRecordID(t *testing.T) {
 			t.Fatalf("CurrentRecordID() error = %v", err)
 		}
 
-		// Read on past it, so that coming back has somewhere to come back from.
+		// Read past the record, so that the scan has to move back to it.
 		if _, err := ts.MoveToNextRecord(); err != nil {
 			t.Fatalf("MoveToNextRecord() error = %v", err)
 		}
@@ -1076,8 +1076,8 @@ func TestTableScanMoveToRecordID(t *testing.T) {
 		}
 	})
 
-	// The record is in a block the scan is not on, so getting to it means changing
-	// blocks and not merely slots.
+	// The record is in a block that the scan is not on, so reaching it requires a
+	// change of block and not only of slot.
 	t.Run("given a record id naming a block the scan is not on, it moves onto that block to reach the record", func(t *testing.T) {
 		ts := newTestTableScanAt(t, beforeFirstSlot)
 

@@ -10,79 +10,81 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// ErrViewDefinitionTooLong reports a view definition of more characters than
-// the view catalog was built to hold.
+// ErrViewDefinitionTooLong is returned for a view definition with more
+// characters than the view catalog can store.
 var ErrViewDefinitionTooLong = errors.New("view definition too long")
 
-// The view catalog is a table like the two the table manager keeps, and holds
-// one row per view.
+// The view catalog is a table like the two catalogs of the table manager. It
+// has one row per view.
 const viewCatalogName = "view_catalog"
 
 // The fields of the view catalog.
 const (
-	// viewNameField is the name the view is known by. It is held to the same
-	// length as a table name, since a query naming a view has that name where
-	// it would have a table's and cannot tell from it which of the two it got.
+	// viewNameField holds the name of the view. It has the same maximum
+	// length as a table name. A query uses a view name in the same position
+	// as a table name, and the name does not show which of the two it is.
 	viewNameField = "view_name"
-	// viewDefinitionField is the query the view stands for, kept as its text.
-	// Nothing here reads it, so nothing here needs to know any SQL: whoever
-	// asks for a definition is the one that makes sense of it.
+	// viewDefinitionField holds the query of the view as text. This package
+	// does not interpret it and therefore needs no knowledge of SQL. The
+	// caller that requests a definition parses it.
 	viewDefinitionField = "view_definition"
 )
 
-// maxViewDefinitionLength is the longest view definition the catalog can hold.
+// maxViewDefinitionLength is the maximum length of a view definition in the
+// catalog.
 //
-// It is what makes the view catalog's records wide: one of its slots is 476
-// bytes, against 76 for the table catalog. Since a record page refuses a layout
-// whose slot does not fit in a block, that width is also a floor on the block
-// size the database as a whole can be built with.
+// It makes the records of the view catalog large: a slot is 476 bytes,
+// compared with 76 for the table catalog. A record page rejects a layout
+// whose slot does not fit in a block, so this size is also the minimum block
+// size of the whole database.
 const maxViewDefinitionLength = 100
 
-// ViewManager is what the database knows about its views: the name of each one
-// and the query it stands for.
+// ViewManager manages the metadata of the views of the database: the name of
+// each view and its query.
 //
-// A view is a query kept under a name, so that a later query can name it where
-// it would name a table. Nothing of a view is stored but its text: it has no
-// records of its own, only those of whatever its query reads.
+// A view is a query stored under a name, so that a later query can use the
+// name like a table name. Only the text of a view is stored. A view has no
+// records of its own. Its records come from the tables that its query reads.
 //
-// It keeps that in a catalog of its own, which is an ordinary table made
-// through the table manager. That is what the table manager is held here for.
+// The manager stores this in a catalog of its own, which is an ordinary table
+// created through the table manager. This is why it holds a table manager.
 //
-// No layout is held alongside it. The table manager keeps its own two because
-// reading any table's definition starts by scanning a catalog, and a scan needs
-// the layout of the table it scans, so those two have to come from somewhere
-// other than a catalog. The view catalog is under no such obligation: its
-// layout is read back out of the table catalog like any other table's. The
-// price is that reading or writing a view scans the catalogs first.
+// The manager holds no layout. The table manager stores its two layouts
+// because reading the definition of any table starts with a scan of a
+// catalog, and a scan needs the layout of the table that it scans. Those two
+// layouts therefore cannot come from a catalog. The view catalog has no such
+// constraint: its layout is read from the table catalog like that of any
+// other table. The cost is that reading or writing a view scans the catalogs
+// first.
 type ViewManager struct {
 	tableManager *TableManager
 }
 
-// NewViewManager returns a view manager that keeps its catalog through
+// NewViewManager returns a view manager that stores its catalog through
 // tableManager.
 //
-// It touches no storage, so it takes no transaction and cannot fail. Creating
-// the view catalog is a call of its own, which the caller makes on a database
-// that has none yet.
+// It accesses no storage, so it takes no transaction and cannot fail. The
+// view catalog is created by a separate call, which the caller makes for a
+// database that does not have one yet.
 func NewViewManager(tableManager *TableManager) *ViewManager {
 	return &ViewManager{
 		tableManager: tableManager,
 	}
 }
 
-// CreateCatalogTable makes the view catalog, which is an ordinary table and so
-// is made the way any other one is.
+// CreateCatalogTable creates the view catalog. It is an ordinary table and is
+// created like any other table.
 //
-// It is apart from NewViewManager for the reason CreateCatalogTables is apart
-// from NewTableManager: whether the database is new is the caller's to know.
-// Calling it on a database that already has a view catalog would write a second
-// row describing it.
+// It is separate from NewViewManager for the same reason that
+// CreateCatalogTables is separate from NewTableManager: only the caller knows
+// whether the database is new. On a database that already has a view catalog,
+// this call would write a second row that describes the catalog.
 func (vm *ViewManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	schema := recordmanager.NewSchema()
 
-	// Adding a field cannot fail here, since the two names are fixed by this
-	// package and are not the same. The error is returned rather than dropped so
-	// that this stays true if AddField grows another reason to refuse a field.
+	// Adding a field cannot fail here, because this package defines the two
+	// names and they are different. The error is still returned, so that the
+	// code stays correct if AddField gains another failure case.
 	if err := schema.AddStringField(viewNameField, maxNameLength); err != nil {
 		return err
 	}
@@ -93,16 +95,15 @@ func (vm *ViewManager) CreateCatalogTable(tx *transaction.Transaction) error {
 	return vm.tableManager.CreateTable(tx, viewCatalogName, schema)
 }
 
-// CreateView writes down that viewName stands for definition.
+// CreateView records that viewName is defined by definition.
 //
-// That row is all there is to creating a view. A view holds no records of its
-// own, so there is nothing here to make beyond the name and the text: whatever
-// the view reads is read from the tables its definition names, when a query
-// that names the view is run.
+// The catalog row is the whole view. A view has no records of its own, so
+// only the name and the text have to be stored. The data of the view is read
+// from the tables in its definition when a query that uses the view runs.
 //
-// The definition is not read or checked for sense, only for length. This layer
-// knows no SQL, and a definition that turns out not to parse is the caller's to
-// find out about when it comes to use it.
+// The definition is not parsed or validated. Only its length is checked.
+// This layer has no knowledge of SQL, and the caller finds out that a
+// definition does not parse when it uses the view.
 func (vm *ViewManager) CreateView(tx *transaction.Transaction, viewName string, definition string) error {
 	if err := checkViewFits(viewName, definition); err != nil {
 		return err
@@ -129,17 +130,17 @@ func (vm *ViewManager) CreateView(tx *transaction.Transaction, viewName string, 
 	return ts.SetString(viewDefinitionField, definition)
 }
 
-// GetViewDefinition returns the query viewName stands for, and whether the
-// catalog holds a row for that name at all.
+// GetViewDefinition returns the query of viewName, and reports whether the
+// catalog has a row for that name.
 //
-// A name with no row is not a failure, which is why it comes back as false
-// rather than as an error. A query that names a table asks this first, and for
-// every name that is a table rather than a view the answer is no. Reporting
-// that through the error would leave the caller handling the usual case as a
-// fault, and unable to tell it apart from a catalog it could not read.
+// A name with no row is not an error, so the method reports it as false. A
+// query that names a table calls this method first, and for every name that
+// is a table and not a view the answer is false. If that were an error, the
+// caller would have to handle the usual case as a failure, and could not
+// distinguish it from an unreadable catalog.
 //
-// The whole catalog is walked, because the rows are not in any order: a view is
-// written wherever the catalog has a free slot.
+// The whole catalog is scanned, because the rows have no order: a view is
+// written to any free slot of the catalog.
 func (vm *ViewManager) GetViewDefinition(tx *transaction.Transaction, viewName string) (string, bool, error) {
 	layout, err := vm.tableManager.GetLayout(tx, viewCatalogName)
 	if err != nil {
@@ -178,15 +179,16 @@ func (vm *ViewManager) GetViewDefinition(tx *transaction.Transaction, viewName s
 	}
 }
 
-// checkViewFits refuses a name or a definition the view catalog cannot hold.
+// checkViewFits returns an error for a name or a definition that is too long
+// for the view catalog.
 //
-// A record page would refuse either of them on its own, and nothing would be
-// half written even then, since a view is one row. What is gained by saying so
-// here is what the caller is told: the record page speaks of a field of the
-// view catalog, and what the caller passed was a view.
+// A record page would reject either one, and nothing would be partly written
+// even then, because a view is a single row. The check here gives the caller
+// a better error. The record page reports a field of the view catalog, while
+// the caller passed a view.
 //
-// The definition is not a name and has a limit of its own, so it is counted
-// here rather than through checkNameFits.
+// The definition is not a name and has its own limit, so it is checked here
+// and not through checkNameFits.
 func checkViewFits(viewName string, definition string) error {
 	if err := checkNameFits("view", viewName); err != nil {
 		return err

@@ -6,28 +6,30 @@ import (
 	"slices"
 )
 
-// ErrFieldNotFound reports a lookup of a field the schema does not have.
+// ErrFieldNotFound is returned for a lookup of a field that the schema does
+// not have.
 var ErrFieldNotFound = errors.New("field not found")
 
-// ErrDuplicateField reports an attempt to add a field the schema already has.
+// ErrDuplicateField is returned when a field is added that the schema already
+// has.
 var ErrDuplicateField = errors.New("duplicate field")
 
 // FieldType is the type of a field's values. A schema records it so that
-// callers know which of the transaction's typed accessors to reach for, and so
-// that a layout can work out how much room a value needs.
+// callers know which typed accessor of the transaction to use, and so that a
+// layout can compute the size of a value.
 type FieldType int
 
 const (
 	// FieldTypeInt is a 32 bit integer, stored in a fixed number of bytes.
 	FieldTypeInt FieldType = iota
-	// FieldTypeVarchar is a string of at most some number of characters. That
-	// limit is the field's length, and it is what makes the field's size in a
-	// record fixed even though the strings put in it vary.
+	// FieldTypeVarchar is a string with a maximum number of characters. That
+	// limit is the length of the field. It gives the field a fixed size in a
+	// record, although the stored strings vary in length.
 	FieldTypeVarchar
 )
 
-// String names the type the way a reader of an error message would, so that
-// being told a field is a varchar rather than an int says something.
+// String returns the name of the type as it should appear in an error
+// message, such as "varchar" or "int".
 func (ft FieldType) String() string {
 	switch ft {
 	case FieldTypeInt:
@@ -39,24 +41,24 @@ func (ft FieldType) String() string {
 	}
 }
 
-// fieldInfo is what a schema knows about one field. Length is the character
-// limit of a varchar field and is unused for an int, whose width is fixed.
+// fieldInfo holds the type and length of one field. Length is the character
+// limit of a varchar field. It is unused for an int, whose size is fixed.
 type fieldInfo struct {
 	fieldType FieldType
 	length    int
 }
 
 // Schema is the field structure of a table: the name, type and length of each
-// of its fields, in the order they were added.
+// field, in the order in which the fields were added.
 //
-// It says nothing about where a field sits in a record or how many bytes it
-// takes up. That is a layout's job, and keeping the two apart means a schema
-// can be built and passed around by whoever is describing a table without
-// committing to how records are written to a page.
+// A schema does not define where a field is stored in a record or how many
+// bytes it takes. A layout defines that. With this separation, code that
+// describes a table can build and pass a schema without choosing how records
+// are written to a page.
 //
-// The order is kept because a layout assigns offsets by walking the fields, so
-// two schemas with the same fields added in a different order are the same
-// table but not the same record format.
+// The order is kept because a layout assigns offsets in field order. Two
+// schemas with the same fields in a different order describe the same table,
+// but not the same record format.
 type Schema struct {
 	fields []string
 	info   map[string]fieldInfo
@@ -70,12 +72,13 @@ func NewSchema() *Schema {
 	}
 }
 
-// AddField adds a field of the given type and length. length is the character
-// limit for a varchar and is ignored for an int.
+// AddField adds a field with the given type and length. length is the
+// character limit for a varchar, and is ignored for an int.
 //
-// A name the schema already has is refused rather than redefined. Redefining it
-// would leave the name in fields twice, and a layout walking those would give
-// the one field two offsets and count its bytes twice.
+// AddField returns an error for a name that the schema already has, and does
+// not redefine the field. A redefinition would put the name into fields
+// twice. A layout would then assign the field two offsets and count its bytes
+// twice.
 func (s *Schema) AddField(fieldName string, fieldType FieldType, length int) error {
 	if _, ok := s.info[fieldName]; ok {
 		return fmt.Errorf("add field %q: %w", fieldName, ErrDuplicateField)
@@ -90,19 +93,19 @@ func (s *Schema) AddField(fieldName string, fieldType FieldType, length int) err
 	return nil
 }
 
-// AddIntField adds an int field, which needs no length of its own.
+// AddIntField adds an int field. An int field needs no length.
 func (s *Schema) AddIntField(fieldName string) error {
 	return s.AddField(fieldName, FieldTypeInt, 0)
 }
 
-// AddStringField adds a varchar field holding at most length characters.
+// AddStringField adds a varchar field that holds at most length characters.
 func (s *Schema) AddStringField(fieldName string, length int) error {
 	return s.AddField(fieldName, FieldTypeVarchar, length)
 }
 
-// Add copies fieldName from other into this schema. It is how a query's output
-// schema is built out of the schemas it draws from, so the type and length come
-// from other rather than from the caller.
+// Add copies the field fieldName from other into this schema. The output
+// schema of a query is built this way from its input schemas, so the type and
+// length come from other and not from the caller.
 func (s *Schema) Add(fieldName string, other *Schema) error {
 	info, ok := other.info[fieldName]
 	if !ok {
@@ -112,14 +115,14 @@ func (s *Schema) Add(fieldName string, other *Schema) error {
 	return s.AddField(fieldName, info.fieldType, info.length)
 }
 
-// AddAll copies every field of other into this schema, keeping other's order.
+// AddAll copies every field of other into this schema, in other's order.
 //
-// Nothing is copied unless all of it can be: a schema left holding half of
-// another one is neither of the two the caller meant to combine, and the caller
-// cannot tell from the error how far it got.
-// The clashing names are looked for before anything is copied. Leaving it to
-// AddField would report the clash just as well, but only after the fields ahead
-// of it had already been added.
+// AddAll copies either all fields or none. A schema that holds half of
+// another schema is neither of the two schemas that the caller wanted to
+// combine, and the error does not tell the caller how many fields were added.
+// AddAll therefore checks for duplicate names before it copies anything.
+// AddField would also report a duplicate, but only after the fields before it
+// had been added.
 func (s *Schema) AddAll(other *Schema) error {
 	for _, fieldName := range other.fields {
 		if _, ok := s.info[fieldName]; ok {
@@ -127,10 +130,10 @@ func (s *Schema) AddAll(other *Schema) error {
 		}
 	}
 
-	// AddField cannot fail here: the loop above ruled out a clash with this
+	// AddField cannot fail here. The loop above excluded a duplicate with this
 	// schema, and other cannot hold a name twice for the same reason. The error
-	// is returned rather than dropped so that this stays true if AddField grows
-	// another way to refuse a field.
+	// is still returned, so that the code stays correct if AddField gains
+	// another failure case.
 	for _, fieldName := range other.fields {
 		info := other.info[fieldName]
 		if err := s.AddField(fieldName, info.fieldType, info.length); err != nil {
@@ -141,17 +144,17 @@ func (s *Schema) AddAll(other *Schema) error {
 	return nil
 }
 
-// Fields returns the field names in the order they were added.
+// Fields returns the field names in the order in which they were added.
 //
-// The slice is a copy. The order is what a layout walks to assign offsets, so a
-// caller that sorted or overwrote the schema's own slice would change the record
-// format out from under it, and silently: the field names and types would still
-// answer correctly, and only the offsets computed later would be wrong.
+// The returned slice is a copy. A layout assigns offsets in this order. If a
+// caller sorted or overwrote the schema's own slice, the record format would
+// change silently: the field names and types would still be correct, and only
+// the offsets computed later would be wrong.
 func (s *Schema) Fields() []string {
 	return slices.Clone(s.fields)
 }
 
-// HasField reports whether the schema has a field of this name.
+// HasField reports whether the schema has a field named fieldName.
 func (s *Schema) HasField(fieldName string) bool {
 	_, ok := s.info[fieldName]
 	return ok
@@ -167,7 +170,7 @@ func (s *Schema) Type(fieldName string) (FieldType, error) {
 	return info.fieldType, nil
 }
 
-// Length returns the character limit of fieldName, which is 0 for an int field.
+// Length returns the character limit of fieldName. It is 0 for an int field.
 func (s *Schema) Length(fieldName string) (int, error) {
 	info, ok := s.info[fieldName]
 	if !ok {

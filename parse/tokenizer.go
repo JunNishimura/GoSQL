@@ -7,15 +7,15 @@ import (
 	"unicode"
 )
 
-// ErrUnterminatedString reports a string constant whose closing quote never
-// comes before the end of the input.
+// ErrUnterminatedString is returned for a string constant that has no closing
+// quote before the end of the input.
 var ErrUnterminatedString = errors.New("unterminated string constant")
 
-// tokenKind is which of the few shapes a token of SQL can take.
+// tokenKind is the kind of an SQL token.
 //
-// Keywords and identifiers are both words here. Which words are keywords is a
-// matter of the grammar, so the lexer, which knows the grammar, tells the two
-// apart; the tokenizer only knows where one word ends and the next begins.
+// Keywords and identifiers are both words at this level. The grammar defines
+// which words are keywords, so the lexer, which knows the grammar,
+// distinguishes them. The tokenizer only finds the boundaries between words.
 type tokenKind int
 
 const (
@@ -28,10 +28,10 @@ const (
 
 // token is one piece of the input.
 //
-// The text of a word is in lower case, the text of a string constant is what
-// was between the quotes, and the text of an int is its digits, with a leading
-// minus sign if it had one. An int is left as text so that whoever turns it
-// into a number is also the one to say what happens when it does not fit.
+// The text of a word is in lower case. The text of a string constant is the
+// text between the quotes. The text of an int is its digits, with a leading
+// minus sign if present. An int stays text, so that the code that converts it
+// to a number also decides how to handle a value that does not fit.
 type token struct {
 	kind tokenKind
 	text string
@@ -47,9 +47,9 @@ func newTokenizer(s string) *tokenizer {
 	return &tokenizer{input: []rune(s)}
 }
 
-// next reads the token that follows the last one read.
+// next reads the token after the last one read.
 //
-// Once the input is used up, every call returns a token of kind tokenEOF.
+// After the end of the input, every call returns a token of kind tokenEOF.
 func (t *tokenizer) next() (token, error) {
 	t.skipSpace()
 
@@ -78,8 +78,8 @@ func (t *tokenizer) skipSpace() {
 	t.readWhile(unicode.IsSpace)
 }
 
-// readWhile consumes runes as long as keep holds, and returns what it
-// consumed.
+// readWhile consumes runes while keep returns true, and returns the consumed
+// text.
 func (t *tokenizer) readWhile(keep func(rune) bool) string {
 	start := t.pos
 	for t.pos < len(t.input) && keep(t.input[t.pos]) {

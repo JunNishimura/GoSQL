@@ -6,26 +6,25 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// Term is one comparison of a predicate: two expressions that a record has to
-// bring to the same value.
+// Term is one comparison in a predicate: two expressions that must evaluate
+// to the same value for a record.
 //
-// Both sides are expressions rather than a field on one side and a value on the
-// other, which is what lets one kind of term do two jobs. A field against a
-// constant picks records out of a table; a field against another field is the
-// condition two tables are joined on. A predicate holding either does not have
-// to know which it is holding.
+// Both sides are expressions. A term is not limited to a field on one side
+// and a value on the other, so one type serves two purposes. A field compared
+// with a constant selects records from a table. A field compared with another
+// field is a join condition between two tables. A predicate handles both in
+// the same way.
 //
-// Equality is the only comparison here. It is what the operators of a query are
-// built out of, and ordering is not: less-than earns its place with the range
-// searches an index serves, which is a later part of the database than this
-// one.
+// Equality is the only comparison. The query operators here are built on
+// equality and not on ordering. Less-than becomes useful with the range
+// searches of an index, which belong to a later part of the database.
 type Term struct {
 	lhs Expression
 	rhs Expression
 }
 
-// NewTerm returns the term that holds when the two expressions come to the same
-// value.
+// NewTerm returns the term that holds when the two expressions evaluate to
+// the same value.
 func NewTerm(lhs, rhs Expression) Term {
 	return Term{
 		lhs: lhs,
@@ -33,24 +32,24 @@ func NewTerm(lhs, rhs Expression) Term {
 	}
 }
 
-// LHS is the expression on the left of the equals sign.
+// LHS returns the expression on the left of the equals sign.
 func (t Term) LHS() Expression {
 	return t.lhs
 }
 
-// RHS is the expression on the right of the equals sign.
+// RHS returns the expression on the right of the equals sign.
 func (t Term) RHS() Expression {
 	return t.rhs
 }
 
-// IsSatisfied reports whether the record the scan is on brings the two sides to
-// the same value.
+// IsSatisfied reports whether the two sides evaluate to the same value for
+// the current record of the scan.
 //
-// The comparison is ==, so two constants of different kinds are never equal
-// however they are written. A term over an int field and a varchar one keeps no
-// records at all, rather than keeping those where the text spells the number,
-// and that is the answer wanted: a query comparing values of two types is one
-// that matches nothing.
+// The comparison is ==, so two constants of different types are never equal,
+// whatever their contents. A term that compares an int field with a varchar
+// field keeps no records. It does not keep the records in which the text
+// spells the number. This is the intended result: a query that compares
+// values of two types matches nothing.
 func (t Term) IsSatisfied(s Scan) (bool, error) {
 	lhsVal, err := t.lhs.Evaluate(s)
 	if err != nil {
@@ -68,18 +67,17 @@ func (t Term) IsSatisfied(s Scan) (bool, error) {
 // AppliesTo reports whether both sides of the term can be evaluated against a
 // record of schema.
 //
-// One side is not enough. A term of a field of this table and a field of
-// another cannot be tested until the two are joined, however much of it this
-// table holds.
+// One side is not enough. A term that compares a field of this table with a
+// field of another table cannot be tested until the two tables are joined.
 func (t Term) AppliesTo(schema *recordmanager.Schema) bool {
 	return t.lhs.AppliesTo(schema) && t.rhs.AppliesTo(schema)
 }
 
-// String writes the two sides with an equals sign between them.
+// String returns the two sides separated by an equals sign.
 //
-// The sign is written in rather than carried, because equality is the only
-// comparison a term can be. Each side prints itself, which is what keeps a
-// varchar constant quoted and so tells it apart from a field of the same
+// The sign is a literal and not a stored value, because equality is the only
+// comparison of a term. Each side formats itself. A varchar constant
+// therefore stays quoted, which distinguishes it from a field with the same
 // spelling.
 func (t Term) String() string {
 	return fmt.Sprintf("%s = %s", t.lhs, t.rhs)

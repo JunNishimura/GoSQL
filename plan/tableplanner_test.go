@@ -10,15 +10,15 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// Which index a plan reads through is told by the value it searches for, as in
-// the index query planner's tests.
+// The search value shows which index a plan uses, as in the tests of the
+// index query planner.
 func TestTablePlannerMakeSelectPlan(t *testing.T) {
 	tests := []struct {
 		name    string
 		indexed []string
 		sql     string
-		// wantSearch is the value the plan searches an index for, or nil if it
-		// should not read the table through an index.
+		// wantSearch is the value that the plan searches an index for, or nil
+		// if the plan should not use an index.
 		wantSearch *query.Constant
 		want       []int32
 	}{
@@ -36,8 +36,8 @@ func TestTablePlannerMakeSelectPlan(t *testing.T) {
 			wantSearch: nil,
 			want:       []int32{7},
 		},
-		// The index stands for one term, and the other still has to be tested:
-		// id 7 is filed under 7 but its name is not 'x'.
+		// The index covers one term, and the other term must still be tested:
+		// the record with id 7 has the key 7, but its name is not 'x'.
 		{
 			name:       "given a table of 20 records indexed on id, when the select plan under a predicate where id is 7 and name is 'x' is made, then it reads the table through the index for 7 and reads nothing",
 			indexed:    []string{"id"},
@@ -45,8 +45,8 @@ func TestTablePlannerMakeSelectPlan(t *testing.T) {
 			wantSearch: new(query.NewIntConstant(7)),
 			want:       []int32{},
 		},
-		// The test table has no oid, so a plan that tested the join term
-		// against its records would fail to read them rather than read id 3.
+		// The test table has no oid. A plan that tested the join term against
+		// its records would fail to read them and would not return id 3.
 		{
 			name:       "given a table of 20 records with no index, when the select plan under a predicate where id is 3 and id is oid is made, then it tests only the term on its own fields and reads only id 3",
 			indexed:    nil,
@@ -87,9 +87,9 @@ func TestTablePlannerMakeSelectPlan(t *testing.T) {
 		})
 	}
 
-	// A select of no terms keeps every record, so it would cost a test of
-	// each record and change nothing. Having no term to test is what the
-	// planner is told apart from a predicate of no terms for.
+	// A select with no terms keeps every record. It would cost one test per
+	// record and change nothing. The planner distinguishes "no term to test"
+	// from a predicate with no terms in order to avoid such a select.
 	t.Run("given a table of 20 records with no index, when the select plan under a predicate whose only term is on another table is made, then it is the plan of reading the table with no select over it", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -103,7 +103,7 @@ func TestTablePlannerMakeSelectPlan(t *testing.T) {
 	})
 }
 
-// mustMakeSelectPlan makes the select plan of the test table under the
+// mustMakeSelectPlan creates the select plan for the test table under the
 // predicate of sql.
 func mustMakeSelectPlan(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, sql string) Plan {
 	t.Helper()
@@ -124,15 +124,15 @@ func mustMakeSelectPlan(t *testing.T, tx *transaction.Transaction, mm *metadatam
 	return p
 }
 
-// The other table, of oids 0 and 1, is what is already planned. A product
-// gives its pairs a chunk at a time, so they are compared sorted.
+// The other table, with oids 0 and 1, is the current plan. A product returns
+// its pairs chunk by chunk, so the pairs are compared after sorting.
 func TestTablePlannerMakeProductPlan(t *testing.T) {
 	tests := []struct {
 		name    string
 		indexed []string
 		sql     string
-		// wantSearch is the value the plan searches an index for, or nil if it
-		// should not read the table through an index.
+		// wantSearch is the value that the plan searches an index for, or nil
+		// if the plan should not use an index.
 		wantSearch *query.Constant
 		want       [][2]int32
 	}{
@@ -178,9 +178,9 @@ func TestTablePlannerMakeProductPlan(t *testing.T) {
 		})
 	}
 
-	// What is already planned is read through again for every chunk of the
-	// table, so it goes on the left, where the multibuffer product
-	// materializes it rather than working it out again.
+	// The current plan is scanned again for every chunk of the table. It is
+	// therefore the left side, which the multibuffer product materializes
+	// and does not compute again.
 	t.Run("given a table of 20 records and another of 2 already planned, when the product plan is made, then it is a multibuffer product with what is already planned on the left", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -200,7 +200,7 @@ func TestTablePlannerMakeProductPlan(t *testing.T) {
 	})
 }
 
-// mustMakeProductPlan makes the product plan of current and the test table
+// mustMakeProductPlan creates the product plan of current and the test table
 // under the predicate of sql.
 func mustMakeProductPlan(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, sql string, current Plan) Plan {
 	t.Helper()
@@ -221,8 +221,8 @@ func mustMakeProductPlan(t *testing.T, tx *transaction.Transaction, mm *metadata
 	return p
 }
 
-// sortedPairs returns pairs sorted by id and then by oid, for comparing the
-// pairs of plans that do not promise an order.
+// sortedPairs returns pairs sorted by id and then by oid. It is used to
+// compare the pairs of plans that do not define an order.
 func sortedPairs(pairs [][2]int32) [][2]int32 {
 	sorted := slices.Clone(pairs)
 	slices.SortFunc(sorted, func(a, b [2]int32) int {
@@ -232,20 +232,21 @@ func sortedPairs(pairs [][2]int32) [][2]int32 {
 	return sorted
 }
 
-// The other table, of oids from 0, is what is already planned, and is joined
-// to the test table, of ids from 0, on oid equal to id.
+// The other table, with oids from 0, is the current plan. It is joined to the
+// test table, with ids from 0, on oid = id.
 //
-// Whether the join goes through the index on id turns on what it costs. With
-// 3 oids the join through the index reads 13 blocks; the product reads 3 when
-// the test table holds 20 records and 17 when it holds 200. So the cases that
-// want the index hold 200 records, and those that want a product hold 20.
+// Whether the join uses the index on id depends on the cost. With 3 oids, the
+// index join reads 13 blocks. The product reads 3 blocks when the test table
+// has 20 records, and 17 when it has 200. The cases that expect the index
+// therefore use 200 records, and the cases that expect a product use 20.
 func TestTablePlannerMakeJoinPlan(t *testing.T) {
 	tests := []struct {
 		name        string
 		recordCount int
 		indexed     []string
 		sql         string
-		// wantIndexJoin is whether the plan should join through the index on id.
+		// wantIndexJoin reports whether the plan should join through the index
+		// on id.
 		wantIndexJoin bool
 		want          [][2]int32
 	}{
@@ -257,7 +258,7 @@ func TestTablePlannerMakeJoinPlan(t *testing.T) {
 			wantIndexJoin: true,
 			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
 		},
-		// The index stands for the join term; the term on name still has to be
+		// The index covers the join term. The term on name must still be
 		// tested, and only on the table's side of the join.
 		{
 			name:          "given a table of 200 records indexed on id and another of 3 already planned, when the join plan under a predicate where id is oid and name is 'name1' is made, then it joins through the index on id and keeps only the pair of 1",
@@ -314,9 +315,8 @@ func TestTablePlannerMakeJoinPlan(t *testing.T) {
 		})
 	}
 
-	// With nothing to join on, which plan to make is the caller's choice: the
-	// heuristic planner tries the other tables before falling back on a
-	// product.
+	// Without a join term, the caller chooses the plan. The heuristic planner
+	// tries the other tables first and then falls back to a product.
 	t.Run("given a table of 20 records and another of 3 already planned, when the join plan under a predicate where id is 3 is made, then there is none, since no term joins them", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -330,8 +330,8 @@ func TestTablePlannerMakeJoinPlan(t *testing.T) {
 	})
 }
 
-// mustMakeJoinPlan makes the join plan of current and the test table under the
-// predicate of sql.
+// mustMakeJoinPlan creates the join plan of current and the test table under
+// the predicate of sql.
 func mustMakeJoinPlan(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, sql string, current Plan) (Plan, bool) {
 	t.Helper()
 

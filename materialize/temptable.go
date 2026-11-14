@@ -10,26 +10,26 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// lastTableNum is the number given to the temp table made most recently. It is
-// shared by every transaction, since they all write to the one directory.
+// lastTableNum is the number of the most recently created temp table. All
+// transactions share it, because they all write to the same directory.
 var lastTableNum atomic.Int64
 
-// TempTable is a table an operator writes its input into so that it can read
-// the records again, in an order of its own, without computing them again.
+// TempTable is a table that an operator writes its input to. The operator can
+// then read the records again, in its own order, without computing them
+// again.
 //
-// It is in no catalog: nothing but the operator that made it knows its name,
-// and it is not meant to outlive the query.
+// A temp table is in no catalog. Only the operator that created it knows its
+// name, and it is not meant to outlive the query.
 type TempTable struct {
 	tx        *transaction.Transaction
 	tableName string
 	layout    *recordmanager.Layout
 }
 
-// NewTempTable returns a temp table of the given schema, under a name no other
-// table has.
+// NewTempTable returns a temp table with the given schema and a unique name.
 //
-// Nothing is written here. The table's file is made by the first scan opened
-// over it, as a stored table's is.
+// It writes nothing. The first scan opened on the table creates its file, as
+// for a stored table.
 func NewTempTable(tx *transaction.Transaction, schema *recordmanager.Schema) *TempTable {
 	return &TempTable{
 		tx:        tx,
@@ -38,18 +38,18 @@ func NewTempTable(tx *transaction.Transaction, schema *recordmanager.Schema) *Te
 	}
 }
 
-// Open returns a scan over the table, for writing its records as well as
-// reading them.
+// Open returns a scan of the table that can write records as well as read
+// them.
 func (tt *TempTable) Open() (query.UpdateScan, error) {
 	return query.NewTableScan(tt.tx, tt.tableName, tt.layout)
 }
 
-// TableName is the name the table was given.
+// TableName returns the name of the table.
 func (tt *TempTable) TableName() string {
 	return tt.tableName
 }
 
-// Layout is the layout of the table's records.
+// Layout returns the layout of the table's records.
 func (tt *TempTable) Layout() *recordmanager.Layout {
 	return tt.layout
 }

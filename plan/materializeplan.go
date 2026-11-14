@@ -9,19 +9,19 @@ import (
 
 var _ Plan = (*MaterializePlan)(nil)
 
-// MaterializePlan is the plan of writing the records of another plan into a
-// temp table and reading them from there.
+// MaterializePlan is the plan that writes the records of another plan to a
+// temp table and reads them from that table.
 //
-// It gives back the same records as the plan underneath, so every number but
-// the blocks is that plan's. What it changes is what reading them again costs:
-// the records are worked out once, when the plan is opened, and a scan that
-// starts over reads the temp table rather than the plan underneath.
+// It returns the same records as the underlying plan, so every estimate
+// except the blocks is the estimate of that plan. It changes the cost of
+// repeated reads. The records are computed once, when the plan is opened, and
+// a scan that restarts reads the temp table and not the underlying plan.
 type MaterializePlan struct {
 	tx  *transaction.Transaction
 	src Plan
 }
 
-// NewMaterializePlan returns the plan of materializing src.
+// NewMaterializePlan returns the plan that materializes src.
 func NewMaterializePlan(tx *transaction.Transaction, src Plan) *MaterializePlan {
 	return &MaterializePlan{
 		tx:  tx,
@@ -29,12 +29,12 @@ func NewMaterializePlan(tx *transaction.Transaction, src Plan) *MaterializePlan 
 	}
 }
 
-// Open writes every record of src into a new temp table and returns a scan of
-// the table, before its first record.
+// Open writes every record of src to a new temp table and returns a scan of
+// the table, positioned before its first record.
 //
-// src is read to the end and closed here, so the scan handed back holds only
-// the temp table. Whatever was opened before a failure is closed again, since
-// no scan comes back for the caller to close.
+// src is read to its end and closed here, so the returned scan holds only the
+// temp table. If a step fails, the scans already opened are closed, because
+// no scan is returned that the caller could close.
 func (mp *MaterializePlan) Open() (query.Scan, error) {
 	tt := materialize.NewTempTable(mp.tx, mp.src.Schema())
 
@@ -64,8 +64,8 @@ func (mp *MaterializePlan) Open() (query.Scan, error) {
 	return dest, nil
 }
 
-// copyRecords writes a record into dest for every record src has left, with
-// the values src holds in fieldNames.
+// copyRecords inserts a record into dest for every remaining record of src,
+// with the values of fieldNames from src.
 func copyRecords(src query.Scan, dest query.UpdateScan, fieldNames []string) error {
 	for {
 		ok, err := src.MoveToNextRecord()
@@ -82,8 +82,8 @@ func copyRecords(src query.Scan, dest query.UpdateScan, fieldNames []string) err
 	}
 }
 
-// copyRecord writes a new record into dest with the values the record src is
-// on holds in fieldNames.
+// copyRecord inserts a new record into dest with the values of fieldNames
+// from the current record of src.
 func copyRecord(src query.Scan, dest query.UpdateScan, fieldNames []string) error {
 	if err := dest.MoveToNewRecord(); err != nil {
 		return err
@@ -101,29 +101,29 @@ func copyRecord(src query.Scan, dest query.UpdateScan, fieldNames []string) erro
 	return nil
 }
 
-// BlocksAccessed is the blocks the temp table takes up: the records of src,
-// as many to a block as fit in one.
+// BlocksAccessed returns the number of blocks of the temp table: the records
+// of src divided by the number of records per block.
 //
-// Writing the table is left out. It is done once, when the plan is opened,
-// while this is the cost of reading the plan, which an operator above may do
-// many times over.
+// The cost of writing the table is not included. The table is written once,
+// when the plan is opened. This estimate is the cost of one read of the plan,
+// which an operator above can repeat many times.
 func (mp *MaterializePlan) BlocksAccessed() int {
 	recordsPerBlock := mp.tx.BlockSize() / recordmanager.NewLayout(mp.src.Schema()).SlotSize()
 
 	return (mp.src.RecordsOutput() + recordsPerBlock - 1) / recordsPerBlock
 }
 
-// RecordsOutput is the records of src.
+// RecordsOutput returns the records of src.
 func (mp *MaterializePlan) RecordsOutput() int {
 	return mp.src.RecordsOutput()
 }
 
-// DistinctValues is the distinct values of fieldName in src.
+// DistinctValues returns the distinct values of fieldName in src.
 func (mp *MaterializePlan) DistinctValues(fieldName string) int {
 	return mp.src.DistinctValues(fieldName)
 }
 
-// Schema is the schema of src.
+// Schema returns the schema of src.
 func (mp *MaterializePlan) Schema() *recordmanager.Schema {
 	return mp.src.Schema()
 }

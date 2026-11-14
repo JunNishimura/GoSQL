@@ -17,19 +17,19 @@ import (
 
 const (
 	testLogFile = "test.log"
-	// testBlockSize has to hold a slot of the widest catalog, which is the view
-	// catalog at 476 bytes, since a record page refuses a layout whose slot
-	// does not fit in a block.
+	// testBlockSize must fit a slot of the largest catalog, which is the view
+	// catalog with 476 bytes. A record page rejects a layout whose slot does
+	// not fit in a block.
 	//
-	// It is not raised any further than that. A block that took every record of
-	// every test would leave the paths that cross from one block to the next
-	// unwalked, and those are where a scan is worth testing at all.
+	// It is not larger than necessary. With a block that held every record
+	// of every test, no test would cross from one block to the next, and
+	// those transitions are the part of a scan that most needs testing.
 	testBlockSize  = 800
 	testNumBuffers = 8
 )
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see the catalogs another wrote.
+// one test cannot see the catalogs of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -54,13 +54,13 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 	return tx
 }
 
-// tableCatalogRow is one row of the table catalog, read back out.
+// tableCatalogRow is one row of the table catalog, as read back.
 type tableCatalogRow struct {
 	tableName string
 	slotSize  int32
 }
 
-// fieldCatalogRow is one row of the field catalog, read back out.
+// fieldCatalogRow is one row of the field catalog, as read back.
 type fieldCatalogRow struct {
 	tableName   string
 	fieldName   string
@@ -69,12 +69,12 @@ type fieldCatalogRow struct {
 	fieldOffset int32
 }
 
-// readTableCatalog reads every row of the table catalog, in the order the rows
-// were written.
+// readTableCatalog reads every row of the table catalog, in the order in
+// which the rows were written.
 //
-// The catalogs are read through a scan of their own rather than through the
-// table manager, so that what a test asserts is what reached the records, not
-// what the manager reports about them.
+// The catalogs are read through a separate scan and not through the table
+// manager. A test then asserts the stored records, not the manager's report
+// of them.
 func readTableCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManager) []tableCatalogRow {
 	t.Helper()
 
@@ -102,8 +102,8 @@ func readTableCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManage
 	}
 }
 
-// readFieldCatalog reads every row of the field catalog, in the order the rows
-// were written.
+// readFieldCatalog reads every row of the field catalog, in the order in
+// which the rows were written.
 func readFieldCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManager) []fieldCatalogRow {
 	t.Helper()
 
@@ -134,12 +134,12 @@ func readFieldCatalog(t *testing.T, tx *transaction.Transaction, tm *TableManage
 	}
 }
 
-// testDatabase is what several transactions have in common: one set of files,
-// one log, one buffer pool, and the one lock table they arbitrate through.
+// testDatabase holds the components that several transactions share: one set
+// of files, one log, one buffer pool, and one lock table.
 //
-// newTestTransaction gives every transaction a database to itself, which is
-// what keeps one test from reading another's catalogs. A test about what
-// happens when transactions meet needs the opposite of that, and this is it.
+// newTestTransaction gives each transaction its own database, so that one
+// test cannot read the catalogs of another. A test of interacting
+// transactions needs the opposite, which this type provides.
 type testDatabase struct {
 	fileManager   *filemanager.FileManager
 	logManager    *logmanager.LogManager
@@ -172,12 +172,12 @@ func newTestDatabase(t *testing.T) *testDatabase {
 	}
 }
 
-// newTransaction starts a transaction on the shared database, under a number no
-// other transaction of it has had.
+// newTransaction starts a transaction on the shared database, with a number
+// that no other transaction of the database has had.
 //
-// It reports by returning rather than through *testing.T, so that a goroutine
-// other than the test's own can call it. A Fatal from one of those does not
-// stop the test that started it, and leaves it passing on a run that failed.
+// It returns an error and does not use *testing.T, so that a goroutine other
+// than the test goroutine can call it. A Fatal on such a goroutine does not
+// stop the test, and the test would pass although the run failed.
 func (db *testDatabase) newTransaction() (*transaction.Transaction, error) {
 	return transaction.NewTransaction(
 		db.fileManager,
@@ -199,9 +199,9 @@ func (db *testDatabase) mustNewTransaction(t *testing.T) *transaction.Transactio
 	return tx
 }
 
-// insertTestRecords writes count records into the test table, so that measuring
-// it has something to count. The values differ from one record to the next only
-// so that a record written over another would show.
+// insertTestRecords writes count records to the test table, so that its
+// statistics have records to count. The values differ between records only so
+// that an overwritten record would be detected.
 func insertTestRecords(t *testing.T, tx *transaction.Transaction, tm *TableManager, count int) {
 	t.Helper()
 
@@ -229,19 +229,19 @@ func insertTestRecords(t *testing.T, tx *transaction.Transaction, tm *TableManag
 	}
 }
 
-// viewCatalogRow is one row of the view catalog, read back out.
+// viewCatalogRow is one row of the view catalog, as read back.
 type viewCatalogRow struct {
 	viewName   string
 	definition string
 }
 
-// readViewCatalog reads every row of the view catalog, in the order the rows
-// were written.
+// readViewCatalog reads every row of the view catalog, in the order in which
+// the rows were written.
 //
-// Unlike the other two catalogs, this one's layout is not held anywhere: the
-// view catalog is an ordinary table, so its layout comes back out of the table
-// catalog. Asking for it the way the view manager does keeps the helper from
-// asserting through a layout the manager never used.
+// Unlike the other two catalogs, the view catalog has no stored layout. It is
+// an ordinary table, so its layout is read from the table catalog. The helper
+// reads the layout in the same way as the view manager, so that it does not
+// assert through a layout that the manager never used.
 func readViewCatalog(t *testing.T, tx *transaction.Transaction, vm *ViewManager) []viewCatalogRow {
 	t.Helper()
 
@@ -274,19 +274,19 @@ func readViewCatalog(t *testing.T, tx *transaction.Transaction, vm *ViewManager)
 	}
 }
 
-// indexCatalogRow is one row of the index catalog, read back out.
+// indexCatalogRow is one row of the index catalog, as read back.
 type indexCatalogRow struct {
 	indexName string
 	tableName string
 	fieldName string
 }
 
-// readIndexCatalog reads every row of the index catalog, in the order the rows
-// were written.
+// readIndexCatalog reads every row of the index catalog, in the order in
+// which the rows were written.
 //
-// Its layout is asked of the table manager the way the index manager asks for
-// it, rather than built here, so that a test cannot pass by reading through a
-// layout the manager never wrote through.
+// The helper gets the layout from the table manager, as the index manager
+// does, and does not build it. A test therefore cannot pass by reading
+// through a layout that the manager never wrote with.
 func readIndexCatalog(t *testing.T, tx *transaction.Transaction, im *IndexManager) []indexCatalogRow {
 	t.Helper()
 
@@ -358,8 +358,8 @@ func mustAddStringField(t *testing.T, schema *recordmanager.Schema, fieldName st
 	}
 }
 
-// layoutField is one placed field of a layout: what a schema says about it,
-// plus where the layout put it.
+// layoutField is one field of a layout: its schema information and its offset
+// in the layout.
 type layoutField struct {
 	name      string
 	fieldType recordmanager.FieldType
@@ -367,8 +367,9 @@ type layoutField struct {
 	offset    int
 }
 
-// layoutDescription is everything a layout says, flattened so that two layouts
-// can be compared as data rather than field by field at every call site.
+// layoutDescription holds all the data of a layout in a flat form, so that
+// two layouts can be compared as values and not field by field at each call
+// site.
 type layoutDescription struct {
 	slotSize int
 	fields   []layoutField
@@ -408,9 +409,9 @@ func describeLayout(t *testing.T, layout *recordmanager.Layout) layoutDescriptio
 	}
 }
 
-// assertLayout reports the slot size and the fields separately, so that a
-// failure says which of the two is wrong rather than printing both layouts and
-// leaving the reader to find the difference.
+// assertLayout reports the slot size and the fields separately. A failure
+// then shows which of the two is wrong, and the reader does not have to
+// compare two printed layouts.
 func assertLayout(t *testing.T, got *recordmanager.Layout, want layoutDescription) {
 	t.Helper()
 

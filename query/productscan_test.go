@@ -10,12 +10,12 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// newTestProductSide opens a scan over a table of its own holding one record
-// for each id, narrowed to the one named field.
+// newTestProductSide opens a scan of a table of its own with one record for
+// each id, projected to the one named field.
 //
-// The two sides of a product in these tests keep different fields, so every
-// field of the product belongs to exactly one side and a read that went to the
-// wrong side comes back wrong rather than right by chance.
+// The two sides of a product in these tests keep different fields. Every
+// field of the product therefore belongs to exactly one side, and a read from
+// the wrong side returns a wrong value, not the right one by chance.
 func newTestProductSide(t *testing.T, fieldName string, ids ...int32) *ProjectScan {
 	t.Helper()
 
@@ -27,8 +27,8 @@ func newTestProductSide(t *testing.T, fieldName string, ids ...int32) *ProjectSc
 	return ps
 }
 
-// newTestProduct opens the product of a left side holding the ids and a right
-// side holding the names the ids were given.
+// newTestProduct opens the product of a left side that holds the ids of
+// leftIDs and a right side that holds the names for rightIDs.
 func newTestProduct(t *testing.T, leftIDs, rightIDs []int32) *ProductScan {
 	t.Helper()
 
@@ -43,9 +43,9 @@ func newTestProduct(t *testing.T, leftIDs, rightIDs []int32) *ProductScan {
 	return p
 }
 
-// walkTestProduct reads every record left in the product as its two fields put
-// together, which shows both which pairs came out and what order they came out
-// in.
+// walkTestProduct reads every remaining record of the product as its two
+// fields combined. The result shows which pairs were returned and in which
+// order.
 func walkTestProduct(t *testing.T, s Scan) []string {
 	t.Helper()
 
@@ -79,9 +79,9 @@ func TestProductScanMoveToNextRecord(t *testing.T) {
 		rightIDs []int32
 		want     []string
 	}{
-		// The order is what says which side is the outer loop. Read with the
-		// right side outside, the same four pairs would come out as 10, 20, 10,
-		// 20 down the ids instead.
+		// The order shows which side is the outer loop. With the right side as
+		// the outer loop, the same four pairs would have the ids in the order
+		// 10, 20, 10, 20.
 		{
 			name:     "given two records on each side, when the product is walked, then it returns every pair, with the right side read through once for each record of the left",
 			leftIDs:  []int32{10, 20},
@@ -100,9 +100,9 @@ func TestProductScanMoveToNextRecord(t *testing.T) {
 			rightIDs: []int32{10},
 			want:     []string{"10 name10", "20 name10", "30 name10"},
 		},
-		// A product with nothing on one side is empty. The left being empty is
-		// where a product that steps the right side first goes wrong: it would
-		// hand out a record while the left side was on none.
+		// A product with an empty side is empty. An empty left side exposes a
+		// product that advances the right side first: it would return a record
+		// while the left side is on none.
 		{
 			name:     "given no records on the left and two on the right, when the product is walked, then it returns none",
 			leftIDs:  []int32{},
@@ -151,9 +151,9 @@ func TestProductScanMoveToNextRecord(t *testing.T) {
 }
 
 func TestProductScanMoveBeforeFirstRecord(t *testing.T) {
-	// Going back has to put both sides back, and put the left one onto its
-	// first record rather than before it. A product that reset only the right
-	// side would come back with the pairs of the last record of the left.
+	// A restart must reset both sides, and must position the left side on its
+	// first record, not before it. A product that reset only the right side
+	// would return the pairs of the last left record.
 	t.Run("given a product that has been read to the end, when it is put back to the start, then it returns the same pairs again", func(t *testing.T) {
 		p := newTestProduct(t, []int32{10, 20}, []int32{10, 20})
 
@@ -172,8 +172,8 @@ func TestProductScanMoveBeforeFirstRecord(t *testing.T) {
 	})
 }
 
-// newTestProductOnARecord opens a product of one record on each side and moves
-// it onto the one pair it has.
+// newTestProductOnARecord opens a product with one record on each side and
+// moves it to its only pair.
 func newTestProductOnARecord(t *testing.T) *ProductScan {
 	t.Helper()
 
@@ -190,8 +190,8 @@ func newTestProductOnARecord(t *testing.T) *ProductScan {
 	return p
 }
 
-// A product has the fields of both sides, which is what makes a join of two
-// tables readable as one run of records.
+// A product has the fields of both sides, so a join of two tables can be read
+// as one sequence of records.
 func TestProductScanHasField(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -312,10 +312,10 @@ func TestProductScanGetValue(t *testing.T) {
 	}
 }
 
-// A name that both sides have is ambiguous in the query that asked for it, and
-// nothing here can qualify it with the table it came from. The left side
-// answering is a rule rather than a right answer, so it is written down here to
-// keep it from becoming whichever side the code happens to try first.
+// A name that both sides have is ambiguous in the query, and this code cannot
+// qualify it with a table name. Reading from the left side is a fixed rule,
+// not a correct resolution. The test documents the rule, so that the result
+// does not depend on the order of the code.
 func TestProductScanReadsAFieldBothSidesHaveFromTheLeft(t *testing.T) {
 	t.Run("given a field both sides have, when it is read, then it is the left side's", func(t *testing.T) {
 		p, err := NewProductScan(
@@ -345,8 +345,8 @@ func TestProductScanReadsAFieldBothSidesHaveFromTheLeft(t *testing.T) {
 }
 
 func TestProductScanClose(t *testing.T) {
-	// A product holds two scans, so a Close that reached only one of them would
-	// leave the other's buffer taken for the rest of the transaction.
+	// A product holds two scans. A Close that closed only one of them would
+	// leave the buffer of the other pinned until the transaction ends.
 	t.Run("when a product is closed, then both of the scans it reads through are closed, so the blocks they held are given back", func(t *testing.T) {
 		leftTable := newTestTableOfRecords(t, 10)
 		rightTable := newTestTableOfRecords(t, 20)

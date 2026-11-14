@@ -7,20 +7,21 @@ import (
 
 var _ AggregationFn = (*MaxFn)(nil)
 
-// MaxFn finds the largest value a field holds among the records of a group, in
-// the order Constant.Compare puts values in.
+// MaxFn finds the largest value of a field among the records of a group,
+// according to the order of Constant.Compare.
 type MaxFn struct {
 	fieldName string
 	max       query.Constant
 }
 
-// NewMaxFn returns the largest value of fieldName among the records of a
-// group.
+// NewMaxFn returns a function that finds the largest value of fieldName among
+// the records of a group.
 func NewMaxFn(fieldName string) *MaxFn {
 	return &MaxFn{fieldName: fieldName}
 }
 
-// ProcessFirst takes the value of the first record of a group as the largest.
+// ProcessFirst sets the largest value to the value of the first record of a
+// group.
 func (f *MaxFn) ProcessFirst(s query.Scan) error {
 	val, err := s.GetValue(f.fieldName)
 	if err != nil {
@@ -31,8 +32,8 @@ func (f *MaxFn) ProcessFirst(s query.Scan) error {
 	return nil
 }
 
-// ProcessNext keeps the value of the record if it is larger than the largest
-// so far.
+// ProcessNext replaces the largest value with the value of the record if that
+// value is larger.
 func (f *MaxFn) ProcessNext(s query.Scan) error {
 	val, err := s.GetValue(f.fieldName)
 	if err != nil {
@@ -50,18 +51,18 @@ func (f *MaxFn) ProcessNext(s query.Scan) error {
 	return nil
 }
 
-// FieldName is "maxof" followed by the field whose largest value is found.
+// FieldName returns "maxof" followed by the name of the field.
 func (f *MaxFn) FieldName() string {
 	return "maxof" + f.fieldName
 }
 
-// Value is the largest value found.
+// Value returns the largest value found.
 func (f *MaxFn) Value() query.Constant {
 	return f.max
 }
 
-// AddFieldTo adds the largest value to schema, of the type and length of the
-// field of src it is found in.
+// AddFieldTo adds the field of the largest value to schema, with the type and
+// length that the field has in src.
 func (f *MaxFn) AddFieldTo(schema, src *recordmanager.Schema) error {
 	fieldType, err := src.Type(f.fieldName)
 	if err != nil {

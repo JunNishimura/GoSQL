@@ -18,23 +18,23 @@ import (
 )
 
 const (
-	// testBlockSize has to hold a slot of the widest catalog, which is the view
-	// catalog at 476 bytes, since a record page refuses a layout whose slot
-	// does not fit in a block.
+	// testBlockSize must fit a slot of the largest catalog, which is the view
+	// catalog with 476 bytes. A record page rejects a layout whose slot does
+	// not fit in a block.
 	testBlockSize  = 800
 	testNumBuffers = 8
-	// tableCatalogName is the catalog that lists every table, the catalogs
-	// among them. It is the metadata manager's name, written out again here
-	// since the metadata manager does not export it.
+	// tableCatalogName is the catalog that lists every table, including the
+	// catalogs. The metadata manager defines this name but does not export it,
+	// so it is repeated here.
 	tableCatalogName = "table_catalog"
-	// unfinishedTxNum numbers the transaction a test writes onto the log as
-	// left unfinished. It is far above any number the database hands out, so
-	// that the log never shows a commit of one of the database's own under the
-	// same number.
+	// unfinishedTxNum is the number of the transaction that a test writes to
+	// the log as unfinished. It is far above every number that the database
+	// assigns, so the log never has a commit record of a real transaction
+	// with the same number.
 	unfinishedTxNum = 1000
 )
 
-// countTables reports how many tables the table catalog lists.
+// countTables returns the number of tables in the table catalog.
 func countTables(t *testing.T, db *DB, tx *transaction.Transaction) int {
 	t.Helper()
 
@@ -100,8 +100,8 @@ func TestOpen(t *testing.T) {
 		}
 	})
 
-	// Making the catalogs again would list every catalog a second time, which
-	// is how a database opened as new when it was not would show.
+	// Creating the catalogs again would list every catalog twice. A database
+	// that was wrongly opened as new would show this.
 	t.Run("given a database that holds a table, when it is opened again, then the catalogs are left as they were", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "db")
 		db, err := Open(dir, testBlockSize, testNumBuffers)
@@ -137,8 +137,8 @@ func TestOpen(t *testing.T) {
 		}
 	})
 
-	// The state a crash leaves is set down directly: a value on disk written by
-	// a transaction the log shows no end of, with its pre-image on the log.
+	// The state after a crash is written directly: a value on disk from a
+	// transaction with no end record in the log, and its pre-image in the log.
 	t.Run("given a database that a transaction left unfinished, when it is opened again, then what the transaction wrote is undone", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "db")
 		db, err := Open(dir, testBlockSize, testNumBuffers)
@@ -180,8 +180,8 @@ func TestOpen(t *testing.T) {
 	})
 }
 
-// startedTxNums reports the number of every transaction the log shows as
-// started, the one Open itself ran among them.
+// startedTxNums returns the number of every transaction with a start record
+// in the log, including the transaction that Open ran.
 func startedTxNums(t *testing.T, db *DB) []int {
 	t.Helper()
 
@@ -216,9 +216,9 @@ func runInBackground(f func() error) <-chan error {
 }
 
 func TestDBNewTransaction(t *testing.T) {
-	// The log tells transactions apart by number alone, so two under one
-	// number would be taken for one: recovery would let the commit of either
-	// keep what the other left unfinished.
+	// The log distinguishes transactions only by number. Two transactions
+	// with the same number would be treated as one: the commit of either
+	// would make recovery keep the unfinished changes of the other.
 	t.Run("given transactions started from many goroutines at once, then no two are given the same number", func(t *testing.T) {
 		const numTxs = 20
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -254,8 +254,8 @@ func TestDBNewTransaction(t *testing.T) {
 		}
 	})
 
-	// Locks keep transactions apart only if they are all taken from one table,
-	// so a transaction has to be started on the database's own.
+	// Locks isolate transactions only if all of them use the same lock table,
+	// so a transaction must be started on the lock table of the database.
 	t.Run("given a transaction that has written a block, when another on the same database pins it, then the second waits until the first commits", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
 		if err != nil {
@@ -306,8 +306,8 @@ func TestDBNewTransaction(t *testing.T) {
 	})
 }
 
-// selectIDs runs sql through db's planner and reports the id of every record it
-// gives back.
+// selectIDs runs sql through the planner of db and returns the id of every
+// record in the result.
 func selectIDs(t *testing.T, db *DB, tx *transaction.Transaction, sql string) []int32 {
 	t.Helper()
 
@@ -338,7 +338,8 @@ func selectIDs(t *testing.T, db *DB, tx *transaction.Transaction, sql string) []
 	}
 }
 
-// executeUpdates runs every statement in sqls through db's planner in tx.
+// executeUpdates runs every statement in sqls through the planner of db, in
+// tx.
 func executeUpdates(t *testing.T, db *DB, tx *transaction.Transaction, sqls ...string) {
 	t.Helper()
 
@@ -370,8 +371,8 @@ func TestDBPlanner(t *testing.T) {
 		}
 	})
 
-	// The planner reads tables through the database's own metadata manager, so
-	// a table made before the database was opened again is one it knows about.
+	// The planner reads tables through the metadata manager of the database,
+	// so it knows a table that was created before the database was reopened.
 	t.Run("given a database whose table and record were committed, when it is opened again, then a query through its planner reads the record back", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "db")
 		db, err := Open(dir, testBlockSize, testNumBuffers)
@@ -405,11 +406,11 @@ func TestDBPlanner(t *testing.T) {
 	})
 }
 
-// The record of id 7 is written before the index is made and the one of id 8
-// after, so the index has to be filled from the table as well as kept up by
-// the statements, and the one of id 9 is deleted again, so it has to be taken
-// out. Nothing yet reads through an index to answer a query, so the index is
-// searched here directly.
+// The record with id 7 is written before the index is created, and the record
+// with id 8 after it. The index must therefore be built from the table and
+// also be maintained by later statements. The record with id 9 is deleted
+// again, so its entry must be removed. No query uses an index yet, so the
+// test searches the index directly.
 func TestDBPlannerKeepsIndexes(t *testing.T) {
 	t.Run("given a new database, when a table is made, a record put in, an index made on id, two more put in and one of them deleted through its planner, then the index finds each record left under its id and not the one deleted", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -438,9 +439,9 @@ func TestDBPlannerKeepsIndexes(t *testing.T) {
 	})
 }
 
-// What a query is planned as cannot be seen from here, so it is told by what
-// it reads: a record written past the planner is in the table but not in the
-// index, and a query answered through the index does not come across it.
+// The test cannot see the plan of a query, so it infers the plan from the
+// result. A record written without the planner is in the table but not in the
+// index, and a query that uses the index does not return it.
 func TestDBPlannerReadsThroughIndexes(t *testing.T) {
 	t.Run("given a table indexed on id holding a record of id 7 put in through the planner and another written past it, when a query where id is 7 is run through the planner, then it reads the table through the index and finds only the record the index was told of", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -466,17 +467,17 @@ func TestDBPlannerReadsThroughIndexes(t *testing.T) {
 	})
 }
 
-// As for a select, a join is told to go through an index by what it reads: the
-// record of id 1 written past the planner is in the table but not in its index,
-// so a join through the index does not pair it with anything.
+// As for a select, the test infers from the result that a join uses an index.
+// The record with id 1, written without the planner, is in the table but not
+// in the index, so a join through the index does not pair it with anything.
 //
-// That the planner joins through the index here rests on its statistics, not
-// on the index being the cheaper way in general. The tables are too small for
-// their statistics to count any record, so the join through the index and the
-// product are both reckoned at one block, and a tie goes to the index. With
-// some fifty records in test the product reckons fewer blocks and is taken, so
-// this test is to be reworked if the tables grow or the statistics come to
-// count records written in the same transaction.
+// The planner chooses the index join here because of its statistics, not
+// because an index join is cheaper in general. The tables are too small for
+// the statistics to count any record. The index join and the product are
+// therefore both estimated at one block, and the index wins a tie. With about
+// fifty records in test, the product is estimated at fewer blocks and is
+// chosen. This test must be reworked if the tables grow, or if the statistics
+// start to count records written in the same transaction.
 func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
 	t.Run("given a table of oids 1 and 2 and a table indexed on id holding ids 1 and 2 put in through the planner and another id 1 written past it, when a query joining them on oid = id is run through the planner, then it joins through the index and pairs each oid with only the record the index was told of", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -505,10 +506,10 @@ func TestDBPlannerJoinsThroughIndexes(t *testing.T) {
 	})
 }
 
-// A planner that only puts a select over the whole query would take a term on
-// a field no table has and fail only once a record is tested against it. One
-// that places each term where its fields are read has nowhere to put such a
-// term, and says so before anything is read.
+// A planner that only places one select over the whole query would accept a
+// term on a field that no table has, and would fail only when a record is
+// tested against it. A planner that places each term where its fields are
+// read has no place for such a term, and reports it before any read.
 func TestDBPlannerRefusesUnknownFields(t *testing.T) {
 	t.Run("given a table of id, when a query where a field it does not have is 1 is planned through the planner, then planning reports ErrFieldNotFound", func(t *testing.T) {
 		db, err := Open(t.TempDir(), testBlockSize, testNumBuffers)
@@ -529,8 +530,8 @@ func TestDBPlannerRefusesUnknownFields(t *testing.T) {
 	})
 }
 
-// writePastPlanner writes a record of id into tableName through a scan of the
-// table alone, so that no index of the table is told of it.
+// writePastPlanner writes a record with id to tableName through a scan of the
+// table only, so that no index of the table is updated.
 func writePastPlanner(t *testing.T, db *DB, tx *transaction.Transaction, tableName string, id int32) {
 	t.Helper()
 
@@ -552,8 +553,8 @@ func writePastPlanner(t *testing.T, db *DB, tx *transaction.Transaction, tableNa
 	}
 }
 
-// countIndexed searches the index on field of tableName for value and reports
-// how many entries it finds.
+// countIndexed searches the index on field of tableName for value and returns
+// the number of entries found.
 func countIndexed(t *testing.T, db *DB, tx *transaction.Transaction, tableName, field string, value query.Constant) int {
 	t.Helper()
 
@@ -589,12 +590,12 @@ func countIndexed(t *testing.T, db *DB, tx *transaction.Transaction, tableName, 
 	}
 }
 
-// openFDs reports how many files under dir the test process has open, skipping
-// the test where the system does not list them under /proc.
+// openFDs returns the number of files under dir that the test process has
+// open. It skips the test on a system that does not list them under /proc.
 //
-// Only files under dir are counted because the other tests leave databases
-// open, and the garbage collector closes their files whenever it gets to them;
-// a count of every file the process has open goes down by those at any time.
+// Only files under dir are counted. The other tests leave databases open, and
+// the garbage collector closes their files at unpredictable times. A count of
+// all open files of the process can therefore drop at any time.
 func openFDs(t *testing.T, dir string) int {
 	t.Helper()
 
@@ -610,8 +611,8 @@ func openFDs(t *testing.T, dir string) int {
 
 	count := 0
 	for _, entry := range entries {
-		// A file closed since the directory was read has no link to follow,
-		// and is not open any more either.
+		// A file that was closed after the directory was read has no link to
+		// read, and is no longer open.
 		target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
 		if err != nil {
 			continue
@@ -640,8 +641,8 @@ func TestDBClose(t *testing.T) {
 		if err := tx.Commit(); err != nil {
 			t.Fatalf("Commit() error = %v", err)
 		}
-		// Without files open to start with, the count after Close would match
-		// whether or not Close closed anything.
+		// If no files were open at the start, the count after Close would
+		// match whether or not Close closed anything.
 		if opened := openFDs(t, dir); opened <= before {
 			t.Fatalf("the process has %d files open before Close, want more than the %d before Open", opened, before)
 		}
@@ -655,8 +656,8 @@ func TestDBClose(t *testing.T) {
 		}
 	})
 
-	// Open hands back no database when it fails, so nothing is left for the
-	// caller to close: the files have to be closed before it returns.
+	// A failed Open returns no database, so the caller has nothing to close.
+	// Open must therefore close the files before it returns.
 	t.Run("given a block size too small for a catalog record, when a database is opened, then it fails and every file it opened is closed", func(t *testing.T) {
 		const tooSmallBlockSize = 100
 		dir := t.TempDir()

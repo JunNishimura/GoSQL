@@ -11,14 +11,14 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// The index catalog's own width. Its three fields are all names, so it is the
-// widest of the catalogs after the view catalog.
+// The slot size of the index catalog. Its three fields are all names, so it
+// is the largest catalog after the view catalog.
 //
 //	index_catalog  4 + (4 + 64) + (4 + 64) + (4 + 64) = 208 bytes
 const indexCatalogSlotSize = 208
 
 // newTestIndexManager builds an index manager over a database that already
-// holds the catalogs, which is where every index starts from.
+// has the catalogs, which every index operation requires.
 func newTestIndexManager(t *testing.T, tx *transaction.Transaction) *IndexManager {
 	t.Helper()
 
@@ -65,14 +65,14 @@ func TestIndexManagerCreateCatalogTable(t *testing.T) {
 		}
 	})
 
-	// The layout is read back rather than the rows, because reading it back is
-	// what every later call does first: the index catalog is an ordinary table,
-	// so writing or reading an index means opening a scan on it.
+	// The test reads the layout and not the rows, because every later call
+	// starts by reading the layout. The index catalog is an ordinary table,
+	// so reading or writing an index opens a scan of it.
 	//
-	// Two of its three fields are the ones the other catalogs already name. An
-	// index catalog row says that an index of some name is on a field of a
-	// table, and the field and the table are named here the way they are named
-	// everywhere else.
+	// Two of its three fields have names that the other catalogs already
+	// define. A row of the index catalog states that an index with some name
+	// is on a field of a table, and the field and the table use the same
+	// field names as everywhere else.
 	t.Run("when the index catalog is created, then its layout can be read back through the table manager", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		im := newTestIndexManager(t, tx)
@@ -112,16 +112,16 @@ func TestIndexManagerCreateCatalogTable(t *testing.T) {
 	})
 }
 
-// The second index the tests need, on the other field of the test table. Two
-// indexes of one table is the ordinary case: a table is indexed on whichever
-// of its fields queries ask about.
+// The second index that the tests need, on the other field of the test table.
+// Two indexes on one table is the normal case: a table is indexed on the
+// fields that queries search by.
 const (
 	otherIndexName      = "name_index"
 	otherIndexFieldName = "name"
 )
 
-// newTestIndexManagerWithCatalog builds an index manager whose catalog exists,
-// which is where creating an index starts from.
+// newTestIndexManagerWithCatalog builds an index manager whose catalog
+// exists, which the creation of an index requires.
 func newTestIndexManagerWithCatalog(t *testing.T, tx *transaction.Transaction) *IndexManager {
 	t.Helper()
 
@@ -154,8 +154,8 @@ func TestIndexManagerCreateIndex(t *testing.T) {
 		}
 	})
 
-	// A table may be indexed on more than one of its fields, so a second index
-	// has to sit alongside the first rather than replace it.
+	// A table can be indexed on more than one field, so a second index must
+	// be added to the catalog and must not replace the first.
 	t.Run("given an index the catalog already holds, when a second one on the same table is created, then the catalog holds both", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		im := newTestIndexManagerWithCatalog(t, tx)
@@ -209,8 +209,8 @@ func TestIndexManagerCreateIndex(t *testing.T) {
 		}
 	})
 
-	// The field is named the same, but of another table, so it is another
-	// field, and indexing it does not touch the first index.
+	// The field has the same name but belongs to another table, so it is a
+	// different field. Its index does not affect the first index.
 	t.Run("given an index on a field of a table, when an index on a field of the same name of another table is created, then the catalog holds both", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		im := newTestIndexManagerWithCatalog(t, tx)
@@ -241,9 +241,9 @@ func TestIndexManagerCreateIndex(t *testing.T) {
 	})
 }
 
-// All three of what an index is registered under are names, and the catalog
-// holds each of them to the same length. The index's own name is held to it
-// twice over, since an index is kept as a table and that table is named by it.
+// An index is registered with three names, and the catalog limits each of
+// them to the same length. The index name must fit in two catalogs, because
+// an index is stored as a table with the name of the index.
 func TestIndexManagerRejectsANameLongerThanTheCatalogHolds(t *testing.T) {
 	overlongName := strings.Repeat("a", maxNameLength+1)
 
@@ -290,20 +290,20 @@ func TestIndexManagerRejectsANameLongerThanTheCatalogHolds(t *testing.T) {
 	}
 }
 
-// The other table the read tests need, so that asking for one table's indexes
-// is a matter of picking rows out rather than reading every row there is.
+// The other table that the read tests need. With it, reading the indexes of
+// one table requires selecting rows, not reading every row.
 const (
 	indexedOtherTableName = "other_table"
 	otherTableIndexName   = "title_index"
 	otherTableFieldName   = "title"
 )
 
-// newTestIndexManagerWithIndexes builds a database holding two indexed tables:
-// the test table, indexed on both of its fields, and another table indexed on
-// its one field.
+// newTestIndexManagerWithIndexes builds a database with two indexed tables:
+// the test table, indexed on both its fields, and another table, indexed on
+// its only field.
 //
-// The test table is given records, since what an index costs is worked out from
-// the measurements of the table it is on rather than from the index itself.
+// The test table gets records, because the cost of an index is estimated
+// from the statistics of its table and not from the index itself.
 func newTestIndexManagerWithIndexes(t *testing.T, tx *transaction.Transaction) *IndexManager {
 	t.Helper()
 
@@ -362,8 +362,8 @@ func TestIndexManagerGetIndexInfo(t *testing.T) {
 		}
 	})
 
-	// The catalog holds every table's indexes together, so reading one table's
-	// means picking its rows out of all of them.
+	// The catalog holds the indexes of all tables together, so reading the
+	// indexes of one table means selecting its rows from all rows.
 	t.Run("given another table that is indexed too, when one table's indexes are asked for, then the other table's are not among them", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		im := newTestIndexManagerWithIndexes(t, tx)
@@ -385,8 +385,8 @@ func TestIndexManagerGetIndexInfo(t *testing.T) {
 		}
 	})
 
-	// A table with no index is the usual case, not a fault: most tables have
-	// none, and a planner asks about every table it reads.
+	// A table with no index is the usual case and not an error: most tables
+	// have none, and a planner asks about every table it reads.
 	t.Run("given a table nothing indexes, when its indexes are asked for, then none come back and no error", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		im := newTestIndexManagerWithCatalog(t, tx)
@@ -404,9 +404,9 @@ func TestIndexManagerGetIndexInfo(t *testing.T) {
 		}
 	})
 
-	// What comes back has to be costed from the table it is on. Nothing about
-	// an index says how many records it holds; that is the table's to say, and
-	// the whole reason this manager needs the statistics manager.
+	// The returned info must be costed from its table. An index does not
+	// record how many records it holds. The table statistics provide that,
+	// which is why this manager needs the statistics manager.
 	//
 	//	records                  9
 	//	distinct values          1 + 9/3 = 4

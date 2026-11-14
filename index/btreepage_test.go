@@ -159,9 +159,9 @@ func TestBTreePageInsertLeaf(t *testing.T) {
 				"'abcdefghij' " + recordmanager.NewRecordID(0, 1).String(),
 			},
 		},
-		// Ten characters of three bytes each are thirty bytes, well over ten, so
-		// a limit counted in bytes would refuse what the field was declared to
-		// hold.
+		// Ten characters of three bytes each take thirty bytes, well over ten.
+		// A limit counted in bytes would reject a value that fits the declared
+		// length.
 		{
 			name:     "given an empty leaf page on a varchar field of 10 characters, when an entry for 10 multi-byte characters is inserted, then the page holds it",
 			layout:   newTestVarcharIndexLayout,
@@ -509,9 +509,10 @@ func TestBTreePageFindSlotBefore(t *testing.T) {
 	}
 }
 
-// A block of testBlockSize bytes starts with a header of 8. A record of an
-// index on an int field is 16 bytes, so 24 of them fit in the 392 left and a
-// 25th does not; one on a varchar field of 10 characters is 56 bytes, and 7 fit.
+// A block of testBlockSize bytes starts with an 8-byte header. A record of an
+// index on an int field is 16 bytes, so 24 records fit in the remaining 392
+// bytes and a 25th does not. A record of an index on a varchar field of 10
+// characters is 56 bytes, so 7 fit.
 func TestBTreePageIsFull(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -843,7 +844,7 @@ func TestBTreePageDelete(t *testing.T) {
 	})
 }
 
-// newTestVarcharDirLayout builds the layout of the directory records of a
+// newTestVarcharDirLayout builds the layout of the directory entries of a
 // B-tree on a varchar field of 10 characters.
 func newTestVarcharDirLayout(t *testing.T) *recordmanager.Layout {
 	t.Helper()
@@ -859,8 +860,8 @@ func newTestVarcharDirLayout(t *testing.T) *recordmanager.Layout {
 	return recordmanager.NewLayout(s)
 }
 
-// newTestDirLayout builds the layout of the directory records of a B-tree on an
-// int field: the child block, and the value the entries under it start from.
+// newTestDirLayout builds the layout of the directory entries of a B-tree on
+// an int field: a child block number and a key.
 func newTestDirLayout(t *testing.T) *recordmanager.Layout {
 	t.Helper()
 
@@ -875,8 +876,9 @@ func newTestDirLayout(t *testing.T) *recordmanager.Layout {
 	return recordmanager.NewLayout(s)
 }
 
-// dirEntries reads every record of a directory page in slot order, each
-// written out as its value and its child block so that they compare with ==.
+// dirEntries reads every entry of a directory page in slot order. Each entry
+// is formatted as its key and its child block, so that entries can be
+// compared with ==.
 func dirEntries(t *testing.T, page *btreePage) []string {
 	t.Helper()
 
@@ -902,7 +904,7 @@ func dirEntries(t *testing.T, page *btreePage) []string {
 }
 
 // newTestVarcharIndexLayout builds the layout of an index on a varchar field
-// of 10 characters, laid out the way the catalog lays one out.
+// of 10 characters, in the same way as the catalog.
 func newTestVarcharIndexLayout(t *testing.T) *recordmanager.Layout {
 	t.Helper()
 
@@ -920,8 +922,9 @@ func newTestVarcharIndexLayout(t *testing.T) *recordmanager.Layout {
 	return recordmanager.NewLayout(s)
 }
 
-// leafEntries reads every record of a leaf page in slot order, each written
-// out as its value and its record id so that they compare with ==.
+// leafEntries reads every entry of a leaf page in slot order. Each entry is
+// formatted as its key and its record id, so that entries can be compared
+// with ==.
 func leafEntries(t *testing.T, page *btreePage) []string {
 	t.Helper()
 
@@ -946,8 +949,8 @@ func leafEntries(t *testing.T, page *btreePage) []string {
 	return got
 }
 
-// assertHeader opens a page on blk afresh and checks the flag and the number of
-// records its header holds.
+// assertHeader opens a new page on blk and checks the flag and the record
+// count in its header.
 func assertHeader(
 	t *testing.T,
 	tx *transaction.Transaction,

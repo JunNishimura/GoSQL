@@ -9,8 +9,9 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// The terms the predicate cases are built from, read against the record
-// newTestScanOverOneRecord writes: id 42 and name "alice".
+// The terms that the predicate cases are built from. They are evaluated
+// against the record that newTestScanOverOneRecord writes: id 42 and name
+// "alice".
 var (
 	termThatHolds       = NewTerm(NewFieldExpression("id"), NewConstantExpression(NewIntConstant(testRecordID)))
 	termThatAlsoHolds   = NewTerm(NewFieldExpression("name"), NewConstantExpression(NewStringConstant(testRecordName)))
@@ -45,8 +46,8 @@ func TestPredicateIsSatisfied(t *testing.T) {
 			slot: 0,
 			want: true,
 		},
-		// A predicate of no terms has nothing to read, so it must answer
-		// without going to the scan at all.
+		// A predicate with no terms has nothing to evaluate, so it must
+		// return its result without reading the scan.
 		{
 			name: "given a predicate of no terms and a scan that is on no record, when it is tested, then it is still satisfied",
 			pred: NewPredicate(),
@@ -83,11 +84,11 @@ func TestPredicateIsSatisfied(t *testing.T) {
 			slot:    0,
 			wantErr: recordmanager.ErrFieldNotFound,
 		},
-		// Reading stops at the first term that fails, so a term after one that
-		// has already settled the answer is never evaluated. The unreadable
-		// term here stands for the field reads that are saved: which fields a
-		// query names is settled before it runs, so a term that could not be
-		// read is not a fault being hidden.
+		// Evaluation stops at the first term that fails, so a term after it is
+		// never evaluated. The unreadable term here represents the field reads
+		// that are saved. The fields of a query are validated before it runs,
+		// so skipping a term that could not be read does not hide a real
+		// error.
 		{
 			name: "given a predicate whose first term does not hold and whose second names a field the table does not have, when it is tested, then it is not satisfied rather than reporting the missing field",
 			pred: NewPredicate(termThatDoesNotHold, termOnAMissingField),
@@ -145,10 +146,10 @@ func TestPredicateConjoinWith(t *testing.T) {
 			right: NewPredicate(termThatAlsoHolds),
 			want:  false,
 		},
-		// A predicate of no terms adds no condition, so conjoining leaves the
-		// other side answering as it did on its own. Both answers are here
-		// because either one alone would also be given by a conjunction that
-		// had thrown a side away.
+		// A predicate with no terms adds no condition, so the conjunction
+		// gives the same results as the other side alone. Both results are
+		// checked, because a conjunction that dropped one side would also
+		// produce either result alone.
 		{
 			name:  "given a predicate of no terms, when a predicate of one term that does not hold is conjoined onto it, then the result is not satisfied",
 			left:  NewPredicate(),
@@ -183,10 +184,10 @@ func TestPredicateConjoinWith(t *testing.T) {
 		})
 	}
 
-	// A predicate is a value, so conjoining builds another one rather than
-	// growing the one it was called on. Conjoining twice onto the same
-	// predicate is what tells that apart from an implementation that appends
-	// into terms the two results share.
+	// A predicate is a value, so ConjoinWith creates a new predicate and does
+	// not modify its receiver. Conjoining the same predicate twice
+	// distinguishes this from an implementation that appends to terms that
+	// both results share.
 	t.Run("given one predicate conjoined with two others in turn, then neither result holds the other's terms and the predicate conjoined onto is unchanged", func(t *testing.T) {
 		base := NewPredicate(termThatHolds)
 
@@ -211,9 +212,9 @@ func TestPredicateString(t *testing.T) {
 		pred Predicate
 		want string
 	}{
-		// A predicate of no terms is the absence of a where clause, and a
-		// caller printing a query writes no "where" for it. Anything else here
-		// would be SQL nobody asked for.
+		// A predicate with no terms represents a missing where clause, and
+		// code that prints a query omits "where" for it. Any other output
+		// here would be SQL that nobody wrote.
 		{
 			name: "given a predicate of no terms, it is empty, since there is no condition to write",
 			pred: NewPredicate(),
@@ -256,8 +257,8 @@ func TestPredicateTerms(t *testing.T) {
 		}
 	})
 
-	// A planner takes a predicate apart through this, so the slice it hands out
-	// must not be the one the predicate reads from.
+	// A planner splits a predicate through Terms, so the returned slice must
+	// not be the slice that the predicate itself reads.
 	t.Run("given a predicate, when the slice of its terms is written to, then the predicate is unchanged", func(t *testing.T) {
 		pred := NewPredicate(termThatHolds)
 
@@ -282,17 +283,17 @@ func TestPredicateSelectSubPred(t *testing.T) {
 			wantTerms: []Term{termThatHolds, termThatAlsoHolds},
 			wantOK:    true,
 		},
-		// The term the schema cannot answer sits between the two it can, so
-		// leaving it out has to keep the order of those on either side.
+		// The term that the schema cannot evaluate is between the two that it
+		// can. Its removal must keep the order of the other two.
 		{
 			name:      "given a schema with id and name fields, when the sub-predicate of a predicate with a term naming a field it does not have is taken, then that term is left out and the rest keep their order",
 			pred:      NewPredicate(termThatHolds, termOnAMissingField, termThatAlsoHolds),
 			wantTerms: []Term{termThatHolds, termThatAlsoHolds},
 			wantOK:    true,
 		},
-		// No term to test is told apart from a predicate of no terms, which
-		// holds everywhere: a planner reads it as nothing to select on, not as
-		// a select that keeps every record.
+		// "No terms to test" is distinguished from a predicate with no terms,
+		// which holds for every record. A planner must treat it as "no
+		// select", not as a select that keeps every record.
 		{
 			name:   "given a schema with id and name fields, when the sub-predicate of a predicate whose only term names a field it does not have is taken, then there is none",
 			pred:   NewPredicate(termOnAMissingField),
@@ -323,9 +324,9 @@ func TestPredicateSelectSubPred(t *testing.T) {
 	}
 }
 
-// newTestDeptSchema builds the schema a table is joined to the one of
-// newTestLayout on: "dept_id" is equated with "id" by a join term, and
-// "dept_name" is there so the schema holds more than the field it is joined on.
+// newTestDeptSchema builds the schema of a table that is joined to the table
+// of newTestLayout. A join term equates "dept_id" with "id". "dept_name"
+// exists so that the schema has more than the join field.
 func newTestDeptSchema(t *testing.T) *recordmanager.Schema {
 	t.Helper()
 
@@ -360,8 +361,8 @@ func TestPredicateJoinSubPred(t *testing.T) {
 			wantTerms: []Term{joinTerm},
 			wantOK:    true,
 		},
-		// Either schema alone answers the terms mixed in here, so they are
-		// tested as each table is read and are no business of the join.
+		// One schema alone can evaluate each of the other terms here. They
+		// are tested while each table is read, and do not belong to the join.
 		{
 			name:      "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate mixing join terms with terms on one schema is taken, then it is the join terms in order, with a field of the second schema on either side",
 			pred:      NewPredicate(termThatHolds, joinTerm, deptTerm, reversedJoinTerm),
@@ -373,9 +374,9 @@ func TestPredicateJoinSubPred(t *testing.T) {
 			pred:   NewPredicate(termThatHolds, deptTerm),
 			wantOK: false,
 		},
-		// Neither schema answers this term alone, but the two joined do not
-		// either, since one of its fields is in neither. It belongs to a join
-		// with some third table, not this one.
+		// Neither schema can evaluate this term alone, and the two joined
+		// cannot either, because one of its fields is in neither. The term
+		// belongs to a join with a third table.
 		{
 			name:   "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate equating id with a field neither has is taken, then there is none",
 			pred:   NewPredicate(termOnAThirdTable),

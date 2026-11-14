@@ -86,8 +86,8 @@ func TestBTreeLeafNext(t *testing.T) {
 		})
 	}
 
-	// Every block of an overflow chain holds entries for one value only, which
-	// is the value of the first entry of the leaf the chain starts from.
+	// Every block of an overflow chain holds entries for one key only: the
+	// key of the first entry of the leaf at the head of the chain.
 	chainTests := []struct {
 		name      string
 		chain     [][]entry
@@ -278,10 +278,10 @@ func TestBTreeLeafInsert(t *testing.T) {
 	}
 }
 
-// A leaf on an int field holds 24 entries, so each case here fills one with 23
-// and inserts a 24th, the greatest, which fills it and splits it. The split
-// starts from the middle, slot 12, and is moved so that it does not part two
-// entries filed under the same value.
+// A leaf on an int field holds 24 entries. Each case here fills a leaf with
+// 23 entries and inserts a 24th with the greatest key. The leaf is then full
+// and splits. The split position starts in the middle, at slot 12, and is
+// adjusted so that it does not separate two entries with the same key.
 func TestBTreeLeafInsertSplit(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -351,21 +351,21 @@ func TestBTreeLeafInsertSplit(t *testing.T) {
 	}
 }
 
-// A leaf whose entries are all filed under one value cannot be split without
-// parting two of them, so a 24th entry for that value keeps the leaf's first
-// entry, the one just inserted, and moves the rest into an overflow block put
-// at the head of the leaf's chain.
+// A leaf whose entries all have the same key cannot be split without
+// separating two of them. A 24th entry for that key therefore makes the leaf
+// overflow. The leaf keeps its first entry, which is the one just inserted.
+// The rest move to a new overflow block at the head of the leaf's chain.
 func TestBTreeLeafInsertOverflow(t *testing.T) {
 	tests := []struct {
 		name string
-		// chain is the leaf the entry goes into, then the blocks it already
-		// overflows into.
+		// chain is the leaf that receives the entry, followed by its existing
+		// overflow blocks.
 		chain [][]entry
-		// wantFlag is the block the leaf overflows into afterwards, the one
+		// wantFlag is the leaf's overflow block after the insert: the block
 		// just appended.
 		wantFlag int32
-		// wantOverflowFlag is the block the appended one overflows into: the
-		// one the leaf overflowed into before, or none.
+		// wantOverflowFlag is the overflow block of the appended block: the
+		// leaf's previous overflow block, or none.
 		wantOverflowFlag int32
 	}{
 		{
@@ -407,8 +407,8 @@ func TestBTreeLeafInsertOverflow(t *testing.T) {
 			overflowBlk := filemanager.NewBlockId(testBTreeFile, int(tt.wantFlag))
 			assertHeader(t, tx, overflowBlk, layout, tt.wantOverflowFlag, 23)
 
-			// Every entry is still found, the new one first, then the leaf's
-			// old ones, then those of the blocks it already overflowed into.
+			// Every entry is still found: the new one first, then the leaf's
+			// old entries, then those of its previous overflow blocks.
 			want := []string{inserted.String()}
 			for _, entries := range tt.chain {
 				for _, e := range entries {
@@ -429,8 +429,9 @@ func TestBTreeLeafInsertOverflow(t *testing.T) {
 	}
 }
 
-// The entries a leaf overflows into are all for the value of its first entry,
-// so another value inserted there has to go somewhere the chain does not cover.
+// All entries in a leaf's overflow blocks have the key of the leaf's first
+// entry. An entry with another key that is inserted into the leaf must
+// therefore go to a place outside the chain.
 func TestBTreeLeafInsertIntoOverflowing(t *testing.T) {
 	t.Run("given a leaf of 2 entries for 20 that overflows into a block of 2 more, when an entry for 10 is inserted, then the leaf keeps only it, and the entries for 20 move with their chain to a new block that comes back filed under 20", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -536,8 +537,8 @@ func TestBTreeLeafDelete(t *testing.T) {
 			want:    all,
 			wantErr: ErrEntryNotFound,
 		},
-		// The record id is one an entry points to, but filed under 10, so an
-		// entry for 20 with it is not there.
+		// An entry points to this record id, but its key is 10. No entry for
+		// 20 has this record id.
 		{
 			name:    "given a leaf holding entries for 10, 20, 20 and 30, when an entry for 20 pointing to the record the entry for 10 points to is deleted, then it reports ErrEntryNotFound and all four are left",
 			deleted: entry{value: query.NewIntConstant(20), rid: recordmanager.NewRecordID(0, 1)},
@@ -585,17 +586,17 @@ func TestBTreeLeafDelete(t *testing.T) {
 	}
 }
 
-// An overflow block left with no entries is taken out of its chain, so that no
-// block in a chain is empty and every one of them says by its first entry
-// which value it holds.
+// An overflow block with no entries left is unlinked from its chain. No block
+// in a chain is then empty, and the first entry of every block identifies the
+// key that the block holds.
 func TestBTreeLeafDeleteFromOverflow(t *testing.T) {
 	tests := []struct {
 		name string
-		// chain is the leaf, then the blocks it overflows into, in order.
+		// chain is the leaf, followed by its overflow blocks in order.
 		chain   [][]entry
 		deleted *recordmanager.RecordID
-		// wantFlags is the flag of each block of chain afterwards. Those of a
-		// block taken out of the chain are not checked, and are left as -2.
+		// wantFlags is the flag of each block of chain after the delete. The
+		// flag of an unlinked block is not checked, and is given as -2.
 		wantFlags []int32
 		want      []string
 	}{
@@ -663,21 +664,21 @@ func TestBTreeLeafDeleteFromOverflow(t *testing.T) {
 	}
 }
 
-// A chain is found by the value of its leaf's first entry, so a delete that
-// takes the last entry for that value out of the leaf brings one back from the
-// block the leaf overflows into. Which one comes back is left to the leaf, so
-// the record ids read are compared without their order.
+// A chain is found through the key of its leaf's first entry. A delete that
+// removes the leaf's last entry for that key therefore moves one entry back
+// from the overflow block. The leaf chooses which entry to move, so the
+// record ids read are compared without regard to order.
 func TestBTreeLeafDeleteFromOverflowingLeaf(t *testing.T) {
 	tests := []struct {
 		name string
-		// leaf is the leaf's own entries, and overflow the blocks it overflows
-		// into, in order.
+		// leaf is the leaf's own entries. overflow is its overflow blocks, in
+		// order.
 		leaf     []entry
 		overflow [][]entry
 		deleted  *recordmanager.RecordID
 		wantFlag int32
-		// want is what reading 20 from the leaf comes to afterwards, and
-		// want25 what reading 25 does.
+		// want is the result of reading 20 from the leaf after the delete, and
+		// want25 is the result of reading 25.
 		want   []string
 		want25 []string
 	}{
@@ -757,8 +758,8 @@ func TestBTreeLeafDeleteFromOverflowingLeaf(t *testing.T) {
 	}
 }
 
-// assertLeafRecordIDsInAnyOrder opens the leaf in blk for searchKey and checks
-// the record ids it reads, whatever order they come in.
+// assertLeafRecordIDsInAnyOrder opens the leaf in blk for searchKey and
+// checks the record ids it reads, in any order.
 func assertLeafRecordIDsInAnyOrder(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -831,8 +832,8 @@ func assertLeafRecordIDs(
 	}
 }
 
-// entriesFor is n entries filed under v, pointing to slots 0 to n-1 of block
-// blkNum of the indexed table.
+// entriesFor returns n entries for key v. They point to slots 0 to n-1 of
+// block blkNum of the indexed table.
 func entriesFor(v int32, blkNum, n int) []entry {
 	entries := make([]entry, n)
 	for i := range entries {
@@ -842,8 +843,8 @@ func entriesFor(v int32, blkNum, n int) []entry {
 	return entries
 }
 
-// leafValues reads the values of every entry in the leaf block blk, in slot
-// order, or none if the file has no such block.
+// leafValues reads the key of every entry in the leaf block blk, in slot
+// order. It returns none if the file has no such block.
 func leafValues(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -887,7 +888,7 @@ func leafValues(
 	return got
 }
 
-// seq is the ints from from to to, both included.
+// seq returns the ints from from to to, inclusive.
 func seq(from, to int32) []int32 {
 	s := make([]int32, 0, to-from+1)
 	for v := from; v <= to; v++ {
@@ -897,7 +898,7 @@ func seq(from, to int32) []int32 {
 	return s
 }
 
-// rep is v, n times over.
+// rep returns a slice that holds v n times.
 func rep(v int32, n int) []int32 {
 	s := make([]int32, n)
 	for i := range s {
@@ -907,7 +908,7 @@ func rep(v int32, n int) []int32 {
 	return s
 }
 
-// concat is the slices one after another.
+// concat returns the concatenation of the slices.
 func concat(parts ...[]int32) []int32 {
 	var s []int32
 	for _, part := range parts {
@@ -917,9 +918,9 @@ func concat(parts ...[]int32) []int32 {
 	return s
 }
 
-// newTestLeafChain appends one leaf block per element of chain to
-// testBTreeFile, each flagged to overflow into the next and the last into
-// none, and returns the first.
+// newTestLeafChain appends one leaf block to testBTreeFile for each element
+// of chain, and returns the first block. The flag of each block points to the
+// next block as its overflow block, and the last block has none.
 func newTestLeafChain(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -947,8 +948,9 @@ func newTestLeafChain(
 	return blks[0]
 }
 
-// newTestLeafBlock appends a leaf block with no overflow to testBTreeFile and
-// fills it with entries, in the order given, which the caller keeps sorted.
+// newTestLeafBlock appends a leaf block with no overflow block to
+// testBTreeFile and fills it with entries in the order given. The caller must
+// pass them sorted.
 func newTestLeafBlock(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -976,9 +978,9 @@ func newTestLeafBlock(
 	return blk
 }
 
-// leafRecordIDs moves leaf forward until it runs out of entries for its search
-// key and returns the record ids it came across, written out so that they
-// compare with ==.
+// leafRecordIDs moves leaf forward until it has no more entries for its
+// search key, and returns the record ids it read. They are formatted as
+// strings so that they can be compared with ==.
 func leafRecordIDs(t *testing.T, leaf *btreeLeaf) []string {
 	t.Helper()
 

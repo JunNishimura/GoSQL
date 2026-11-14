@@ -2,22 +2,23 @@ package recordmanager
 
 import "fmt"
 
-// RecordID is where one record sits in a table: which block of the table's
-// file, and which slot of that block.
+// RecordID is the position of one record in a table: a block number in the
+// table's file, and a slot in that block.
 //
-// It names a record without holding it, which is what lets a query keep a list
-// of records it has found and come back to them later, rather than keeping the
-// blocks pinned in the meantime.
+// A record id identifies a record without holding it. A query can therefore
+// keep a list of the records it has found and return to them later, without
+// keeping their blocks pinned.
 //
-// The file is not part of it. A record id only means something alongside the
-// table it came from, so two records of different tables can have the same one,
-// and whoever holds it is expected to know which table that is.
+// The file name is not part of a record id. A record id is only meaningful
+// together with its table, so records of different tables can have the same
+// id. The holder of a record id is expected to know which table it belongs
+// to.
 type RecordID struct {
 	blkNum int
 	slot   int
 }
 
-// NewRecordID returns the id of the record in the given slot of the given
+// NewRecordID returns the id of the record at the given slot of the given
 // block.
 func NewRecordID(blkNum, slot int) *RecordID {
 	return &RecordID{
@@ -26,25 +27,26 @@ func NewRecordID(blkNum, slot int) *RecordID {
 	}
 }
 
-// BlockNumber is the block of the table's file the record sits in.
+// BlockNumber returns the number of the block that holds the record, within
+// the table's file.
 //
-// It is what lets a caller outside this package tell how far through a table a
-// record is, which is how the blocks a table takes up are counted: the last
-// record found is in the last block that holds anything.
+// Callers outside this package use it to determine how far into a table a
+// record is. The number of blocks in a table is counted this way: the last
+// record found is in the last block that holds a record.
 func (r *RecordID) BlockNumber() int {
 	return r.blkNum
 }
 
-// Slot is the slot of that block the record sits in.
+// Slot returns the slot of the record within its block.
 //
-// It goes alongside BlockNumber because the two together are the whole of a
-// record id, and a scan being moved to one needs both: the block to open, and
-// the slot to land on once it is open.
+// The block number and the slot together form the whole record id. A scan
+// that moves to a record id needs both: the block to open, and the slot to
+// position on.
 func (r *RecordID) Slot() int {
 	return r.slot
 }
 
-// Equals reports whether other names the same slot of the same block.
+// Equals reports whether other refers to the same slot of the same block.
 func (r *RecordID) Equals(other *RecordID) bool {
 	return r.blkNum == other.blkNum && r.slot == other.slot
 }

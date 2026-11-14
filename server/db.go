@@ -1,5 +1,5 @@
-// Package server puts the layers of the database together into one that can be
-// opened on a directory.
+// Package server combines the layers of the database into one database that
+// can be opened on a directory.
 package server
 
 import (
@@ -16,13 +16,13 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// logFile is the name of the log, kept in the database directory alongside the
-// tables.
+// logFile is the name of the log file. It is stored in the database directory
+// together with the tables.
 const logFile = "gosql.log"
 
-// DB is a database opened on a directory. It owns the managers every
-// transaction on it shares: one of each, since two buffer pools or two lock
-// tables over the same files would each be blind to what the other holds.
+// DB is a database opened on a directory. It owns the managers that all its
+// transactions share. There is exactly one of each: two buffer pools or two
+// lock tables over the same files would not see each other's state.
 type DB struct {
 	fileManager     *filemanager.FileManager
 	logManager      *logmanager.LogManager
@@ -35,16 +35,16 @@ type DB struct {
 	lastTxNum int
 }
 
-// Open opens the database kept in dir, creating the directory if there is none,
-// with blocks of blockSize bytes and a pool of numBuffers buffers.
+// Open opens the database stored in dir, with blocks of blockSize bytes and a
+// pool of numBuffers buffers. It creates the directory if it does not exist.
 //
-// A new database gets its catalogs; one that already existed is recovered, since
-// it may have been left by a crash with changes on disk that were never
-// committed. Either is done in a transaction of its own before Open returns, so
-// no other transaction sees the database before it is ready.
+// For a new database, Open creates the catalogs. An existing database is
+// recovered, because a crash can have left uncommitted changes on disk. Both
+// run in a separate transaction before Open returns, so no other transaction
+// sees the database before it is ready.
 //
-// A failed Open closes every file it opened before returning, since it hands
-// back no database for the caller to close.
+// A failed Open closes every file it opened before it returns, because it
+// returns no database that the caller could close.
 func Open(dir string, blockSize, numBuffers int) (_ *DB, err error) {
 	fm, err := filemanager.NewFileManager(dir, blockSize)
 	if err != nil {
@@ -98,13 +98,15 @@ func Open(dir string, blockSize, numBuffers int) (_ *DB, err error) {
 	return db, nil
 }
 
-// NewTransaction starts a transaction on the database under a number no other
-// transaction since Open has been given, and over the lock table every other
-// one shares. It is safe to call from more than one goroutine.
+// NewTransaction starts a transaction on the database. The transaction gets a
+// number that no other transaction has received since Open, and uses the lock
+// table that all transactions share. NewTransaction is safe for concurrent
+// use.
 //
-// Numbers start again from 1 each time the database is opened. That is safe
+// The numbers restart from 1 each time the database is opened. This is safe
 // because Open ends recovery with a checkpoint, and recovery never reads the
-// log past one, so the numbers from before are never looked at again.
+// log before the last checkpoint. The earlier numbers are therefore never
+// read again.
 func (db *DB) NewTransaction() (*transaction.Transaction, error) {
 	db.mu.Lock()
 	db.lastTxNum++
@@ -114,11 +116,10 @@ func (db *DB) NewTransaction() (*transaction.Transaction, error) {
 	return transaction.NewTransaction(db.fileManager, db.logManager, db.bufferManager, db.lockTable, txNum)
 }
 
-// Close closes every file the database has opened.
+// Close closes every file that the database has opened.
 //
-// It does not end transactions still running; whoever started them has to
-// commit or roll them back first, or what they wrote is left for the recovery
-// of the next Open to undo.
+// It does not end running transactions. Their owners must commit or roll them
+// back first. Otherwise the recovery of the next Open undoes their changes.
 func (db *DB) Close() error {
 	return db.fileManager.Close()
 }
@@ -139,8 +140,9 @@ func (db *DB) MetadataManager() *metadatamanager.MetadataManager {
 	return db.metadataManager
 }
 
-// Planner is the way SQL text is run against the database. Every caller gets
-// the same one, which plans through the database's own metadata manager.
+// Planner returns the planner that runs SQL text against the database. Every
+// caller gets the same planner, which uses the metadata manager of the
+// database.
 func (db *DB) Planner() *plan.Planner {
 	return db.planner
 }

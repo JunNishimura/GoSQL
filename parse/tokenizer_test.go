@@ -49,8 +49,8 @@ func TestTokenizerNext(t *testing.T) {
 				{kind: tokenWord, text: "select"},
 			},
 		},
-		// Keywords and field names are matched without regard to case, so the
-		// tokenizer settles that once rather than leaving it to every match.
+		// Keywords and field names are matched case-insensitively. The
+		// tokenizer normalizes the case once, so that no later match has to.
 		{
 			name:  "when a word in upper case is read, then its text is in lower case",
 			input: "SELECT StudentName",
@@ -96,8 +96,8 @@ func TestTokenizerNext(t *testing.T) {
 				{kind: tokenWord, text: "abc"},
 			},
 		},
-		// Unlike a word, a string constant is a value as it is stored, so its
-		// case is kept.
+		// Unlike a word, a string constant is a value that is stored as
+		// written, so its case is kept.
 		{
 			name:  "when text in single quotes is read, then it is a string token without the quotes and with its case kept",
 			input: "'Joe Smith'",
@@ -112,8 +112,8 @@ func TestTokenizerNext(t *testing.T) {
 				{kind: tokenString, text: ""},
 			},
 		},
-		// A dot is what separates a table from a field, so it must not be
-		// taken into the word on either side.
+		// A dot separates a table name from a field name, so it must not
+		// become part of the word on either side.
 		{
 			name:  "when a dot sits between two words, then it is a delimiter of its own",
 			input: "student.sname",
@@ -174,8 +174,8 @@ func TestTokenizerNext(t *testing.T) {
 		}
 	})
 
-	// The lexer looks at the current token after the last one has been
-	// eaten, so reaching the end must not be something that happens once.
+	// The lexer reads the current token after the last one was consumed,
+	// so the end of the input must be reported on every call, not only once.
 	t.Run("given a tokenizer at the end of its input, when next is called again, then it is still the end of input", func(t *testing.T) {
 		tz := newTokenizer("a")
 

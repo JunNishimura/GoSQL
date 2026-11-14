@@ -2,8 +2,8 @@ package parse
 
 var _ UpdateCommand = CreateViewData{}
 
-// CreateViewData is what a create view statement asks for: a view of the given
-// name, standing for the query it was defined as.
+// CreateViewData is the content of a create view statement: a view with the
+// given name, defined by a query.
 type CreateViewData struct {
 	viewName string
 	qd       QueryData
@@ -11,13 +11,13 @@ type CreateViewData struct {
 
 func (CreateViewData) isUpdateCommand() {}
 
-// ViewName is the view to create.
+// ViewName returns the name of the view to create.
 func (d CreateViewData) ViewName() string {
 	return d.viewName
 }
 
-// ViewDef is the query the view stands for, written out as SQL, which is the
-// form a view is stored in.
+// ViewDef returns the query of the view as SQL text, which is the form in
+// which a view is stored.
 func (d CreateViewData) ViewDef() string {
 	return d.qd.String()
 }
