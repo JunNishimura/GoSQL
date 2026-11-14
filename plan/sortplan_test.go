@@ -52,8 +52,8 @@ func TestSortPlanOpen(t *testing.T) {
 		})
 	}
 
-	// The names are "name" followed by the id, so as strings "name10" comes
-	// before "name2", and an order of names is not an order of ids.
+	// The names are "name" followed by the id. As strings, "name10" sorts
+	// before "name2", so the order by name differs from the order by id.
 	t.Run("given a table of 20 records in order of id, when it is sorted by name, then they come back in order of name as text, each with its id", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -72,9 +72,9 @@ func TestSortPlanOpen(t *testing.T) {
 	})
 }
 
-// A sort reads its records from temp tables laid out like a materialization's,
-// so reading them costs what reading a materialization does. The test schema
-// fits 15 records to a block.
+// A sort reads its records from temp tables that are stored like a
+// materialization, so a read costs the same as a read of a materialization.
+// With the test schema, 15 records fit in a block.
 func TestSortPlanBlocksAccessed(t *testing.T) {
 	t.Run("given a plan of 16 records, when its sort is asked for the blocks accessed, then they are the 2 blocks of its materialization", func(t *testing.T) {
 		src := newTestFakePlanOfTestSchema(t)
@@ -118,8 +118,8 @@ func TestSortPlanSchema(t *testing.T) {
 	})
 }
 
-// createTestTableOfIDs makes the test table and writes a record for each id,
-// in the order given, whose name is "name" followed by the id.
+// createTestTableOfIDs creates the test table and writes one record for each
+// id, in the order given. The name of a record is "name" followed by its id.
 func createTestTableOfIDs(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, ids []int32) {
 	t.Helper()
 
@@ -151,7 +151,8 @@ func createTestTableOfIDs(t *testing.T, tx *transaction.Transaction, mm *metadat
 	}
 }
 
-// mustOpenSortPlan opens a sort plan, failing the test if it gives no scan.
+// mustOpenSortPlan opens a sort plan, and fails the test if Open returns no
+// scan.
 func mustOpenSortPlan(t *testing.T, p *SortPlan) query.Scan {
 	t.Helper()
 

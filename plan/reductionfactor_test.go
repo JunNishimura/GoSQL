@@ -8,8 +8,8 @@ import (
 )
 
 func TestReductionFactor(t *testing.T) {
-	// "a" holds 10 distinct values and "b" holds 4. They differ so that a case
-	// reading the wrong field, or the smaller of two, gives a wrong answer.
+	// "a" has 10 distinct values and "b" has 4. They differ so that a case that
+	// reads the wrong field, or the smaller of the two, gets a wrong result.
 	p := fakePlan{
 		distinctValues: map[string]int{
 			"a": 10,
@@ -91,9 +91,9 @@ func TestReductionFactor(t *testing.T) {
 			),
 			want: 40,
 		},
-		// Multiplying math.MaxInt by anything above 1 overflows, and an
-		// overflowed factor could come out small or negative, costing a plan
-		// that keeps nothing as one that keeps a lot.
+		// math.MaxInt times anything above 1 overflows. An overflowed factor
+		// could be small or negative, and a plan that keeps no records would
+		// then be costed as one that keeps many.
 		{
 			name: "given a predicate of two unequal constants and a term on a field, when its reduction factor is worked out, then it stays at math.MaxInt rather than overflowing",
 			pred: query.NewPredicate(

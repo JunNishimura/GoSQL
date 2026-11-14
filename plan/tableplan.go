@@ -9,11 +9,11 @@ import (
 
 var _ Plan = (*TablePlan)(nil)
 
-// TablePlan is the plan of reading a stored table from start to end.
+// TablePlan is the plan for a full scan of a stored table.
 //
-// Its numbers are the table's statistics as they stood when the plan was
-// made. They are read once, here, rather than at every question, so that one
-// plan answers alike however many times a planner asks it.
+// Its estimates are the statistics of the table at the time the plan was
+// created. They are read once, in the constructor, and not on every call. A
+// plan therefore gives the same answers however often a planner asks.
 type TablePlan struct {
 	tx        *transaction.Transaction
 	tableName string
@@ -21,8 +21,8 @@ type TablePlan struct {
 	stats     *metadatamanager.TableStatistics
 }
 
-// NewTablePlan returns the plan of reading tableName, reading its layout and
-// statistics through mm.
+// NewTablePlan returns the plan for a scan of tableName. It reads the layout
+// and the statistics of the table through mm.
 func NewTablePlan(tx *transaction.Transaction, tableName string, mm *metadatamanager.MetadataManager) (*TablePlan, error) {
 	layout, err := mm.GetLayout(tx, tableName)
 	if err != nil {
@@ -42,32 +42,32 @@ func NewTablePlan(tx *transaction.Transaction, tableName string, mm *metadataman
 	}, nil
 }
 
-// Open returns a table scan over the table.
+// Open returns a table scan of the table.
 //
-// The scan is returned as a query.Scan to satisfy Plan, but it is a
-// query.UpdateScan underneath, which is what an update planner asserts it to
-// before writing through it.
+// The scan is returned as a query.Scan to satisfy Plan. Its dynamic type also
+// implements query.UpdateScan, and an update planner asserts that type before
+// it writes through the scan.
 func (tp *TablePlan) Open() (query.Scan, error) {
 	return query.NewTableScan(tp.tx, tp.tableName, tp.layout)
 }
 
-// BlocksAccessed is the number of blocks the table takes up.
+// BlocksAccessed returns the number of blocks of the table.
 func (tp *TablePlan) BlocksAccessed() int {
 	return tp.stats.BlocksAccessed()
 }
 
-// RecordsOutput is the number of records the table holds.
+// RecordsOutput returns the number of records in the table.
 func (tp *TablePlan) RecordsOutput() int {
 	return tp.stats.RecordsOutput()
 }
 
-// DistinctValues is the statistics' guess at how many different values
-// fieldName holds in the table.
+// DistinctValues returns the statistics' estimate of the number of distinct
+// values of fieldName in the table.
 func (tp *TablePlan) DistinctValues(fieldName string) int {
 	return tp.stats.DistinctValues(fieldName)
 }
 
-// Schema is the schema the table was created with.
+// Schema returns the schema that the table was created with.
 func (tp *TablePlan) Schema() *recordmanager.Schema {
 	return tp.layout.Schema()
 }

@@ -47,13 +47,14 @@ func TestIndexSelectPlanOpen(t *testing.T) {
 	}
 }
 
-// The test table holds 10 records, and the guess at the distinct values of a
-// field of it is 1 + 10/3 = 4, so a search for one value gives back 10/4 = 2
-// of them.
+// The test table holds 10 records, and the estimated number of distinct
+// values of each field is 1 + 10/3 = 4. A search for one value therefore
+// returns 10/4 = 2 records.
 //
-// The index on id is a B-tree whose records are 16 bytes, so 50 go in a block
-// of 800 and the 10 take one. A search reads the root and the leaf, 2 blocks,
-// and then one block of the table for each record it gives back, 2 more.
+// The index on id is a B-tree with records of 16 bytes. 50 records fit in a
+// block of 800 bytes, so the 10 records take one block. A search reads the
+// root and the leaf, which is 2 blocks, and then one table block for each
+// returned record, which is 2 more.
 func TestIndexSelectPlanCosts(t *testing.T) {
 	t.Run("given a table of 10 records indexed on id, when the plan of one value is costed, then it reads the index and a block per record, and gives back a value's share of the records", func(t *testing.T) {
 		tx := newTestTransaction(t)
@@ -92,9 +93,9 @@ func TestIndexSelectPlanSchema(t *testing.T) {
 	})
 }
 
-// newTestIndexSelectPlan makes the test table of 10 records, indexes it on id
-// through an index update planner so that the index holds them, and returns
-// the plan of the records filed under value.
+// newTestIndexSelectPlan creates the test table with 10 records and indexes
+// it on id through an index update planner, so that the index contains the
+// records. It returns the plan for the records with the key value.
 func newTestIndexSelectPlan(t *testing.T, tx *transaction.Transaction, value query.Constant) *IndexSelectPlan {
 	t.Helper()
 

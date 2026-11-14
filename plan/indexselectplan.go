@@ -9,12 +9,13 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// IndexSelectPlan is the plan of reading the records of a table that an index
-// files under one value, through the index rather than by reading the table.
+// IndexSelectPlan is the plan that reads the records of a table that an index
+// holds for one value. It reads them through the index and does not scan the
+// table.
 //
-// It stands in for a select over the table on a predicate that equates the
-// indexed field with that value: it gives back the same records, having read
-// only those.
+// It replaces a select over the table with a predicate that equates the
+// indexed field with that value. It returns the same records and reads only
+// those.
 type IndexSelectPlan struct {
 	tp    *TablePlan
 	info  *metadatamanager.IndexInfo
@@ -23,8 +24,8 @@ type IndexSelectPlan struct {
 
 var _ Plan = (*IndexSelectPlan)(nil)
 
-// NewIndexSelectPlan returns the plan of reading the records of the table tp
-// reads that the index info describes files under value.
+// NewIndexSelectPlan returns the plan that reads the records of the table of
+// tp that the index of info holds for value.
 func NewIndexSelectPlan(tp *TablePlan, info *metadatamanager.IndexInfo, value query.Constant) *IndexSelectPlan {
 	return &IndexSelectPlan{
 		tp:    tp,
@@ -33,11 +34,11 @@ func NewIndexSelectPlan(tp *TablePlan, info *metadatamanager.IndexInfo, value qu
 	}
 }
 
-// Open opens the table and the index, and returns a scan of the records the
-// index files under the value.
+// Open opens the table and the index, and returns a scan of the records that
+// the index holds for the value.
 //
-// Whatever was opened before a failure is closed again, since no scan comes
-// back for the caller to close.
+// If a step fails, the scans already opened are closed, because no scan is
+// returned that the caller could close.
 func (p *IndexSelectPlan) Open() (query.Scan, error) {
 	s, err := p.tp.Open()
 	if err != nil {
@@ -60,31 +61,33 @@ func (p *IndexSelectPlan) Open() (query.Scan, error) {
 	return index.NewSelectScan(ts, idx, p.value)
 }
 
-// BlocksAccessed is a guess at how many blocks reading the plan touches: those
-// a search through the index reads, and then one of the table for each record
-// it gives back.
+// BlocksAccessed returns an estimate of the number of blocks that a read of
+// the plan accesses: the blocks of one index search, plus one table block for
+// each returned record.
 //
-// Each record is taken to be in a block of its own. Records filed under one
-// value are wherever they were written, not next to each other, so going from
-// one to the next is as good as going to another block.
+// Each record is assumed to be in a different block. Records with the same
+// value are stored wherever they were written and are not adjacent, so each
+// record is likely to need another block.
 func (p *IndexSelectPlan) BlocksAccessed() int {
 	return p.info.BlocksAccessed() + p.RecordsOutput()
 }
 
-// RecordsOutput is a guess at how many records the plan gives back, which is
-// how many a search through the index does.
+// RecordsOutput returns an estimate of the number of records that the plan
+// returns, which is the number that one index search returns.
 func (p *IndexSelectPlan) RecordsOutput() int {
 	return p.info.RecordsOutput()
 }
 
-// DistinctValues is a guess at how many different values fieldName holds in
-// the records the plan gives back, which the index answers as it would for a
-// search through it: one for the indexed field, and the table's for any other.
+// DistinctValues returns an estimate of the number of distinct values of
+// fieldName in the returned records. The index info provides it, as for an
+// index search: one for the indexed field, and the table's count for any
+// other field.
 func (p *IndexSelectPlan) DistinctValues(fieldName string) int {
 	return p.info.DistinctValues(fieldName)
 }
 
-// Schema is the table's, since the plan gives back the table's own records.
+// Schema returns the schema of the table, because the plan returns records of
+// the table.
 func (p *IndexSelectPlan) Schema() *recordmanager.Schema {
 	return p.tp.Schema()
 }

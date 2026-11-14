@@ -55,8 +55,8 @@ func TestMaterializePlanOpen(t *testing.T) {
 	})
 }
 
-// The test schema's slot is 52 bytes: the in-use flag (4), id (4) and name, a
-// varchar of 10 (4 + 10*4). A block of 800 bytes holds 15 of them.
+// A slot of the test schema is 52 bytes: the in-use flag (4), id (4) and
+// name, a varchar of 10 (4 + 10*4). A block of 800 bytes holds 15 slots.
 func TestMaterializePlanBlocksAccessed(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -123,8 +123,8 @@ func TestMaterializePlanSchema(t *testing.T) {
 	})
 }
 
-// readIDsAndNames reads every record a scan gives back as "id:name", in the
-// order it gives them.
+// readIDsAndNames reads every record of a scan as "id:name", in the order in
+// which the scan returns them.
 func readIDsAndNames(t *testing.T, s query.Scan) []string {
 	t.Helper()
 
@@ -154,7 +154,7 @@ func readIDsAndNames(t *testing.T, s query.Scan) []string {
 	}
 }
 
-// deleteAllRecords deletes every record of the table tp reads.
+// deleteAllRecords deletes every record of the table of tp.
 func deleteAllRecords(t *testing.T, tp *TablePlan) {
 	t.Helper()
 

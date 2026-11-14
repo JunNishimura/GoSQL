@@ -8,8 +8,9 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// newTestFakePlanOfTestSchema is a plan of 100 records over 5 blocks, with the
-// fields of the test table: "id" of 10 distinct values and "name" of 4.
+// newTestFakePlanOfTestSchema returns a plan with 100 records in 5 blocks and
+// the fields of the test table: "id" with 10 distinct values and "name" with
+// 4.
 func newTestFakePlanOfTestSchema(t *testing.T) fakePlan {
 	t.Helper()
 
@@ -82,8 +83,8 @@ func TestProjectPlanOpen(t *testing.T) {
 	})
 }
 
-// A projection drops fields, not records, and reads what it projects all the
-// way through. So every number it reports is the one of the plan underneath.
+// A projection drops fields and not records, and it reads its whole input.
+// Every estimate it returns is therefore the estimate of the underlying plan.
 func TestProjectPlanBlocksAccessed(t *testing.T) {
 	t.Run("given a plan of 5 blocks, when a projection of it is asked for the blocks accessed, then they are the 5 of the plan underneath", func(t *testing.T) {
 		p := mustNewProjectPlan(t, newTestFakePlanOfTestSchema(t), "id")

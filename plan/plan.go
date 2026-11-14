@@ -5,24 +5,24 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// Plan is one operator of a query, described rather than run: what it would
-// cost to read, how many records it would give back, and what fields they
-// would have.
+// Plan describes one operator of a query without running it: its estimated
+// cost, the estimated number of records it returns, and the fields of those
+// records.
 //
-// A planner weighs plans against each other by these numbers before any of
-// them touches a record, which is why a plan and the scan it opens are two
-// things. Building a plan reads statistics; only Open reads the data.
+// A planner compares plans by these estimates before any plan reads a record.
+// This is why a plan and the scan it opens are separate types. Creating a
+// plan reads only statistics, and only Open reads the data.
 type Plan interface {
-	// Open returns a scan that reads what the plan describes.
+	// Open returns a scan that reads the output of the plan.
 	Open() (query.Scan, error)
-	// BlocksAccessed is a guess at how many blocks reading the plan's output
-	// touches.
+	// BlocksAccessed returns the estimated number of blocks that a read of
+	// the plan's output accesses.
 	BlocksAccessed() int
-	// RecordsOutput is a guess at how many records the plan gives back.
+	// RecordsOutput returns the estimated number of records in the output.
 	RecordsOutput() int
-	// DistinctValues is a guess at how many different values fieldName holds
-	// in the plan's output.
+	// DistinctValues returns the estimated number of distinct values of
+	// fieldName in the output.
 	DistinctValues(fieldName string) int
-	// Schema is the fields of the records the plan gives back.
+	// Schema returns the fields of the records in the output.
 	Schema() *recordmanager.Schema
 }

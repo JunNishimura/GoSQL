@@ -9,14 +9,14 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// IndexJoinPlan is the plan of joining the records of one plan with those of a
-// table on a field of the first and an indexed field of the table, by
-// searching the index for each record of the first rather than reading the
-// whole table for it.
+// IndexJoinPlan is the plan that joins the records of one plan with the
+// records of a table, on a field of the plan and an indexed field of the
+// table. For each record of the plan it searches the index, and does not scan
+// the whole table.
 //
-// It stands in for a select over the product of the two on a predicate that
-// equates the two fields: it gives back the same pairs, having read only the
-// records of the table that are in one.
+// It replaces a select over the product of the two with a predicate that
+// equates the two fields. It returns the same pairs, and reads only the table
+// records that are part of a pair.
 type IndexJoinPlan struct {
 	p1        Plan
 	p2        *TablePlan
@@ -27,12 +27,12 @@ type IndexJoinPlan struct {
 
 var _ Plan = (*IndexJoinPlan)(nil)
 
-// NewIndexJoinPlan returns the plan of joining the records of p1 with those of
-// the table p2 reads, where what a record of p1 holds in joinField is what the
-// index info describes files the records of p2 under.
+// NewIndexJoinPlan returns the plan that joins the records of p1 with the
+// records of the table of p2. A pair matches when the value of joinField in
+// the p1 record equals the key of the p2 record in the index of info.
 //
-// It fails as a product would if the two sides share a field name, since the
-// pairs would then have two fields of one name.
+// It fails, like a product, if the two sides share a field name, because the
+// pairs would then have two fields with the same name.
 func NewIndexJoinPlan(p1 Plan, p2 *TablePlan, info *metadatamanager.IndexInfo, joinField string) (*IndexJoinPlan, error) {
 	schema := recordmanager.NewSchema()
 	if err := schema.AddAll(p1.Schema()); err != nil {
@@ -51,11 +51,11 @@ func NewIndexJoinPlan(p1 Plan, p2 *TablePlan, info *metadatamanager.IndexInfo, j
 	}, nil
 }
 
-// Open opens the left plan, the index and the table, and returns a scan of the
-// pairs the join keeps.
+// Open opens the left plan, the index and the table, and returns a scan of
+// the joined pairs.
 //
-// Whatever was opened before a failure is closed again, since no scan comes
-// back for the caller to close.
+// If a step fails, the scans already opened are closed, because no scan is
+// returned that the caller could close.
 func (p *IndexJoinPlan) Open() (query.Scan, error) {
 	lhs, err := p.p1.Open()
 	if err != nil {
@@ -87,22 +87,23 @@ func (p *IndexJoinPlan) Open() (query.Scan, error) {
 	return index.NewJoinScan(lhs, idx, p.joinField, rhs)
 }
 
-// BlocksAccessed is a guess at how many blocks reading the plan touches: the
-// left side read once, a search through the index for each of its records,
-// and a block of the table for each pair, as for an index select.
+// BlocksAccessed returns an estimate of the number of blocks that a read of
+// the plan accesses: one read of the left side, one index search for each
+// left record, and one table block for each pair, as in an index select.
 func (p *IndexJoinPlan) BlocksAccessed() int {
 	return p.p1.BlocksAccessed() + p.p1.RecordsOutput()*p.info.BlocksAccessed() + p.RecordsOutput()
 }
 
-// RecordsOutput is a guess at how many pairs the plan gives back: as many for
-// each record on the left as a search through the index gives back.
+// RecordsOutput returns an estimate of the number of pairs: the number of
+// left records times the number of records that one index search returns.
 func (p *IndexJoinPlan) RecordsOutput() int {
 	return p.p1.RecordsOutput() * p.info.RecordsOutput()
 }
 
-// DistinctValues is a guess at how many different values fieldName holds in
-// the pairs the plan gives back, which is taken to be what it holds on its own
-// side: the left plan's for a field of the left, and the table's for any other.
+// DistinctValues returns an estimate of the number of distinct values of
+// fieldName in the pairs. It is assumed to equal the count on the field's own
+// side: the left plan's count for a field of the left side, and the table's
+// count for any other field.
 func (p *IndexJoinPlan) DistinctValues(fieldName string) int {
 	if p.p1.Schema().HasField(fieldName) {
 		return p.p1.DistinctValues(fieldName)
@@ -111,7 +112,7 @@ func (p *IndexJoinPlan) DistinctValues(fieldName string) int {
 	return p.p2.DistinctValues(fieldName)
 }
 
-// Schema is the fields of both sides, the left plan's first.
+// Schema returns the fields of both sides, with those of the left plan first.
 func (p *IndexJoinPlan) Schema() *recordmanager.Schema {
 	return p.schema
 }

@@ -12,12 +12,12 @@ import (
 
 var _ Plan = (*GroupByPlan)(nil)
 
-// GroupByPlan is the plan of reading a record for each group of the records
-// of another plan, with the group's values in the fields grouped on and the
-// value of each aggregation function over the group.
+// GroupByPlan is the plan that returns one record for each group of the
+// records of another plan. Each record holds the values of the group fields
+// and the value of each aggregation function over the group.
 //
-// It sorts the records on the fields grouped on first, which puts the records
-// of a group next to each other, so the groups are read off the sort in one
+// It first sorts the records on the group fields, which makes the records of
+// a group adjacent. The groups are then read from the sorted records in one
 // pass.
 type GroupByPlan struct {
 	sorted      *SortPlan
@@ -26,11 +26,11 @@ type GroupByPlan struct {
 	schema      *recordmanager.Schema
 }
 
-// NewGroupByPlan returns the plan of grouping the records of src on
-// groupFields, with aggFns worked out over each group.
+// NewGroupByPlan returns the plan that groups the records of src on
+// groupFields and computes aggFns over each group.
 //
-// The schema is built here, which is where a field src does not have, to
-// group on or to aggregate, is refused, as a projection refuses one.
+// The schema is built here. A group field or an aggregated field that src
+// does not have is therefore rejected here, as in a projection.
 func NewGroupByPlan(tx *transaction.Transaction, src Plan, groupFields []string, aggFns []materialize.AggregationFn) (*GroupByPlan, error) {
 	schema := recordmanager.NewSchema()
 	for _, fieldName := range groupFields {
@@ -52,8 +52,8 @@ func NewGroupByPlan(tx *transaction.Transaction, src Plan, groupFields []string,
 	}, nil
 }
 
-// Open sorts the records of src on the fields grouped on and returns a scan of
-// their groups, before the first.
+// Open sorts the records of src on the group fields and returns a scan of the
+// groups, positioned before the first group.
 func (gp *GroupByPlan) Open() (query.Scan, error) {
 	s, err := gp.sorted.Open()
 	if err != nil {
@@ -63,16 +63,16 @@ func (gp *GroupByPlan) Open() (query.Scan, error) {
 	return materialize.NewGroupByScan(s, gp.groupFields, gp.aggFns)
 }
 
-// BlocksAccessed is the blocks of reading the sorted records once, which the
-// scan does to find the groups. Sorting them is left out, as SortPlan leaves
-// it out.
+// BlocksAccessed returns the blocks of one read of the sorted records, which
+// the scan needs to find the groups. The cost of the sort is not included, as
+// in SortPlan.
 func (gp *GroupByPlan) BlocksAccessed() int {
 	return gp.sorted.BlocksAccessed()
 }
 
-// RecordsOutput is a guess at how many groups there are: as many as there are
-// combinations of the values the fields grouped on hold, taking every value of
-// one field to occur with every value of the others.
+// RecordsOutput returns an estimate of the number of groups. It is the number
+// of combinations of the values of the group fields, on the assumption that
+// every value of one field occurs with every value of the others.
 func (gp *GroupByPlan) RecordsOutput() int {
 	groups := 1
 	for _, fieldName := range gp.groupFields {
@@ -82,9 +82,10 @@ func (gp *GroupByPlan) RecordsOutput() int {
 	return groups
 }
 
-// DistinctValues is a guess at how many different values fieldName holds in
-// the groups: those of src for a field grouped on, and one for each group for
-// the value of an aggregation function, taking no two groups to share it.
+// DistinctValues returns an estimate of the number of distinct values of
+// fieldName in the groups. For a group field it is the count of src. For the
+// value of an aggregation function it is the number of groups, on the
+// assumption that no two groups have the same value.
 func (gp *GroupByPlan) DistinctValues(fieldName string) int {
 	if slices.Contains(gp.groupFields, fieldName) {
 		return gp.sorted.DistinctValues(fieldName)
@@ -93,7 +94,7 @@ func (gp *GroupByPlan) DistinctValues(fieldName string) int {
 	return gp.RecordsOutput()
 }
 
-// Schema is the fields grouped on followed by those of the aggregation
+// Schema returns the group fields followed by the fields of the aggregation
 // functions.
 func (gp *GroupByPlan) Schema() *recordmanager.Schema {
 	return gp.schema

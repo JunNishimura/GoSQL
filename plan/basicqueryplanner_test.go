@@ -26,9 +26,9 @@ func TestBasicQueryPlannerCreatePlan(t *testing.T) {
 		}
 	})
 
-	// The tables are multiplied in the order the query names them, the first
-	// on the left. That order decides what the product costs, so it is part
-	// of what the planner is asked for rather than a detail of how it works.
+	// The product takes the tables in the order of the query, with the first
+	// table on the left. That order determines the cost of the product, so it
+	// is part of the planner's contract and not an implementation detail.
 	t.Run("given a table of 3 records and one of 2, when a query naming both with no where clause is planned, then the plan reads every pair, the first table's records on the left", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -77,8 +77,8 @@ func TestBasicQueryPlannerCreatePlan(t *testing.T) {
 		}
 	})
 
-	// A view's definition is planned the way any query is, so a view it reads
-	// is expanded in turn.
+	// The definition of a view is planned like any query, so a view that it
+	// reads is expanded recursively.
 	t.Run("given a view defined over another view, when a query reading the outer view is planned, then the plan reads through both definitions", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)

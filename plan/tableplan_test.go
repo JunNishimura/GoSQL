@@ -11,11 +11,11 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// testRecordCount is how many records the tests below write into the test
-// table. A slot of it is 52 bytes, the in-use flag (4) plus id (4) plus name
-// (4 + 10 * 4), so a block of 800 holds 15 and the table takes up 2 blocks.
-// That puts the three numbers a plan reports at 2, 20 and 7, no two of them
-// alike, so that a plan answering one question with another's number shows.
+// testRecordCount is the number of records that the tests below write to the
+// test table. A slot is 52 bytes: the in-use flag (4) plus id (4) plus name
+// (4 + 10 * 4). A block of 800 bytes holds 15 slots, so the table takes 2
+// blocks. The three estimates of a plan are then 2, 20 and 7. They all
+// differ, so that a plan that returns the wrong estimate is detected.
 const testRecordCount = 20
 
 func TestNewTablePlan(t *testing.T) {
@@ -53,8 +53,8 @@ func TestTablePlanOpen(t *testing.T) {
 		}
 	})
 
-	// An update planner writes through the scan a table plan opens, so the scan
-	// has to be one that can be written through, not only read.
+	// An update planner writes through the scan that a table plan opens, so
+	// the scan must support writes and not only reads.
 	t.Run("given a table, when the plan is opened, then the scan can be written through", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		mm := newTestMetadataManager(t, tx)
@@ -153,8 +153,8 @@ func mustGetStatistics(t *testing.T, tx *transaction.Transaction, mm *metadatama
 	return stats
 }
 
-// assertSchema compares two schemas field by field: the names in order, then
-// the type and length of each.
+// assertSchema compares two schemas field by field: first the names in order,
+// then the type and length of each field.
 func assertSchema(t *testing.T, got *recordmanager.Schema, want *recordmanager.Schema) {
 	t.Helper()
 

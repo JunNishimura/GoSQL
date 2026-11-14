@@ -12,14 +12,14 @@ import (
 
 var _ Plan = (*MultibufferProductPlan)(nil)
 
-// MultibufferProductPlan is the plan of putting every record of one plan
-// beside every record of another, reading the right side a chunk of blocks at
-// a time.
+// MultibufferProductPlan is the plan that pairs every record of one plan with
+// every record of another, and reads the right side in chunks of several
+// blocks.
 //
-// The right side is copied into a temp table, so that it can be read by block
-// number a chunk at a time, and the left side is materialized, since it is
-// read through again for every chunk and reading a temp table again is cheaper
-// than working the plan out again.
+// The right side is copied to a temp table, so that it can be read by block
+// number, one chunk at a time. The left side is materialized, because it is
+// scanned again for every chunk. A second read of a temp table is cheaper
+// than a second evaluation of the plan.
 type MultibufferProductPlan struct {
 	tx *transaction.Transaction
 	// lhs is the left side, materialized.
@@ -28,10 +28,10 @@ type MultibufferProductPlan struct {
 	schema *recordmanager.Schema
 }
 
-// NewMultibufferProductPlan returns the plan of the product of lhs and rhs,
+// NewMultibufferProductPlan returns the plan for the product of lhs and rhs,
 // with lhs on the left.
 //
-// A field both sides have is refused here, as a product plan refuses it.
+// A field that both sides have is rejected here, as in a product plan.
 func NewMultibufferProductPlan(tx *transaction.Transaction, lhs, rhs Plan) (*MultibufferProductPlan, error) {
 	schema := recordmanager.NewSchema()
 	if err := schema.AddAll(lhs.Schema()); err != nil {
@@ -49,12 +49,12 @@ func NewMultibufferProductPlan(tx *transaction.Transaction, lhs, rhs Plan) (*Mul
 	}, nil
 }
 
-// Open copies the records of the right side into a temp table, materializes
-// the left side, and returns a multibuffer product scan of the two.
+// Open copies the records of the right side to a temp table, materializes the
+// left side, and returns a multibuffer product scan of the two.
 //
-// The right side is copied after the left is materialized and before the
-// product scan is made, so that while the scan chooses its chunk size the
-// only buffer held is the one of the left side it reads.
+// The right side is copied after the left side is materialized and before the
+// product scan is created. While the scan chooses its chunk size, the only
+// pinned buffer is then the one of the left side.
 func (mp *MultibufferProductPlan) Open() (query.Scan, error) {
 	lhs, err := mp.lhs.Open()
 	if err != nil {
@@ -76,8 +76,9 @@ func (mp *MultibufferProductPlan) Open() (query.Scan, error) {
 	return mps, nil
 }
 
-// copyRight writes every record of the right side into a new temp table and
-// returns it, with no scan of it or of the right side left open.
+// copyRight writes every record of the right side to a new temp table and
+// returns the table. It leaves no scan of the table or of the right side
+// open.
 func (mp *MultibufferProductPlan) copyRight() (*materialize.TempTable, error) {
 	tt := materialize.NewTempTable(mp.tx, mp.rhs.Schema())
 
@@ -100,11 +101,12 @@ func (mp *MultibufferProductPlan) copyRight() (*materialize.TempTable, error) {
 	return tt, nil
 }
 
-// BlocksAccessed is one read of the right side, to copy it, plus a read of the
-// materialized left side for every chunk the copy is read in.
+// BlocksAccessed returns the blocks of one read of the right side, for the
+// copy, plus one read of the materialized left side for every chunk of the
+// copy.
 //
-// The chunks are counted with the chunk size the scan would choose if it were
-// opened now, from the buffers free at this moment.
+// The number of chunks uses the chunk size that the scan would choose if it
+// were opened now, from the buffers that are currently free.
 func (mp *MultibufferProductPlan) BlocksAccessed() int {
 	size := NewMaterializePlan(mp.tx, mp.rhs).BlocksAccessed()
 	chunkSize := multibuffer.BestFactor(mp.tx.AvailableBuffers(), size)
@@ -113,12 +115,14 @@ func (mp *MultibufferProductPlan) BlocksAccessed() int {
 	return mp.rhs.BlocksAccessed() + mp.lhs.BlocksAccessed()*numChunks
 }
 
-// RecordsOutput is every record of the left beside every record of the right.
+// RecordsOutput returns the number of pairs: the records of the left side
+// times the records of the right side.
 func (mp *MultibufferProductPlan) RecordsOutput() int {
 	return mp.lhs.RecordsOutput() * mp.rhs.RecordsOutput()
 }
 
-// DistinctValues is the distinct values of fieldName on whichever side has it.
+// DistinctValues returns the distinct values of fieldName on the side that
+// has the field.
 func (mp *MultibufferProductPlan) DistinctValues(fieldName string) int {
 	if mp.lhs.Schema().HasField(fieldName) {
 		return mp.lhs.DistinctValues(fieldName)
@@ -127,7 +131,8 @@ func (mp *MultibufferProductPlan) DistinctValues(fieldName string) int {
 	return mp.rhs.DistinctValues(fieldName)
 }
 
-// Schema is the fields of the left followed by those of the right.
+// Schema returns the fields of the left side followed by those of the right
+// side.
 func (mp *MultibufferProductPlan) Schema() *recordmanager.Schema {
 	return mp.schema
 }

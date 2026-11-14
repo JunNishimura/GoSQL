@@ -12,16 +12,16 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// Which index a plan reads through is told by the value it searches for: the
-// cases equate id with an int and name with a varchar, so the kind and the
-// value say which of the two was taken.
+// The search value shows which index a plan uses. The cases equate id with an
+// int and name with a varchar, so the type and the value of the search
+// identify the index.
 func TestIndexQueryPlannerCreatePlan(t *testing.T) {
 	tests := []struct {
 		name    string
 		indexed []string
 		sql     string
-		// wantSearch is the value the plan searches an index for, or nil if it
-		// should read no table through an index.
+		// wantSearch is the value that the plan searches an index for, or nil
+		// if the plan should use no index.
 		wantSearch *query.Constant
 		want       []int32
 	}{
@@ -60,9 +60,9 @@ func TestIndexQueryPlannerCreatePlan(t *testing.T) {
 			wantSearch: nil,
 			want:       []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19},
 		},
-		// The two indexes cost the same to search, so the one on the field
-		// that comes first by name is taken, whatever order the catalog lists
-		// them in.
+		// The two indexes cost the same to search. The index whose field name
+		// sorts first is chosen, whatever the order of the indexes in the
+		// catalog.
 		{
 			name:       "given a table of 20 records indexed on both its fields, when a query where name is 'name7' and id is 7 is planned, then the plan reads the table through the index on id for 7",
 			indexed:    []string{"name", "id"},
@@ -70,8 +70,8 @@ func TestIndexQueryPlannerCreatePlan(t *testing.T) {
 			wantSearch: new(query.NewIntConstant(7)),
 			want:       []int32{7},
 		},
-		// The index stands for one term, and the other still has to be tested:
-		// id 7 is filed under 7 but its name is not 'x'.
+		// The index covers one term, and the other term must still be tested:
+		// the record with id 7 has the key 7, but its name is not 'x'.
 		{
 			name:       "given a table of 20 records indexed on id, when a query where id is 7 and name is 'x' is planned, then the plan reads the table through the index for 7 and reads nothing",
 			indexed:    []string{"id"},
@@ -150,17 +150,17 @@ func TestIndexQueryPlannerCreatePlan(t *testing.T) {
 	})
 }
 
-// The other table, of oids from 0, and the test table, of ids from 0, are
-// joined on oid equal to id. Only a table added to what is already planned is
-// read through an index on a join field, so which side an index is on is told
-// by the order the from clause names the tables.
+// The other table, with oids from 0, and the test table, with ids from 0, are
+// joined on oid = id. Only a table that is added to the current plan can be
+// read through an index on a join field. The order of the tables in the from
+// clause therefore determines which side can use an index.
 func TestIndexQueryPlannerCreatePlanJoins(t *testing.T) {
 	tests := []struct {
 		name    string
 		indexed []string
 		sql     string
-		// wantJoinField is the field of the left side the plan joins on
-		// through an index, or "" if it should join through none.
+		// wantJoinField is the field of the left side that the plan joins on
+		// through an index, or "" if the plan should use no index join.
 		wantJoinField string
 		want          [][2]int32
 	}{
@@ -178,8 +178,8 @@ func TestIndexQueryPlannerCreatePlanJoins(t *testing.T) {
 			wantJoinField: "oid",
 			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
 		},
-		// test comes first, so it is the left side and its index is never
-		// searched for a join; other, which is added to it, has none.
+		// test comes first, so it is the left side, and its index is never
+		// used for a join. other is added to it and has no index.
 		{
 			name:          "given 3 records of other and 20 of test indexed on id, when a query of test then other where id = oid is planned, then the plan joins through no index and reads the three pairs that agree",
 			indexed:       []string{"id"},
@@ -201,9 +201,9 @@ func TestIndexQueryPlannerCreatePlanJoins(t *testing.T) {
 			wantJoinField: "",
 			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
 		},
-		// The test table could be read through the index on name for
-		// 'name1', or joined through the index on id. The two cost the same
-		// here, and the join is taken; the term on name is still tested.
+		// The test table can be read through the index on name for 'name1',
+		// or joined through the index on id. Both cost the same here, and the
+		// join is chosen. The term on name is still tested.
 		{
 			name:          "given 3 records of other and 20 of test indexed on id and on name, when a query of other then test where oid = id and name = 'name1' is planned, then the plan joins test through the index on oid and reads the one pair whose name is 'name1'",
 			indexed:       []string{"id", "name"},
@@ -284,8 +284,8 @@ func TestCheaperJoin(t *testing.T) {
 	}
 }
 
-// indexJoinFieldOf returns the join field of the first index join plan within
-// p, and whether there is one.
+// indexJoinFieldOf returns the join field of the first index join plan in p,
+// and reports whether p contains one.
 func indexJoinFieldOf(p Plan) (string, bool) {
 	switch p := p.(type) {
 	case *IndexJoinPlan:
@@ -305,9 +305,9 @@ func indexJoinFieldOf(p Plan) (string, bool) {
 	}
 }
 
-// createIndexesThrough makes an index on each of fields of the test table
-// through an index update planner, so that it holds the records the table
-// already has.
+// createIndexesThrough creates an index on each of fields of the test table
+// through an index update planner, so that each index contains the existing
+// records of the table.
 func createIndexesThrough(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, fields []string) {
 	t.Helper()
 
@@ -335,8 +335,8 @@ func mustCreateIndexPlan(t *testing.T, tx *transaction.Transaction, mm *metadata
 	return p
 }
 
-// indexSearchOf returns the value the first index select plan within p
-// searches for, and whether there is one.
+// indexSearchOf returns the search value of the first index select plan in p,
+// and reports whether p contains one.
 func indexSearchOf(p Plan) (query.Constant, bool) {
 	switch p := p.(type) {
 	case *IndexSelectPlan:

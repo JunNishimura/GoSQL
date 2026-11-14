@@ -6,32 +6,33 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// BasicQueryPlanner turns a select statement into a plan the simplest way
-// there is: the product of its tables in the order they are named, a select
-// over that for the where clause, and a projection onto the columns asked for.
+// BasicQueryPlanner creates the simplest possible plan for a select
+// statement: the product of its tables in the order written, a select over
+// the product for the where clause, and a projection onto the requested
+// columns.
 //
-// It weighs nothing. The plan it builds is the one the query reads as, however
-// much a different order of the same tables would save, which makes it the
-// baseline a smarter planner is measured against rather than one to run a
-// large query through. It reads every table in full, whatever indexes it has;
-// IndexQueryPlanner is the one that reads through them.
+// It compares no alternatives. Its plan follows the text of the query, even
+// if another order of the same tables would be much cheaper. It is therefore
+// a baseline for better planners, not a planner for large queries. It scans
+// every table completely and ignores indexes. IndexQueryPlanner is the
+// planner that uses them.
 type BasicQueryPlanner struct {
 	mm *metadatamanager.MetadataManager
 }
 
-// NewBasicQueryPlanner returns a planner that reads tables and views through
-// mm.
+// NewBasicQueryPlanner returns a planner that reads the metadata of tables
+// and views through mm.
 func NewBasicQueryPlanner(mm *metadatamanager.MetadataManager) *BasicQueryPlanner {
 	return &BasicQueryPlanner{
 		mm: mm,
 	}
 }
 
-// CreatePlan returns the plan of the query data.
+// CreatePlan returns the plan for the query data.
 //
-// A name in the from clause that is a view is planned from its definition,
-// which is parsed again and planned the way any query is. A view defined over
-// another view is expanded in turn by the same call.
+// A name in the from clause that is a view is planned from its definition.
+// The definition is parsed again and planned like any other query. A view
+// that is defined on another view is expanded recursively by the same call.
 func (qp *BasicQueryPlanner) CreatePlan(data parse.QueryData, tx *transaction.Transaction) (Plan, error) {
 	var p Plan
 	for _, tableName := range data.Tables() {
@@ -56,8 +57,8 @@ func (qp *BasicQueryPlanner) CreatePlan(data parse.QueryData, tx *transaction.Tr
 	return NewProjectPlan(p, data.Fields()...)
 }
 
-// planTable returns the plan of reading one name of a from clause, which is
-// either a view or a stored table.
+// planTable returns the plan for one name of a from clause, which is either a
+// view or a stored table.
 func (qp *BasicQueryPlanner) planTable(tableName string, tx *transaction.Transaction) (Plan, error) {
 	definition, isView, err := qp.mm.GetViewDefinition(tx, tableName)
 	if err != nil {

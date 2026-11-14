@@ -6,17 +6,18 @@ import (
 	"github.com/JunNishimura/GoSQL/query"
 )
 
-// reductionFactor is a guess at how many times fewer records pred keeps than
-// it is given, when it is applied to the output of p.
+// reductionFactor returns an estimate of the factor by which pred reduces the
+// number of records when it is applied to the output of p.
 //
-// It lives here rather than on the predicate because it needs two things kept
-// in two places: the shape of each term, which the predicate hands out, and
-// how many distinct values a field holds, which only a plan knows.
+// The function is here and not on the predicate because it needs data from
+// two places: the structure of each term, which the predicate exposes, and
+// the number of distinct values of a field, which only a plan knows.
 //
-// The terms are taken to filter independently, so the factor of the predicate
-// is the product of theirs. A term that keeps nothing is math.MaxInt, and the
-// product stops there rather than overflowing into a number that would cost
-// the predicate as one that keeps a lot.
+// The terms are assumed to filter independently, so the factor of the
+// predicate is the product of the factors of its terms. A term that keeps no
+// records has the factor math.MaxInt. The product saturates at that value and
+// does not overflow, because an overflowed value would make the predicate
+// look as if it kept many records.
 func reductionFactor(pred query.Predicate, p Plan) int {
 	factor := 1
 	for _, term := range pred.Terms() {
@@ -26,12 +27,13 @@ func reductionFactor(pred query.Predicate, p Plan) int {
 	return factor
 }
 
-// termReductionFactor is the reduction factor of one term.
+// termReductionFactor returns the reduction factor of one term.
 //
-// A field equated with a constant keeps one of the field's values. A field
-// equated with another field keeps the records where the two agree, which is
-// guessed as one in however many values the larger of the two holds. Two
-// constants either always agree or never do.
+// A field equated with a constant keeps the records with one of the field's
+// values. A field equated with another field keeps the records in which the
+// two are equal. That fraction is estimated as one over the larger of the two
+// distinct value counts. Two constants are either always equal or never
+// equal.
 func termReductionFactor(term query.Term, p Plan) int {
 	lhsName, lhsIsField := fieldNameOf(term.LHS())
 	rhsName, rhsIsField := fieldNameOf(term.RHS())
@@ -54,13 +56,13 @@ func termReductionFactor(term query.Term, p Plan) int {
 	return math.MaxInt
 }
 
-// saturatingMultiply is a * b for positive a and b, or math.MaxInt where that
-// would overflow.
+// saturatingMultiply returns a * b for positive a and b, or math.MaxInt if
+// the product would overflow.
 //
-// Every factor it is given is at least 1, since a plan guesses at least one
-// distinct value for any field, even of an empty table. That is taken rather
-// than checked: a factor of 0 would mean a plan broke that promise, and
-// quietly treating it as some other number would hide where.
+// Every factor passed to it is at least 1, because a plan estimates at least
+// one distinct value for any field, even for an empty table. The function
+// assumes this and does not check it. A factor of 0 would mean that a plan
+// broke that guarantee, and silently replacing it would hide the bug.
 func saturatingMultiply(a, b int) int {
 	if a > math.MaxInt/b {
 		return math.MaxInt

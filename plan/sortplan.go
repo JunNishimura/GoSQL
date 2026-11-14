@@ -7,20 +7,21 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// maxSortScanRuns is how many runs a sort merges into temp tables down to, and
-// so how many the scan it opens merges as it is read.
+// maxSortScanRuns is the number of runs at which a sort stops merging into
+// temp tables. The scan that the sort opens merges that many runs while it is
+// read.
 const maxSortScanRuns = 2
 
 var _ Plan = (*SortPlan)(nil)
 
-// SortPlan is the plan of reading the records of another plan in order of a
-// list of fields, by merge sort.
+// SortPlan is the plan that returns the records of another plan in the order
+// of a list of fields. It uses merge sort.
 //
-// Opening it does the sorting: the records are split into runs, stretches
-// already in order, each written to a temp table, and the runs are merged in
-// pairs into new temp tables until no more than two are left. The scan it
-// returns merges those two as it is read, so the last merge is never written
-// out.
+// Open performs the sort. The records are split into runs, which are
+// sequences that are already sorted, and each run is written to a temp table.
+// The runs are merged in pairs into new temp tables until at most two remain.
+// The returned scan merges those two while it is read, so the result of the
+// last merge is never written.
 type SortPlan struct {
 	tx         *transaction.Transaction
 	src        Plan
@@ -28,9 +29,9 @@ type SortPlan struct {
 	comp       *materialize.RecordComparator
 }
 
-// NewSortPlan returns the plan of sorting the records of src by sortFields:
-// by the first, then by the second among records the first does not tell
-// apart, and so on.
+// NewSortPlan returns the plan that sorts the records of src by sortFields:
+// by the first field, then by the second field for records with equal first
+// fields, and so on.
 func NewSortPlan(tx *transaction.Transaction, src Plan, sortFields ...string) *SortPlan {
 	return &SortPlan{
 		tx:         tx,
@@ -40,24 +41,25 @@ func NewSortPlan(tx *transaction.Transaction, src Plan, sortFields ...string) *S
 	}
 }
 
-// Open sorts the records of src and returns a scan of them in order, before
-// the first.
+// Open sorts the records of src and returns a scan of them in order,
+// positioned before the first record.
 //
 // src is read once, while it is split into runs, and closed before the runs
-// are merged, so the scan handed back holds only the last runs.
+// are merged. The returned scan therefore holds only the last runs.
 func (sp *SortPlan) Open() (query.Scan, error) {
 	ss, err := sp.openSortScan()
 	if err != nil {
-		// Returned as it is, a nil *SortScan would be a query.Scan that is not
-		// nil.
+		// A nil *SortScan returned directly would become a non-nil query.Scan
+		// interface value.
 		return nil, err
 	}
 
 	return ss, nil
 }
 
-// openSortScan is Open, returning the scan as the sort scan it is, for a
-// merge join, which puts the scan of its right side back to where it was.
+// openSortScan does the work of Open and returns the scan with its concrete
+// type. A merge join needs that type to restore the position of its right
+// side.
 func (sp *SortPlan) openSortScan() (*materialize.SortScan, error) {
 	src, err := sp.src.Open()
 	if err != nil {
@@ -79,12 +81,13 @@ func (sp *SortPlan) openSortScan() (*materialize.SortScan, error) {
 	return materialize.NewSortScan(runs, sp.comp)
 }
 
-// splitIntoRuns writes the records src has left into temp tables, starting a
-// new one wherever a record comes before the one written just before it, so
-// that each table holds a run of records in order.
+// splitIntoRuns writes the remaining records of src to temp tables. It starts
+// a new table whenever a record is ordered before the previous record, so
+// that each table holds one sorted run.
 //
-// There is always at least one run. A src with no records gives one empty run,
-// which a sort scan reads as no records, rather than none for it to read.
+// The result always has at least one run. A src with no records gives one
+// empty run, which a sort scan reads as no records. With zero runs the sort
+// scan would have nothing to open.
 func (sp *SortPlan) splitIntoRuns(src query.Scan) ([]*materialize.TempTable, error) {
 	run := materialize.NewTempTable(sp.tx, sp.src.Schema())
 	runs := []*materialize.TempTable{run}
@@ -134,8 +137,8 @@ func (sp *SortPlan) splitIntoRuns(src query.Scan) ([]*materialize.TempTable, err
 }
 
 // mergeRunsInPairs merges the runs two at a time, each pair into one new run,
-// and returns the new runs. A run left over from an odd number is passed on as
-// it is.
+// and returns the new runs. With an odd number of runs, the last run is
+// passed on unchanged.
 func (sp *SortPlan) mergeRunsInPairs(runs []*materialize.TempTable) ([]*materialize.TempTable, error) {
 	merged := []*materialize.TempTable{}
 	for len(runs) >= 2 {
@@ -150,7 +153,7 @@ func (sp *SortPlan) mergeRunsInPairs(runs []*materialize.TempTable) ([]*material
 	return append(merged, runs...), nil
 }
 
-// mergeTwoRuns writes the records of two runs into a new run in order.
+// mergeTwoRuns writes the records of two runs to a new run, in sorted order.
 func (sp *SortPlan) mergeTwoRuns(run1, run2 *materialize.TempTable) (*materialize.TempTable, error) {
 	s1, err := run1.Open()
 	if err != nil {
@@ -183,9 +186,9 @@ func (sp *SortPlan) mergeTwoRuns(run1, run2 *materialize.TempTable) (*materializ
 	}
 
 	for hasMore1 || hasMore2 {
-		// The record of the first run goes first unless the second has one
-		// that comes before it, so records of equal fields keep the order of
-		// their runs.
+		// The record of the first run is taken unless the second run has a
+		// record that is ordered before it. Records with equal sort fields
+		// therefore keep the order of their runs.
 		takeFirst := hasMore1
 		if hasMore1 && hasMore2 {
 			c, err := sp.comp.Compare(s1, s2)
@@ -215,30 +218,31 @@ func (sp *SortPlan) mergeTwoRuns(run1, run2 *materialize.TempTable) (*materializ
 	return result, nil
 }
 
-// BlocksAccessed is the blocks of reading the sorted records once, which is
-// the blocks their materialization takes up: the last runs hold every record,
-// laid out as a temp table of src's schema would.
+// BlocksAccessed returns the blocks of one read of the sorted records. This
+// is the number of blocks of their materialization: the last runs hold every
+// record, stored like a temp table with the schema of src.
 //
-// Sorting them is left out. It is done once, when the plan is opened, while
-// this is the cost of reading the plan, which an operator above may do many
-// times over. It could not be counted well anyway: how many merges a sort
-// takes depends on how many runs the records split into, which depends on the
-// order they are in, and no statistic says that.
+// The cost of the sort is not included. The sort runs once, when the plan is
+// opened. This estimate is the cost of one read of the plan, which an
+// operator above can repeat many times. The sort cost could not be estimated
+// well anyway. The number of merges depends on the number of runs, which
+// depends on the existing order of the records, and no statistic describes
+// that order.
 func (sp *SortPlan) BlocksAccessed() int {
 	return NewMaterializePlan(sp.tx, sp.src).BlocksAccessed()
 }
 
-// RecordsOutput is the records of src.
+// RecordsOutput returns the records of src.
 func (sp *SortPlan) RecordsOutput() int {
 	return sp.src.RecordsOutput()
 }
 
-// DistinctValues is the distinct values of fieldName in src.
+// DistinctValues returns the distinct values of fieldName in src.
 func (sp *SortPlan) DistinctValues(fieldName string) int {
 	return sp.src.DistinctValues(fieldName)
 }
 
-// Schema is the schema of src.
+// Schema returns the schema of src.
 func (sp *SortPlan) Schema() *recordmanager.Schema {
 	return sp.src.Schema()
 }
