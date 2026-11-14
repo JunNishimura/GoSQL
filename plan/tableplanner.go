@@ -57,6 +57,22 @@ func (tp *tablePlanner) makeSelectPlan() Plan {
 	return tp.addSelectPred(p)
 }
 
+// makeProductPlan returns the plan of putting every record of current beside
+// every record of the table, read as makeSelectPlan reads it.
+//
+// The table is read through an index where the predicate lets it be, unlike
+// SimpleDB, which reads it in full under a select. A product reads its right
+// side once for each chunk of the left, so the fewer records it is narrowed
+// to before that, the less is read; and it is when an index has narrowed it to
+// very few that a product is cheaper than a join through an index at all.
+//
+// current goes on the left, where it is materialized, since it is a plan of
+// one or more tables already joined and working it out again for every chunk
+// would cost more than reading back what it gave the first time.
+func (tp *tablePlanner) makeProductPlan(current Plan) (Plan, error) {
+	return NewMultibufferProductPlan(tp.tx, current, tp.makeSelectPlan())
+}
+
 // addSelectPred returns p under a select of the terms of the predicate that
 // can be tested against the table's records alone, or p itself if there are
 // none.

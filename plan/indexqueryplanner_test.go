@@ -351,6 +351,12 @@ func indexSearchOf(p Plan) (query.Constant, bool) {
 		}
 
 		return indexSearchOf(p.p2)
+	case *MultibufferProductPlan:
+		if v, ok := indexSearchOf(p.lhs.src); ok {
+			return v, true
+		}
+
+		return indexSearchOf(p.rhs)
 	default:
 		return query.Constant{}, false
 	}

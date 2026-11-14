@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"cmp"
 	"slices"
 	"testing"
 
@@ -121,4 +122,112 @@ func mustMakeSelectPlan(t *testing.T, tx *transaction.Transaction, mm *metadatam
 	}
 
 	return p
+}
+
+// The other table, of oids 0 and 1, is what is already planned. A product
+// gives its pairs a chunk at a time, so they are compared sorted.
+func TestTablePlannerMakeProductPlan(t *testing.T) {
+	tests := []struct {
+		name    string
+		indexed []string
+		sql     string
+		// wantSearch is the value the plan searches an index for, or nil if it
+		// should not read the table through an index.
+		wantSearch *query.Constant
+		want       [][2]int32
+	}{
+		{
+			name:       "given a table of 20 records with no index and another of 2 already planned, when the product plan under a predicate where id is 3 is made, then id 3 alone is put beside each oid",
+			indexed:    nil,
+			sql:        "select id, oid from test, other where id = 3",
+			wantSearch: nil,
+			want:       [][2]int32{{3, 0}, {3, 1}},
+		},
+		{
+			name:       "given a table of 20 records indexed on id and another of 2 already planned, when the product plan under a predicate where id is 3 is made, then the table is read through the index for 3 and id 3 alone is put beside each oid",
+			indexed:    []string{"id"},
+			sql:        "select id, oid from test, other where id = 3",
+			wantSearch: new(query.NewIntConstant(3)),
+			want:       [][2]int32{{3, 0}, {3, 1}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			mm := newTestMetadataManager(t, tx)
+			createTestTable(t, tx, mm, testRecordCount)
+			createIndexesThrough(t, tx, mm, tt.indexed)
+			createOtherTable(t, tx, mm, 2)
+
+			current := mustNewTablePlanOf(t, tx, mm, otherTableName)
+			p := mustMakeProductPlan(t, tx, mm, tt.sql, current)
+
+			got, ok := indexSearchOf(p)
+			switch {
+			case tt.wantSearch == nil && ok:
+				t.Errorf("the plan reads the table through an index for %s, want no index read", got)
+			case tt.wantSearch != nil && !ok:
+				t.Errorf("the plan reads no index, want one for %s", *tt.wantSearch)
+			case tt.wantSearch != nil && got != *tt.wantSearch:
+				t.Errorf("the plan reads the table through an index for %s, want %s", got, *tt.wantSearch)
+			}
+
+			if pairs := sortedPairs(openAndReadIDPairs(t, p)); !slices.Equal(pairs, tt.want) {
+				t.Errorf("the plan read (id, oid) pairs %v, want %v", pairs, tt.want)
+			}
+		})
+	}
+
+	// What is already planned is read through again for every chunk of the
+	// table, so it goes on the left, where the multibuffer product
+	// materializes it rather than working it out again.
+	t.Run("given a table of 20 records and another of 2 already planned, when the product plan is made, then it is a multibuffer product with what is already planned on the left", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, testRecordCount)
+		createOtherTable(t, tx, mm, 2)
+
+		current := mustNewTablePlanOf(t, tx, mm, otherTableName)
+		p := mustMakeProductPlan(t, tx, mm, "select id, oid from test, other", current)
+
+		mp, ok := p.(*MultibufferProductPlan)
+		if !ok {
+			t.Fatalf("makeProductPlan() = %T, want *MultibufferProductPlan", p)
+		}
+		if mp.lhs.src != current {
+			t.Errorf("the left side of the product = %T, want the plan already planned", mp.lhs.src)
+		}
+	})
+}
+
+// mustMakeProductPlan makes the product plan of current and the test table
+// under the predicate of sql.
+func mustMakeProductPlan(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, sql string, current Plan) Plan {
+	t.Helper()
+
+	tp, err := newTablePlanner(tx, testTableName, mustParseQuery(t, sql).Predicate(), mm)
+	if err != nil {
+		t.Fatalf("newTablePlanner(%q) error = %v", testTableName, err)
+	}
+
+	p, err := tp.makeProductPlan(current)
+	if err != nil {
+		t.Fatalf("makeProductPlan() error = %v", err)
+	}
+	if p == nil {
+		t.Fatalf("makeProductPlan() = nil, want a plan")
+	}
+
+	return p
+}
+
+// sortedPairs returns pairs sorted by id and then by oid, for comparing the
+// pairs of plans that do not promise an order.
+func sortedPairs(pairs [][2]int32) [][2]int32 {
+	sorted := slices.Clone(pairs)
+	slices.SortFunc(sorted, func(a, b [2]int32) int {
+		return cmp.Or(cmp.Compare(a[0], b[0]), cmp.Compare(a[1], b[1]))
+	})
+
+	return sorted
 }
