@@ -17,8 +17,8 @@ func TestCountFnFieldName(t *testing.T) {
 func TestCountFnValue(t *testing.T) {
 	tests := []struct {
 		name string
-		// groups are the number of records of each group processed, in turn.
-		// The value is asked for after the last.
+		// groups is the number of records in each group, in processing order.
+		// Value is read after the last group.
 		groups []int
 		want   int32
 	}{

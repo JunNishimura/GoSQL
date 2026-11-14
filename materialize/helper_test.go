@@ -20,7 +20,7 @@ const (
 )
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see the tables another made.
+// one test cannot see the tables of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -45,9 +45,9 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 	return tx
 }
 
-// fakeScan is a scan standing on one record, whose fields hold the values the
-// test put in the map. Only reading that record is supported: it has no other
-// record to move to.
+// fakeScan is a scan that is positioned on one record. The fields of the
+// record have the values in the map. It only supports reads of that record,
+// and has no other record to move to.
 type fakeScan map[string]query.Constant
 
 var _ query.Scan = fakeScan{}
@@ -69,8 +69,8 @@ func (fs fakeScan) HasField(fieldName string) bool {
 }
 func (fs fakeScan) Close() {}
 
-// newTestSchema builds a schema of an int "id" and a varchar "name", one field
-// of each kind.
+// newTestSchema builds a schema with an int "id" and a varchar "name": one
+// field of each type.
 func newTestSchema(t *testing.T) *recordmanager.Schema {
 	t.Helper()
 

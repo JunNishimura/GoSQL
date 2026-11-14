@@ -9,8 +9,9 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// leftRecord is a record of the left side of the merge join tests: an int
-// "did" and a varchar "dname". The right side is runs of id and name.
+// leftRecord is a record of the left side in the merge join tests: an int
+// "did" and a varchar "dname". The right side consists of runs with id and
+// name.
 type leftRecord struct {
 	did   int32
 	dname string
@@ -85,10 +86,9 @@ func TestMergeJoinScan(t *testing.T) {
 		})
 	}
 
-	// The scan remembers the join value of the pairs it last read. Moving back
-	// to the start has to forget it, or the first record on the right, holding
-	// that same value, would be taken to pair with a left side not yet on any
-	// record.
+	// The scan stores the join value of the last pairs it read. A restart
+	// must clear it. Otherwise the first right record, which has that value,
+	// would be paired with a left side that is on no record yet.
 	t.Run("given sides of a single id, when the scan is read to the end and moved before its first record, then it reads the same pairs again", func(t *testing.T) {
 		tx := newTestTransaction(t)
 
@@ -140,8 +140,8 @@ func TestMergeJoinScanHasField(t *testing.T) {
 	}
 }
 
-// newLeftTable makes a temp table of did and dname holding the records, in the
-// order given.
+// newLeftTable creates a temp table with the fields did and dname that holds
+// records in the order given.
 func newLeftTable(t *testing.T, tx *transaction.Transaction, records []leftRecord) *TempTable {
 	t.Helper()
 
@@ -175,8 +175,8 @@ func newLeftTable(t *testing.T, tx *transaction.Transaction, records []leftRecor
 	return tt
 }
 
-// mustNewMergeJoinScan joins a table of the left records with a sort scan of
-// runs of the right ids, on did and id.
+// mustNewMergeJoinScan joins a table of the left records with a sort scan
+// over runs of the right ids, on did and id.
 func mustNewMergeJoinScan(t *testing.T, tx *transaction.Transaction, left []leftRecord, right ...[]int32) *MergeJoinScan {
 	t.Helper()
 
@@ -201,8 +201,8 @@ func mustNewMergeJoinScan(t *testing.T, tx *transaction.Transaction, left []left
 	return s
 }
 
-// readPairs reads every pair a scan of mustNewMergeJoinScan gives back from its
-// start as "did dname:id".
+// readPairs reads every pair of a scan from mustNewMergeJoinScan, from its
+// start, as "did dname:id".
 func readPairs(t *testing.T, s *MergeJoinScan) []string {
 	t.Helper()
 

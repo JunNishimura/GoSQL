@@ -9,19 +9,21 @@ var _ AggregationFn = (*CountFn)(nil)
 
 // CountFn counts the records of a group.
 //
-// It reads nothing from them: every record of the group counts, whatever its
-// field holds. The field is only what the count is named after.
+// It reads nothing from the records. Every record of the group counts,
+// whatever the value of its field. The field only provides the name of the
+// count.
 type CountFn struct {
 	fieldName string
 	count     int32
 }
 
-// NewCountFn returns a count of the records of a group, named after fieldName.
+// NewCountFn returns a count of the records of a group, named after
+// fieldName.
 func NewCountFn(fieldName string) *CountFn {
 	return &CountFn{fieldName: fieldName}
 }
 
-// ProcessFirst starts the count at the first record of a group.
+// ProcessFirst starts the count with the first record of a group.
 func (f *CountFn) ProcessFirst(s query.Scan) error {
 	f.count = 1
 
@@ -35,12 +37,13 @@ func (f *CountFn) ProcessNext(s query.Scan) error {
 	return nil
 }
 
-// FieldName is "countof" followed by the field the count was made for.
+// FieldName returns "countof" followed by the field that the count is named
+// after.
 func (f *CountFn) FieldName() string {
 	return "countof" + f.fieldName
 }
 
-// Value is the number of records counted, as an int.
+// Value returns the number of records counted, as an int.
 func (f *CountFn) Value() query.Constant {
 	return query.NewIntConstant(f.count)
 }

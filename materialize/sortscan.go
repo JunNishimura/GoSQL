@@ -8,41 +8,42 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// maxRuns is how many runs a sort scan merges. A sort merges its runs in
-// pairs until this many are left, and the scan does the last merge as it is
-// read, rather than writing it out to be read again.
+// maxRuns is the number of runs that a sort scan merges. A sort merges its
+// runs in pairs until this many remain. The scan performs the last merge
+// while it is read, so that the result is not written and read again.
 const maxRuns = 2
 
-// noCurrentRun is the index of the current run when the scan is on no record.
+// noCurrentRun is the index of the current run while the scan is on no
+// record.
 const noCurrentRun = -1
 
 var _ query.Scan = (*SortScan)(nil)
 
-// SortScan reads the records of one or two sorted runs in order, merging the
-// two as it goes.
+// SortScan reads the records of one or two sorted runs in order. It merges
+// two runs while it reads them.
 //
-// Each run is sorted already, so the next record of the whole is whichever of
-// the runs' next records comes first. The scan keeps every run on its next
-// record and hands out the earlier of them, moving on only the run it came
-// from.
+// Each run is already sorted. The next record overall is therefore the
+// smaller of the next records of the runs. The scan keeps every run on its
+// next record, returns the smaller one, and advances only the run that it
+// came from.
 type SortScan struct {
 	runs []query.UpdateScan
-	// hasMore says, for each run, whether it is on a record rather than past
-	// its last.
+	// hasMore reports for each run whether it is on a record. It is false for
+	// a run that is past its last record.
 	hasMore []bool
-	// current is the index of the run whose record the scan is on, or
+	// current is the index of the run that holds the current record, or
 	// noCurrentRun.
 	current int
 	comp    *RecordComparator
 }
 
 // NewSortScan opens the runs and returns a scan of their records in the order
-// comp puts them, before the first.
+// of comp, positioned before the first record.
 //
-// There have to be one or two runs. A sort of no records still has a run, an
-// empty one, so no runs at all is a mistake of the caller, as is more than
-// the scan merges. Whatever was opened before a failure is closed again, since
-// no scan comes back for the caller to close.
+// The number of runs must be one or two. A sort of no records still has one
+// empty run, so zero runs is a caller error. More runs than the scan can
+// merge is also a caller error. If an open fails, the scans already opened
+// are closed, because no scan is returned that the caller could close.
 func NewSortScan(runs []*TempTable, comp *RecordComparator) (*SortScan, error) {
 	if len(runs) == 0 || len(runs) > maxRuns {
 		return nil, fmt.Errorf("open a sort scan over %d runs: it merges one to %d", len(runs), maxRuns)
@@ -71,8 +72,8 @@ func NewSortScan(runs []*TempTable, comp *RecordComparator) (*SortScan, error) {
 	return ss, nil
 }
 
-// MoveBeforeFirstRecord puts every run back on its first record, so that the
-// next move hands out the earliest of them.
+// MoveBeforeFirstRecord positions every run on its first record, so that the
+// next move returns the smallest of them.
 func (ss *SortScan) MoveBeforeFirstRecord() error {
 	ss.current = noCurrentRun
 	for i, s := range ss.runs {
@@ -89,12 +90,12 @@ func (ss *SortScan) MoveBeforeFirstRecord() error {
 	return nil
 }
 
-// MoveToNextRecord moves on to the next record in order and reports whether
-// there was one.
+// MoveToNextRecord moves to the next record in order and reports whether one
+// exists.
 //
-// The run the last record came from is moved on to its next, and the earliest
-// record among the runs that still have one becomes the current. Of records
-// that compare equal, the one of the earlier run comes first.
+// The run that held the last record advances to its next record. The smallest
+// record among the runs that still have one becomes the current record. Of
+// records that compare equal, the record of the earlier run comes first.
 func (ss *SortScan) MoveToNextRecord() (bool, error) {
 	if ss.current != noCurrentRun {
 		ok, err := ss.runs[ss.current].MoveToNextRecord()
@@ -126,7 +127,7 @@ func (ss *SortScan) MoveToNextRecord() (bool, error) {
 	return ss.current != noCurrentRun, nil
 }
 
-// currentRun is the run whose record the scan is on.
+// currentRun returns the run that holds the current record.
 func (ss *SortScan) currentRun() (query.Scan, error) {
 	if ss.current == noCurrentRun {
 		return nil, fmt.Errorf("read a sort scan: %w", query.ErrNoCurrentRecord)
@@ -165,36 +166,37 @@ func (ss *SortScan) GetValue(fieldName string) (query.Constant, error) {
 	return s.GetValue(fieldName)
 }
 
-// HasField reports whether the runs have a field called fieldName.
+// HasField reports whether the runs have a field named fieldName.
 //
-// Every run has the fields of what was sorted, so the first is asked. That
-// answers before any record has been read, which asking the current run would
-// not.
+// Every run has the fields of the sorted input, so the first run answers.
+// That works before any record has been read. The current run could not
+// answer then.
 func (ss *SortScan) HasField(fieldName string) bool {
 	return ss.runs[0].HasField(fieldName)
 }
 
-// SortPosition is where a sort scan is, saved for the scan to be put back to.
+// SortPosition is a saved position of a sort scan, which the scan can be
+// restored to.
 //
-// The record each run is on is not enough to say that. Which run the scan's
-// record is taken from, and which runs have run out, decide what the scan
-// reads next, so they are saved along with the records and put back with
-// them.
+// The current record of each run is not enough to define the position. The
+// next read also depends on which run holds the current record and on which
+// runs are exhausted. These are saved and restored together with the records.
 type SortPosition struct {
-	// rids are the records the runs are on, nil for a run that had run out.
+	// rids are the record ids of the current records of the runs. An entry is
+	// nil for a run that was exhausted.
 	rids    []*recordmanager.RecordID
 	hasMore []bool
 	current int
 }
 
-// SavePosition returns where the scan is, for RestorePosition to put it back
-// to. It is what a merge join reads the records of a join value on its right
-// again for each record on its left that shares the value.
+// SavePosition returns the current position of the scan, which
+// RestorePosition can restore. A merge join uses it to read the right
+// records for a join value again for each left record with that value.
 func (ss *SortScan) SavePosition() (*SortPosition, error) {
 	rids := make([]*recordmanager.RecordID, len(ss.runs))
 	for i, s := range ss.runs {
-		// A run that has run out may never have been on a record at all, as an
-		// empty one never is, so there is no record of it to ask for.
+		// An exhausted run may never have been on a record, as with an empty
+		// run. Such a run has no record id to save.
 		if !ss.hasMore[i] {
 			continue
 		}
@@ -213,10 +215,10 @@ func (ss *SortScan) SavePosition() (*SortPosition, error) {
 	}, nil
 }
 
-// RestorePosition puts the scan back where it was when pos was saved.
+// RestorePosition restores the scan to the position that pos saved.
 //
-// A run that had run out is left where it is: it is never read again before
-// the scan is moved back to its start, which rewinds every run.
+// A run that was exhausted is not repositioned. It is not read again until
+// the scan restarts, and a restart rewinds every run.
 func (ss *SortScan) RestorePosition(pos *SortPosition) error {
 	for i, s := range ss.runs {
 		if !pos.hasMore[i] {

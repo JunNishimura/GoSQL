@@ -18,8 +18,8 @@ func TestMaxFnFieldName(t *testing.T) {
 func TestMaxFnValue(t *testing.T) {
 	tests := []struct {
 		name string
-		// groups are the values of "v" in the records of each group processed,
-		// in turn. The value is asked for after the last.
+		// groups is the values of "v" in the records of each group, in
+		// processing order. Value is read after the last group.
 		groups [][]query.Constant
 		want   query.Constant
 	}{
