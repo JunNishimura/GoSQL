@@ -1,6 +1,10 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
+
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+)
 
 // Term is one comparison of a predicate: two expressions that a record has to
 // bring to the same value.
@@ -59,6 +63,16 @@ func (t Term) IsSatisfied(s Scan) (bool, error) {
 	}
 
 	return lhsVal == rhsVal, nil
+}
+
+// AppliesTo reports whether both sides of the term can be evaluated against a
+// record of schema.
+//
+// One side is not enough. A term of a field of this table and a field of
+// another cannot be tested until the two are joined, however much of it this
+// table holds.
+func (t Term) AppliesTo(schema *recordmanager.Schema) bool {
+	return t.lhs.AppliesTo(schema) && t.rhs.AppliesTo(schema)
 }
 
 // String writes the two sides with an equals sign between them.
