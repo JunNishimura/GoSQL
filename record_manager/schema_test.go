@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// mustAddIntField adds an int field as part of a test's setup. A schema that
-// refuses it means the test itself is broken, not that the assertion failed, so
-// it stops the test rather than reporting a difference.
+// mustAddIntField adds an int field as part of a test's setup. An error here
+// means that the test itself is broken, not that an assertion failed, so the
+// helper stops the test instead of reporting a difference.
 func mustAddIntField(t *testing.T, s *Schema, fieldName string) {
 	t.Helper()
 
@@ -17,8 +17,8 @@ func mustAddIntField(t *testing.T, s *Schema, fieldName string) {
 	}
 }
 
-// mustAddStringField adds a varchar field as part of a test's setup. See
-// mustAddIntField for why it stops the test.
+// mustAddStringField adds a varchar field as part of a test's setup. Like
+// mustAddIntField, it stops the test on an error.
 func mustAddStringField(t *testing.T, s *Schema, fieldName string, length int) {
 	t.Helper()
 
@@ -274,7 +274,7 @@ func TestSchemaFields(t *testing.T) {
 		})
 	}
 
-	// The slice is a copy, so writing to it has to leave the schema alone.
+	// The slice is a copy, so a write to it must not change the schema.
 	aliasTests := []struct {
 		name   string
 		mutate func(fields []string)
@@ -483,8 +483,8 @@ func TestSchemaAddAll(t *testing.T) {
 		})
 	}
 
-	// Nothing is copied unless all of it can be, so a clash has to leave the
-	// schema as it was rather than half combined.
+	// AddAll copies either all fields or none, so a duplicate must leave the
+	// schema unchanged and not partly combined.
 	duplicateTests := []struct {
 		name  string
 		build func(t *testing.T) *Schema

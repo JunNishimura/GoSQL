@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-// The widths the expected numbers below are built from, spelled out once:
+// The sizes that the expected numbers below are based on:
 //
 //	an int          4 bytes
 //	a varchar(n)    4 + 4n bytes, a length prefix plus the widest encoding
 //	                of each character
 //	the in-use flag 4 bytes, at the front of every slot
 //
-// They are written as literals rather than computed, so that a change to any of
-// those widths shows up here as a failing test: it is a change to the format
-// records are stored in.
+// They are written as literals and not computed. A change to any of these
+// sizes then fails a test here, because it changes the format in which
+// records are stored.
 
 func TestNewLayout(t *testing.T) {
 	slotSizeTests := []struct {
@@ -172,7 +172,7 @@ func TestNewLayoutFromCatalog(t *testing.T) {
 				return s
 			},
 			// NewLayout would put id at 4 and name at 8. This table was
-			// written the other way round, and the records on disk follow it.
+			// written in the opposite order, and the records on disk follow it.
 			offsets: map[string]int{
 				"name": 4,
 				"id":   88,
