@@ -9,42 +9,39 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// ErrConstantTypeMismatch reports reading a constant as one type when it was
-// made as the other.
+// ErrConstantTypeMismatch is returned when a constant is read as a type other
+// than the type it was created with.
 //
-// It is kept apart from recordmanager.ErrFieldTypeMismatch, which the record
-// page raises when a field is read as the wrong type, because a constant
-// carries no schema. This one is about the value a caller is holding; that one
-// is about what the table says the field is.
+// It is separate from recordmanager.ErrFieldTypeMismatch, which a record page
+// returns when a field is read as the wrong type. A constant has no schema.
+// This error concerns the value that a caller holds. That error concerns the
+// type that the table declares for the field.
 var ErrConstantTypeMismatch = errors.New("constant type mismatch")
 
-// Constant is one value of a field: a number or a string, along with which of
-// the two it is.
+// Constant is one field value: an int or a string, together with its type.
 //
-// The kind is carried rather than worked out from what is stored, because both
-// values are always present and only one of them means anything. The one that
-// does not is left at the zero value of its type, so an int of 0 and a varchar
-// of "" are the same bytes; without the kind they would be the same constant.
+// The type is stored and not derived from the contents. Both values are
+// always present, and only one of them is meaningful. The unused value is
+// left at its zero value, so an int 0 and a varchar "" have the same bytes.
+// Without the stored type they would be the same constant.
 //
-// Leaving the unused value at its zero value is also what makes == right: two
-// constants of the same kind differ only in the one value that means anything,
-// and two of different kinds differ in the kind whatever they hold. So there is
-// no Equals method here, unlike recordmanager.RecordID, which needs one because
-// it is passed as a pointer and == on two of those compares where they are.
-// Being a plain value also makes a constant usable as a map key, which is what
-// grouping rows and hashing a join will want.
+// The zero value of the unused field also makes == correct. Two constants of
+// the same type differ only in the meaningful value, and two constants of
+// different types differ in the type. Constant therefore has no Equals
+// method. recordmanager.RecordID needs one because it is passed as a pointer,
+// and == on two pointers compares addresses. As a plain value, a constant can
+// also be a map key, which grouping and hash joins need.
 //
-// The zero value is the int 0, since that is what an unset kind and an unset
-// number come to. A constant standing for no value at all is not one of these:
-// whoever needs that says so with a *Constant or a second return value, rather
-// than with a Constant reserved to mean nothing.
+// The zero value is the int 0, because both the unset type and the unset
+// number are zero. No Constant represents "no value". Code that needs that
+// uses a *Constant or a second return value, not a reserved Constant.
 type Constant struct {
 	fieldType recordmanager.FieldType
 	intVal    int32
 	strVal    string
 }
 
-// NewIntConstant returns the constant holding val as an int.
+// NewIntConstant returns a constant that holds val as an int.
 func NewIntConstant(val int32) Constant {
 	return Constant{
 		fieldType: recordmanager.FieldTypeInt,
@@ -52,7 +49,7 @@ func NewIntConstant(val int32) Constant {
 	}
 }
 
-// NewStringConstant returns the constant holding val as a varchar.
+// NewStringConstant returns a constant that holds val as a varchar.
 func NewStringConstant(val string) Constant {
 	return Constant{
 		fieldType: recordmanager.FieldTypeVarchar,
@@ -60,25 +57,24 @@ func NewStringConstant(val string) Constant {
 	}
 }
 
-// Type is the kind of value the constant holds, in the same terms a schema
-// describes a field.
+// Type returns the type of the constant's value, as a schema field type.
 //
-// The two are the same vocabulary on purpose: what a constant may be written to
-// is settled by comparing this against the field's type, with nothing in
-// between to translate one into the other.
+// Constants and schemas deliberately use the same type. Whether a constant
+// can be written to a field is decided by comparing this type with the type
+// of the field, with no conversion between the two.
 func (c Constant) Type() recordmanager.FieldType {
 	return c.fieldType
 }
 
-// AsInt returns the number a constant made from an int holds.
+// AsInt returns the number of an int constant.
 //
-// A constant of the other kind is refused rather than converted. A varchar of
-// "42" is the text of a number and not a number, and a caller handed 42 back
-// from it would hold a value no record ever did.
+// AsInt returns an error for a varchar constant and does not convert it. A
+// varchar "42" is the text of a number, not a number. A caller that received
+// 42 from it would hold a value that no record ever held.
 //
-// A caller that reached here having looked at Type first cannot see this error,
-// which is most of them. It is returned rather than left out because nothing in
-// the type stops a caller from asking without looking.
+// Most callers check Type first and never get this error. It is still
+// returned, because the type system does not prevent a call without that
+// check.
 func (c Constant) AsInt() (int32, error) {
 	if c.fieldType != recordmanager.FieldTypeInt {
 		return 0, fmt.Errorf("read %s as an int: %w", c, ErrConstantTypeMismatch)
@@ -87,7 +83,7 @@ func (c Constant) AsInt() (int32, error) {
 	return c.intVal, nil
 }
 
-// AsString returns the text a constant made from a string holds.
+// AsString returns the text of a varchar constant.
 func (c Constant) AsString() (string, error) {
 	if c.fieldType != recordmanager.FieldTypeVarchar {
 		return "", fmt.Errorf("read %s as a varchar: %w", c, ErrConstantTypeMismatch)
@@ -96,21 +92,22 @@ func (c Constant) AsString() (string, error) {
 	return c.strVal, nil
 }
 
-// Compare reports whether c comes before other, after it or with it, as -1, +1
-// or 0, the way cmp.Compare does.
+// Compare returns -1, 0 or +1 if c is less than, equal to or greater than
+// other, like cmp.Compare.
 //
-// It is what a B-tree keeps its entries in order by. Equality is still ==, and
-// this agrees with it: 0 comes back for exactly the pairs == holds for.
+// A B-tree uses it to keep its entries sorted. Equality is still tested with
+// ==, and Compare is consistent with it: it returns 0 for exactly the pairs
+// that are ==.
 //
-// An int is ordered as a signed number, and a varchar byte by byte, which for
-// text made of ASCII is the order of the characters' codes and puts every
-// upper-case letter before every lower-case one. The empty string comes before
-// every other, which is what lets it stand for the least value of a varchar.
+// Ints are ordered as signed numbers. Varchars are ordered byte by byte. For
+// ASCII text this is the order of the character codes, which puts every
+// upper-case letter before every lower-case letter. The empty string is less
+// than every other string, so it can serve as the minimum varchar value.
 //
-// Constants of the two kinds have no order between them, so comparing one with
-// the other reports ErrConstantTypeMismatch rather than putting either kind
-// first. An index holds values of one field, so they are all of one kind, and a
-// pair that is not means the caller has taken a value from the wrong field.
+// Constants of different types have no order. Compare returns
+// ErrConstantTypeMismatch for such a pair and does not rank one type first.
+// An index holds the values of one field, so they all have one type. A mixed
+// pair means that the caller took a value from the wrong field.
 func (c Constant) Compare(other Constant) (int, error) {
 	if c.fieldType != other.fieldType {
 		return 0, fmt.Errorf("compare %s with %s: %w", c, other, ErrConstantTypeMismatch)
@@ -123,17 +120,17 @@ func (c Constant) Compare(other Constant) (int, error) {
 	return strings.Compare(c.strVal, other.strVal), nil
 }
 
-// String writes an int as the number and a varchar as the text in single
-// quotes, so that a message naming a constant says which of the two it was.
+// String formats an int as the number and a varchar as the text in single
+// quotes, so that a message shows the type of the constant.
 //
-// Unquoted, the int 42 and the varchar '42' read as the same thing, and telling
-// those two apart is the whole of what a type mismatch has to report.
+// Without quotes, the int 42 and the varchar '42' would look the same. A type
+// mismatch error has to show exactly that difference.
 //
-// The quotes are single because that is how SQL writes a string, so a
-// predicate printed from these is SQL that can be parsed again, which is how a
-// view's query is stored. Nothing inside the text is escaped: SQL as parsed here
-// has no way to write a quote inside a string, so no constant parsed from it
-// holds one.
+// The quotes are single because SQL writes strings that way. A predicate
+// printed from constants is therefore SQL that can be parsed again, and the
+// query of a view is stored in this form. The text is not escaped. The SQL
+// parsed here cannot express a quote inside a string, so no parsed constant
+// contains one.
 func (c Constant) String() string {
 	switch c.fieldType {
 	case recordmanager.FieldTypeInt:

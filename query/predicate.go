@@ -7,41 +7,43 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// Predicate is the condition a query keeps records by: terms that all have to
-// hold.
+// Predicate is the condition that a query filters records by: a list of terms
+// that must all hold.
 //
-// Only "and" joins them. That is not a limit on what can be asked, since any
-// condition can be written as a disjunction of these, but it is what lets a
-// planner take a predicate apart: a term of a conjunction can be moved to
-// whichever input holds the fields it names, and the ones left behind still
-// mean what they did. A predicate holding an "or" could not be split that way.
+// The terms are combined only with "and". This does not limit what a query
+// can express, because any condition can be written as a disjunction of such
+// predicates. It does let a planner split a predicate. A term of a
+// conjunction can be moved to the input that has its fields, and the
+// remaining terms keep their meaning. A predicate with an "or" could not be
+// split this way.
 type Predicate struct {
 	terms []Term
 }
 
-// NewPredicate returns the predicate that holds where all of the given terms
-// do.
+// NewPredicate returns the predicate that holds when all the given terms
+// hold.
 //
-// Given no terms it holds everywhere, which is what a query with no where
-// clause asks for. That is a predicate like any other rather than an absence,
-// so nothing downstream has to treat the unfiltered case apart.
+// With no terms, the predicate holds for every record. A query without a
+// where clause uses this. It is an ordinary predicate and not a missing one,
+// so no later code needs a special case for an unfiltered query.
 //
-// The terms are copied, so a caller that passes a slice it goes on to write to
-// does not change the predicate under it.
+// The terms are copied. A caller that later writes to the slice it passed
+// does not change the predicate.
 func NewPredicate(terms ...Term) Predicate {
 	return Predicate{
 		terms: slices.Clone(terms),
 	}
 }
 
-// IsSatisfied reports whether the record the scan is on meets every term.
+// IsSatisfied reports whether the current record of the scan satisfies every
+// term.
 //
-// Reading stops at the first term that does not hold. The terms after it cannot
-// change the answer, and each one skipped is a field that is not read, so a
-// predicate costs what it takes to rule a record out rather than what it takes
-// to check all of it.
+// Evaluation stops at the first term that does not hold. The later terms
+// cannot change the result, and each skipped term saves a field read. The
+// cost of a predicate is therefore the cost of rejecting a record, not the
+// cost of checking every term.
 //
-// A predicate of no terms is satisfied without the scan being read at all.
+// A predicate with no terms is satisfied without any read of the scan.
 func (p Predicate) IsSatisfied(s Scan) (bool, error) {
 	for _, term := range p.terms {
 		satisfied, err := term.IsSatisfied(s)
@@ -56,57 +58,59 @@ func (p Predicate) IsSatisfied(s Scan) (bool, error) {
 	return true, nil
 }
 
-// ConjoinWith returns the predicate holding where both this one and other do.
+// ConjoinWith returns the predicate that holds when both this predicate and
+// other hold.
 //
-// It builds another predicate rather than growing this one. A planner makes
-// several predicates out of one while working out which conditions can be
-// pushed down to which input, and a conjunction that appended into the terms it
-// was called on would change the predicate the others were taken from.
+// It creates a new predicate and does not modify this one. A planner derives
+// several predicates from one while it decides which conditions to push down
+// to which input. If ConjoinWith appended to the terms of its receiver, it
+// would change the predicate that the others were derived from.
 func (p Predicate) ConjoinWith(other Predicate) Predicate {
 	return Predicate{
 		terms: slices.Concat(p.terms, other.terms),
 	}
 }
 
-// Terms returns the terms of the predicate, in the order they were given.
+// Terms returns the terms of the predicate in their original order.
 //
-// This is how a planner takes a predicate apart. The slice is a copy, so a
-// caller that writes to it does not change the predicate it came from.
+// A planner uses it to split a predicate. The slice is a copy, so a caller
+// that writes to it does not change the predicate.
 func (p Predicate) Terms() []Term {
 	return slices.Clone(p.terms)
 }
 
 // SelectSubPred returns the predicate of the terms that can be evaluated
-// against a record of schema alone, in the order they were given, and whether
-// there are any.
+// against a record of schema alone, in their original order. It also reports
+// whether there are any such terms.
 //
-// These are the terms a planner can test as a table is read, before it is
-// joined to anything, so that the join is given fewer records. That is safe
-// because the terms are joined by "and": a record one of them rules out is
-// ruled out of the whole predicate, wherever in the plan it is tested.
+// A planner can test these terms while a table is read, before any join, so
+// that the join receives fewer records. This is safe because the terms are
+// combined with "and": a record that one term rejects is rejected by the
+// whole predicate, wherever in the plan the term is tested.
 //
-// Having no such terms is reported apart from a predicate of no terms. That
-// one holds everywhere, and a planner given it would put a select over the
-// table that keeps every record, rather than putting none.
+// "No such terms" is reported separately from a predicate with no terms. A
+// predicate with no terms holds for every record. A planner that received it
+// would add a select that keeps every record, instead of adding no select.
 func (p Predicate) SelectSubPred(schema *recordmanager.Schema) (Predicate, bool) {
 	return p.filter(func(term Term) bool {
 		return term.AppliesTo(schema)
 	})
 }
 
-// JoinSubPred returns the predicate of the terms that can be evaluated against
-// a record of the two schemas joined but not against a record of either
-// alone, in the order they were given, and whether there are any.
+// JoinSubPred returns the predicate of the terms that can be evaluated
+// against a record of the two schemas joined, but not against a record of
+// either schema alone. The terms keep their original order. It also reports
+// whether there are any such terms.
 //
-// These are the terms a planner tests where it joins a table of one schema to
-// a plan of the other: they could not be tested any earlier, and testing them
-// there keeps the join from handing on pairs of records they rule out. A term
-// either schema answers alone is left out, since SelectSubPred has already
-// put it below the join.
+// A planner tests these terms where it joins a table of one schema to a plan
+// of the other. They cannot be tested earlier, and testing them there stops
+// the join from passing on pairs that they reject. A term that one schema can
+// evaluate alone is excluded, because SelectSubPred has already placed it
+// below the join.
 //
-// The two schemas are not put together into one to check a term against.
-// They can share a field name, which a schema refuses, so each side of the
-// term is checked against one schema and then the other instead.
+// The two schemas are not merged into one for the check. They can share a
+// field name, which a schema rejects. Each side of a term is therefore
+// checked against one schema and then the other.
 func (p Predicate) JoinSubPred(schema1, schema2 *recordmanager.Schema) (Predicate, bool) {
 	appliesToEither := func(e Expression) bool {
 		return e.AppliesTo(schema1) || e.AppliesTo(schema2)
@@ -121,8 +125,8 @@ func (p Predicate) JoinSubPred(schema1, schema2 *recordmanager.Schema) (Predicat
 	})
 }
 
-// filter returns the predicate of the terms keep holds for, in the order they
-// were given, and whether there are any.
+// filter returns the predicate of the terms for which keep returns true, in
+// their original order. It also reports whether there are any such terms.
 func (p Predicate) filter(keep func(Term) bool) (Predicate, bool) {
 	var terms []Term
 	for _, term := range p.terms {
@@ -137,13 +141,11 @@ func (p Predicate) filter(keep func(Term) bool) (Predicate, bool) {
 	return Predicate{terms: terms}, true
 }
 
-// String writes the terms in the order they were given, with "and" between
-// them.
+// String returns the terms in their original order, separated by "and".
 //
-// A predicate of no terms is the empty string. It stands for a where clause
-// that was never written, and whoever prints a query writes no "where" for it
-// at all, so there is nothing to put here that would not be SQL nobody asked
-// for.
+// A predicate with no terms returns the empty string. It represents a where
+// clause that was not written, and code that prints a query omits "where" for
+// it. Any other output here would be SQL that nobody wrote.
 func (p Predicate) String() string {
 	written := make([]string, 0, len(p.terms))
 	for _, term := range p.terms {

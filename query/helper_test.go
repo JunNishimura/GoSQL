@@ -16,13 +16,13 @@ const (
 	testDataFile   = "test.tbl"
 	testBlockSize  = 400
 	testNumBuffers = 3
-	// testStringFieldLength is the character limit of the varchar field the
-	// tests share. It is named rather than written out so that a case about the
-	// limit reads as being about the limit, whatever the number happens to be.
+	// testStringFieldLength is the character limit of the varchar field that
+	// the tests share. It is a named constant so that a case about the limit
+	// refers to the limit by name, whatever its value.
 	testStringFieldLength = 20
 )
 
-// The numbers the slot tests rely on, spelled out once:
+// The sizes that the slot tests depend on:
 //
 //	a block         400 bytes
 //	a slot           92 bytes, the in-use flag (4) plus id (4) plus name (84)
@@ -32,12 +32,12 @@ const (
 	testSlotsInBlock = testBlockSize / testSlotSize
 )
 
-// overwideFieldLength is a varchar wide enough that a slot of one such field,
-// 4 + (4 + 396) = 404 bytes, does not fit in a block at all.
+// overwideFieldLength is a varchar length for which a slot with one such
+// field, 4 + (4 + 396) = 404 bytes, does not fit in a block.
 const overwideFieldLength = 99
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see what another wrote.
+// one test cannot see the data of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -62,9 +62,9 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 	return tx
 }
 
-// newTestLayout builds a layout over the schema the scan tests share: "id" is
-// an int and "name" a varchar of 20 characters. One field of each kind is what
-// lets a test reach for the wrong one on purpose.
+// newTestLayout builds a layout for the schema that the scan tests share:
+// "id" is an int and "name" is a varchar of 20 characters. With one field of
+// each type, a test can deliberately use the wrong one.
 func newTestLayout(t *testing.T) *recordmanager.Layout {
 	t.Helper()
 
@@ -79,8 +79,8 @@ func newTestLayout(t *testing.T) *recordmanager.Layout {
 	return recordmanager.NewLayout(s)
 }
 
-// newLayoutOfOneStringField builds a layout of a single varchar, which is what
-// lets a test put a slot at a width of its choosing.
+// newLayoutOfOneStringField builds a layout with a single varchar field, so
+// that a test can choose the slot size.
 func newLayoutOfOneStringField(t *testing.T, length int) *recordmanager.Layout {
 	t.Helper()
 

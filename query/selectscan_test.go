@@ -10,18 +10,18 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// testNameOf is the name the record with this id is given, so that a case can
-// name a record by either of its two fields and mean the same record.
+// testNameOf returns the name of the record with this id. A case can
+// therefore refer to the same record by either of its two fields.
 func testNameOf(id int32) string {
 	return fmt.Sprintf("name%d", id)
 }
 
-// newTestTableOfRecords opens a scan over a table holding one record for each
-// of the given ids, and leaves it before the first record.
+// newTestTableOfRecords opens a scan of a table with one record for each of
+// the given ids, and positions it before the first record.
 //
-// The records go in through the scan rather than into slots chosen by the test,
-// because what a select is read for is the run of records it keeps, not where
-// they sit.
+// The records are inserted through the scan, not into slots that the test
+// chooses. A select is tested for the sequence of records it keeps, not for
+// their positions.
 func newTestTableOfRecords(t *testing.T, ids ...int32) *TableScan {
 	t.Helper()
 
@@ -46,14 +46,13 @@ func newTestTableOfRecords(t *testing.T, ids ...int32) *TableScan {
 	return ts
 }
 
-// termOnID is the term keeping the record whose id is this one.
+// termOnID returns the term that keeps the record with this id.
 func termOnID(id int32) Term {
 	return NewTerm(NewFieldExpression("id"), NewConstantExpression(NewIntConstant(id)))
 }
 
-// termOnName is the term keeping the record whose name is the one the id was
-// given, which is the same record termOnID keeps and a different way of asking
-// for it.
+// termOnName returns the term that keeps the record whose name belongs to
+// this id. It keeps the same record as termOnID, through the other field.
 func termOnName(id int32) Term {
 	return NewTerm(NewFieldExpression("name"), NewConstantExpression(NewStringConstant(testNameOf(id))))
 }
@@ -84,10 +83,10 @@ func TestSelectScanMoveToNextRecord(t *testing.T) {
 			pred: NewPredicate(),
 			want: []int32{10, 20, 30},
 		},
-		// The two terms name the same record by its two different fields, so a
+		// The two terms select the same record through its two fields. A
 		// select that tested only one of them would keep the same record and
-		// pass for the wrong reason. The case below, whose terms name two
-		// different records, is what tells them apart.
+		// pass for the wrong reason. The next case, whose terms select two
+		// different records, detects that.
 		{
 			name: "given a predicate of two terms that one record meets, when the select is walked, then it returns that record",
 			pred: NewPredicate(termOnID(20), termOnName(20)),
@@ -110,8 +109,8 @@ func TestSelectScanMoveToNextRecord(t *testing.T) {
 		})
 	}
 
-	// A walk that has ended stays ended, rather than starting over on the
-	// table underneath.
+	// A scan that has reached its end stays at the end, and does not restart
+	// on the underlying table.
 	t.Run("given a select that has been read to the end, when it is asked again, then it stays at the end", func(t *testing.T) {
 		sc := NewSelectScan(newTestTableOfRecords(t, 10, 20, 30), NewPredicate(termOnID(20)))
 
@@ -128,8 +127,9 @@ func TestSelectScanMoveToNextRecord(t *testing.T) {
 		}
 	})
 
-	// The select does no testing of its own, so what the predicate refuses has
-	// to reach the caller rather than read as a record that does not match.
+	// The select adds no check of its own. An error from the predicate must
+	// therefore reach the caller, and must not count as a record that does
+	// not match.
 	t.Run("given a predicate naming a field the table does not have, when the select is walked, then ErrFieldNotFound reaches the caller", func(t *testing.T) {
 		missing := NewTerm(NewFieldExpression("missing"), NewConstantExpression(NewIntConstant(10)))
 		sc := NewSelectScan(newTestTableOfRecords(t, 10), NewPredicate(missing))
@@ -141,8 +141,8 @@ func TestSelectScanMoveToNextRecord(t *testing.T) {
 }
 
 func TestSelectScanMoveBeforeFirstRecord(t *testing.T) {
-	// Going back has to reach the table underneath. A select that reset only
-	// itself would find the table already read to the end and return nothing.
+	// A restart must reach the underlying table. A select that reset only
+	// itself would find the table at its end and return nothing.
 	t.Run("given a select that has been read to the end, when it is put back to the start, then it returns the same records again", func(t *testing.T) {
 		sc := NewSelectScan(newTestTableOfRecords(t, 10, 20, 30), NewPredicate(termOnID(20)))
 
@@ -161,8 +161,8 @@ func TestSelectScanMoveBeforeFirstRecord(t *testing.T) {
 	})
 }
 
-// newTestSelectOnARecord opens a select over a table of one record, id 20, and
-// moves it onto that record, which is where the field methods are read from.
+// newTestSelectOnARecord opens a select over a table with one record, id 20,
+// and moves it to that record, so that the field methods can be tested.
 func newTestSelectOnARecord(t *testing.T) *SelectScan {
 	t.Helper()
 
@@ -234,8 +234,8 @@ func TestSelectScanGetValue(t *testing.T) {
 	}
 }
 
-// A select keeps the fields of what it reads: it drops records, and a
-// projection is what drops fields.
+// A select keeps the fields of its input. It drops records, and a projection
+// drops fields.
 func TestSelectScanHasField(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -266,8 +266,8 @@ func TestSelectScanHasField(t *testing.T) {
 }
 
 func TestSelectScanClose(t *testing.T) {
-	// A select holds no blocks of its own, so closing it is only worth anything
-	// if it reaches the scan underneath.
+	// A select holds no blocks itself, so closing it is only useful if it
+	// closes the underlying scan.
 	t.Run("when a select is closed, then the scan it reads through is closed too, so the block that one held is given back", func(t *testing.T) {
 		ts := newTestTableOfRecords(t, 10)
 
