@@ -12,7 +12,7 @@ import (
 
 const testLeftTableName = "test_left"
 
-// joinedRecord is one pair a join scan gives back: the left record's lid and
+// joinedRecord is one pair returned by a join scan: the left record's lid and
 // lname, and the right record's id and name.
 type joinedRecord struct {
 	lid   int32
@@ -21,8 +21,9 @@ type joinedRecord struct {
 	name  string
 }
 
-// The right table is the one newTestIndexedTable makes, indexed on id, and the
-// left one a table of lid and lname, joined to it on lid equal to id.
+// The right table is the one that newTestIndexedTable creates, indexed on id.
+// The left table has the fields lid and lname. The join condition is lid =
+// id.
 func TestJoinScan(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -86,8 +87,8 @@ func TestJoinScan(t *testing.T) {
 		})
 	}
 
-	// The order across left records is the left's own; only the order of the
-	// right records that match one left record is the index's to choose.
+	// The order across left records is the order of the left scan. The index
+	// determines only the order of the right records for one left record.
 	t.Run("given left lids 3 and 1 and right ids 0 to 4, when the join is read, then the pair of 3 comes before the pair of 1", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		s := newTestJoinScan(t, tx, []int32{3, 1}, testRecords(0, 1, 2, 3, 4))
@@ -135,9 +136,9 @@ func TestJoinScan(t *testing.T) {
 	})
 }
 
-// newTestJoinScan writes a left table of a record per lid, named "left"
-// followed by the lid, and the right table of right records indexed on id, and
-// returns a join scan of the two on lid equal to id.
+// newTestJoinScan writes a left table with one record per lid, whose lname is
+// "left" followed by the lid. It also writes the right table from right,
+// indexed on id. It returns a join scan of the two tables on lid = id.
 func newTestJoinScan(t *testing.T, tx *transaction.Transaction, left []int32, right []testRecord) *JoinScan {
 	t.Helper()
 
@@ -174,8 +175,8 @@ func newTestJoinScan(t *testing.T, tx *transaction.Transaction, left []int32, ri
 	return s
 }
 
-// readJoinedRecords reads every pair s gives back from where it is, in the
-// order it gives them.
+// readJoinedRecords reads every pair from s, starting at its current
+// position, in the order s returns them.
 func readJoinedRecords(t *testing.T, s query.Scan) []joinedRecord {
 	t.Helper()
 
@@ -206,8 +207,8 @@ func readJoinedRecords(t *testing.T, s query.Scan) []joinedRecord {
 	}
 }
 
-// sortedJoinedRecords is records in order of lid, then of the right record's
-// name.
+// sortedJoinedRecords returns records sorted by lid, then by the right
+// record's name.
 func sortedJoinedRecords(records []joinedRecord) []joinedRecord {
 	return slices.SortedFunc(slices.Values(records), func(a, b joinedRecord) int {
 		if a.lid != b.lid {

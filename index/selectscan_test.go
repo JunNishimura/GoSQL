@@ -101,8 +101,8 @@ func TestSelectScan(t *testing.T) {
 	})
 }
 
-// testRecords is a record for each of ids, whose name is "name" followed by the
-// id.
+// testRecords returns one record for each of ids. Its name is "name" followed
+// by the id.
 func testRecords(ids ...int32) []testRecord {
 	records := make([]testRecord, len(ids))
 	for i, id := range ids {
@@ -112,9 +112,9 @@ func testRecords(ids ...int32) []testRecord {
 	return records
 }
 
-// newTestSelectScan writes records into a table of an int id and a varchar
-// name, files each in a B-tree index on id, and returns a select scan of the
-// records filed under value.
+// newTestSelectScan writes records into a table with an int id and a varchar
+// name, and inserts each into a B-tree index on id. It returns a select scan
+// of the records for value.
 func newTestSelectScan(t *testing.T, tx *transaction.Transaction, records []testRecord, value query.Constant) *SelectScan {
 	t.Helper()
 
@@ -127,9 +127,9 @@ func newTestSelectScan(t *testing.T, tx *transaction.Transaction, records []test
 	return s
 }
 
-// newTestIndexedTable writes records into a table of an int id and a varchar
-// name, and files each in a B-tree index on id. It returns a scan of the table
-// and the index, both open.
+// newTestIndexedTable writes records into a table with an int id and a
+// varchar name, and inserts each into a B-tree index on id. It returns a scan
+// of the table and the index, both open.
 func newTestIndexedTable(t *testing.T, tx *transaction.Transaction, records []testRecord) (*query.TableScan, *BTreeIndex) {
 	t.Helper()
 
@@ -173,8 +173,8 @@ func newTestIndexedTable(t *testing.T, tx *transaction.Transaction, records []te
 	return ts, idx
 }
 
-// readTestRecords reads every record s gives back from where it is, in the
-// order it gives them.
+// readTestRecords reads every record from s, starting at its current
+// position, in the order s returns them.
 func readTestRecords(t *testing.T, s query.Scan) []testRecord {
 	t.Helper()
 
@@ -200,7 +200,7 @@ func readTestRecords(t *testing.T, s query.Scan) []testRecord {
 	}
 }
 
-// sortedTestRecords is records in order of id, then of name.
+// sortedTestRecords returns records sorted by id, then by name.
 func sortedTestRecords(records []testRecord) []testRecord {
 	return slices.SortedFunc(slices.Values(records), func(a, b testRecord) int {
 		if a.id != b.id {

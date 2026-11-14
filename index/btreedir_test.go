@@ -15,7 +15,7 @@ import (
 const testBTreeDirFile = "test_btree_dir"
 
 func TestBTreeDirSearch(t *testing.T) {
-	// A directory at level 0, so its children are leaves.
+	// The directory is at level 0, so its children are leaves.
 	entries := []dirEntry{
 		{value: query.NewIntConstant(10), childBlockNumber: 1},
 		{value: query.NewIntConstant(20), childBlockNumber: 2},
@@ -97,8 +97,8 @@ func TestBTreeDirSearch(t *testing.T) {
 }
 
 func TestBTreeDirSearchDown(t *testing.T) {
-	// A root at level 1 over two directory blocks at level 0, whose children
-	// are leaves 10 to 13:
+	// A root at level 1 over two directory blocks at level 0. The children of
+	// those blocks are leaves 10 to 13:
 	//
 	//	block 0, level 1: 0 -> block 1, 50 -> block 2
 	//	block 1, level 0: 0 -> leaf 10, 20 -> leaf 11
@@ -200,7 +200,7 @@ func TestBTreeDirSearchDown(t *testing.T) {
 }
 
 func TestBTreeDirInsert(t *testing.T) {
-	// A directory at level 0, so the records go in this block itself.
+	// The directory is at level 0, so the entries go into this block.
 	entries := []dirEntry{
 		{value: query.NewIntConstant(10), childBlockNumber: 1},
 		{value: query.NewIntConstant(30), childBlockNumber: 3},
@@ -259,11 +259,13 @@ func TestBTreeDirInsert(t *testing.T) {
 	}
 }
 
-// A directory record on an int field is 12 bytes, so 32 of them fit in the 392
-// bytes a block has past its header. Each case fills a directory block with 31
-// and inserts a 32nd, which fills it and splits it in the middle, at slot 16.
+// A directory entry on an int field is 12 bytes, so 32 entries fit in the 392
+// bytes of a block after its header. Each case fills a directory block with
+// 31 entries and inserts a 32nd. The block is then full and splits in the
+// middle, at slot 16.
 func TestBTreeDirInsertSplit(t *testing.T) {
-	// The records for 0, 10, ..., 310, filing child blocks 100, 101, ..., 131.
+	// The entries for keys 0, 10, ..., 310, with child blocks 100, 101, ...,
+	// 131.
 	all := dirEntriesStepping(0, 310)
 
 	tests := []struct {
@@ -336,7 +338,7 @@ func TestBTreeDirInsertDown(t *testing.T) {
 	tests := []struct {
 		name     string
 		inserted dirEntry
-		// want is the records of blocks 0, 1 and 2 afterwards.
+		// want is the entries of blocks 0, 1 and 2 after the insert.
 		want [][]string
 	}{
 		{
@@ -387,7 +389,7 @@ func TestBTreeDirInsertDown(t *testing.T) {
 		tx := newTestTransaction(t)
 		layout := newTestDirLayout(t)
 
-		// The records for 0, 10, ..., 310, filing child blocks 100 to 131.
+		// The entries for keys 0, 10, ..., 310, with child blocks 100 to 131.
 		all := dirEntriesStepping(0, 310)
 		root := newTestDirBlocks(t, tx, layout, []int32{1, 0}, [][]dirEntry{
 			{{value: query.NewIntConstant(0), childBlockNumber: 1}},
@@ -414,8 +416,9 @@ func TestBTreeDirInsertDown(t *testing.T) {
 		assertHeader(t, tx, filemanager.NewBlockId(testBTreeDirFile, 2), layout, 0, 16)
 	})
 
-	// The root's records other than the one for 300 file child blocks that do
-	// not exist, which is all right: the insert only goes down the one for 300.
+	// The root's entries other than the one for 300 point to child blocks
+	// that do not exist. This is harmless: the insert only descends through
+	// the entry for 300.
 	t.Run("given a full root at level 1 whose last record files a full directory block 1, when a record that fills block 1 is inserted, then block 1 splits into a new block 2, the root splits into a new block 3 at level 1, and the record for block 3 comes back", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		layout := newTestDirLayout(t)
@@ -440,9 +443,9 @@ func TestBTreeDirInsertDown(t *testing.T) {
 			t.Errorf("insert(%+v) = %+v, want %+v", inserted, got, wantEntry)
 		}
 
-		// Block 1 keeps 300 to 450 and block 2 takes 460 to 610; the root
-		// files block 2 under 460, then keeps its first 16 records and moves
-		// the other 16 to block 3.
+		// Block 1 keeps 300 to 450 and block 2 takes 460 to 610. The root adds
+		// an entry that maps 460 to block 2. It then keeps its first 16
+		// entries and moves the other 16 to block 3.
 		wantBlock3 := append(dirStrings(rootEntries[16:]), "460 -> 2")
 		assertDirRecords(t, tx, root, layout, dirStrings(rootEntries[:16]))
 		assertDirRecords(t, tx, filemanager.NewBlockId(testBTreeDirFile, 3), layout, wantBlock3)
@@ -493,8 +496,9 @@ func TestBTreeDirMakeNewRoot(t *testing.T) {
 		})
 	}
 
-	// The directory of TestBTreeDirInsertDown's last case, whose root has just
-	// split, made whole again by a new root over the two halves.
+	// This is the directory from the last case of TestBTreeDirInsertDown,
+	// whose root has just split. A new root over the two halves makes it
+	// consistent again.
 	t.Run("given a full root at level 1 that has just split on an insert of 610, when a new root is made over it and the record that came back, then a search for 610 goes down three levels to the child it was filed with", func(t *testing.T) {
 		tx := newTestTransaction(t)
 		layout := newTestDirLayout(t)
@@ -538,8 +542,9 @@ func TestBTreeDirMakeNewRoot(t *testing.T) {
 	})
 }
 
-// newTestDirBlocks appends one directory block per element of blocks to
-// testBTreeDirFile, at the level levels gives for it, and returns the first.
+// newTestDirBlocks appends one directory block to testBTreeDirFile for each
+// element of blocks, and returns the first block. levels gives the level of
+// each block.
 func newTestDirBlocks(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -560,8 +565,8 @@ func newTestDirBlocks(
 	return first
 }
 
-// dirEntriesStepping is the directory records for from, from+10, ..., to, the
-// one for value v filing child block 100+v/10.
+// dirEntriesStepping returns the directory entries for the keys from,
+// from+10, ..., to. The entry for key v points to child block 100+v/10.
 func dirEntriesStepping(from, to int32) []dirEntry {
 	var entries []dirEntry
 	for v := from; v <= to; v += 10 {
@@ -571,7 +576,7 @@ func dirEntriesStepping(from, to int32) []dirEntry {
 	return entries
 }
 
-// dirStrings writes entries out the way dirEntries reads records back.
+// dirStrings formats entries in the same form that dirEntries returns.
 func dirStrings(entries []dirEntry) []string {
 	s := make([]string, len(entries))
 	for i, e := range entries {
@@ -581,8 +586,8 @@ func dirStrings(entries []dirEntry) []string {
 	return s
 }
 
-// assertDirRecords checks the records of the directory block blk, in slot
-// order, or that there are none if the file has no such block.
+// assertDirRecords checks the entries of the directory block blk, in slot
+// order. If the file has no such block, it expects no entries.
 func assertDirRecords(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -614,7 +619,7 @@ func assertDirRecords(
 }
 
 // newTestDirBlock appends a directory block at level to testBTreeDirFile and
-// fills it with entries, in the order given, which the caller keeps sorted.
+// fills it with entries in the order given. The caller must pass them sorted.
 func newTestDirBlock(
 	t *testing.T,
 	tx *transaction.Transaction,

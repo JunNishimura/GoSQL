@@ -98,8 +98,8 @@ func TestHashIndexDelete(t *testing.T) {
 		entries []entry
 		deleted entry
 		wantErr error
-		// want is the record ids each value is searched for afterwards, and
-		// should give back.
+		// want maps each value that is searched for afterwards to the record
+		// ids the search should return.
 		want map[query.Constant][]string
 	}{
 		{
@@ -225,10 +225,9 @@ func TestBucketOf(t *testing.T) {
 			want:  numBuckets - 1,
 		},
 		{
-			// The number is written out rather than worked out from hash/fnv, so
-			// that the case fails if the hash ever changes. Buckets are files on
-			// disk, and an index written under one hash cannot be read under
-			// another.
+			// The number is a literal, not computed with hash/fnv, so that the
+			// case fails if the hash ever changes. Buckets are files on disk,
+			// and an index written with one hash cannot be read with another.
 			name:  "when a string is bucketed, then it goes in the bucket of its 32-bit FNV-1a hash",
 			value: query.NewStringConstant("abc"),
 			want:  31,

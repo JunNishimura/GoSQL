@@ -20,7 +20,7 @@ const (
 )
 
 // newTestTransaction builds a transaction over a database of its own, so that
-// one test cannot see what another wrote.
+// one test cannot see the data of another.
 func newTestTransaction(t *testing.T) *transaction.Transaction {
 	t.Helper()
 
@@ -45,8 +45,8 @@ func newTestTransaction(t *testing.T) *transaction.Transaction {
 	return tx
 }
 
-// newTestIndexLayout builds the layout of an index on an int field, laid out
-// the way the catalog lays one out.
+// newTestIndexLayout builds the layout of an index on an int field, in the
+// same way as the catalog.
 func newTestIndexLayout(t *testing.T) *recordmanager.Layout {
 	t.Helper()
 
@@ -64,13 +64,13 @@ func newTestIndexLayout(t *testing.T) *recordmanager.Layout {
 	return recordmanager.NewLayout(s)
 }
 
-// entry is one record id filed under one value, as a test inserts it.
+// entry is one key with one record id, as a test inserts it.
 type entry struct {
 	value query.Constant
 	rid   *recordmanager.RecordID
 }
 
-// insertEntries files each of entries in idx, in order.
+// insertEntries inserts each of entries into idx, in order.
 func insertEntries(t *testing.T, idx Index, entries []entry) {
 	t.Helper()
 
@@ -81,8 +81,9 @@ func insertEntries(t *testing.T, idx Index, entries []entry) {
 	}
 }
 
-// searchRecordIDs searches idx for searchKey and returns the record ids that
-// come back, written out so that they compare with ==.
+// searchRecordIDs searches idx for searchKey and returns the record ids of
+// the matches. They are formatted as strings so that they can be compared
+// with ==.
 func searchRecordIDs(t *testing.T, idx Index, searchKey query.Constant) []string {
 	t.Helper()
 

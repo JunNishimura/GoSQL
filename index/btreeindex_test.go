@@ -22,8 +22,8 @@ func TestNewBTreeIndex(t *testing.T) {
 		name       string
 		leafLayout func(t *testing.T) *recordmanager.Layout
 		dirLayout  func(t *testing.T) *recordmanager.Layout
-		// wantRoot is the one record of the root, filing the leaf under the
-		// least value of the indexed field's type.
+		// wantRoot is the only entry of the root. It maps the minimum key of
+		// the indexed field's type to the leaf.
 		wantRoot string
 	}{
 		{
@@ -72,9 +72,9 @@ func TestNewBTreeIndex(t *testing.T) {
 	})
 }
 
-// The record ids are compared without their order: an index says nothing of
-// which of the entries for one value comes first, and a B-tree files a new one
-// ahead of those already there.
+// The record ids are compared without regard to order. An index does not
+// define the order of the entries for one key, and a B-tree inserts a new
+// entry before the existing ones.
 func TestBTreeIndexMoveToNextMatch(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -120,9 +120,9 @@ func TestBTreeIndexMoveToNextMatch(t *testing.T) {
 			searchKey: query.NewIntConstant(9),
 			want:      []string{},
 		},
-		// The least int is also the value the root files the first leaf
-		// under, so this is the one search that starts from the root's very
-		// first record.
+		// The minimum int is also the key of the root's entry for the first
+		// leaf, so this is the one search that starts from the first entry of
+		// the root.
 		{
 			name:   "given an entry filed under the least int, when the least int is searched for, then its record id comes back",
 			layout: newTestIndexLayout,
@@ -199,8 +199,8 @@ func TestBTreeIndexMoveToNextMatch(t *testing.T) {
 		}
 	})
 
-	// An insert searches for its value to get to the leaf, and gives the leaf
-	// back once the entry is in, so it leaves no search under way.
+	// An insert searches for its value to find the leaf, and unpins the leaf
+	// once the entry is inserted. It leaves no search in progress.
 	t.Run("given a B-tree index that was searched and then had an entry inserted, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
 		idx := newTestBTreeIndex(t)
 		defer idx.Close()
@@ -218,10 +218,10 @@ func TestBTreeIndexMoveToNextMatch(t *testing.T) {
 	})
 }
 
-// A leaf on an int field holds 24 entries, so 100 of them fill one leaf after
-// another, and each split has to reach the directory for the entries moved into
-// the new leaf to be found. Where the splits fall turns on the order the values
-// come in, so each case inserts them in a different one.
+// A leaf on an int field holds 24 entries, so 100 entries fill several
+// leaves. Each split must add a directory entry, or the entries moved to the
+// new leaf cannot be found. The positions of the splits depend on the insert
+// order, so each case inserts the values in a different order.
 func TestBTreeIndexInsert(t *testing.T) {
 	const n = 100
 
@@ -237,8 +237,8 @@ func TestBTreeIndexInsert(t *testing.T) {
 			name:  "given an empty B-tree index, when 100 entries for 0 to 99 are inserted in descending order, then each value finds only its own record id",
 			order: func(i int) int32 { return int32(n - 1 - i) },
 		},
-		// 37 and 100 have no factor in common, so this goes through every
-		// value from 0 to 99 once, jumping about.
+		// 37 and 100 are coprime, so this visits every value from 0 to 99 once,
+		// out of order.
 		{
 			name:  "given an empty B-tree index, when 100 entries for 0 to 99 are inserted in no order, then each value finds only its own record id",
 			order: func(i int) int32 { return int32(i * 37 % n) },
@@ -264,12 +264,12 @@ func TestBTreeIndexInsert(t *testing.T) {
 	}
 }
 
-// A leaf holds at most 23 entries between inserts, since it is split as soon
-// as it fills at 24, so 800 entries need at least 35 leaves whatever order they
-// come in. The root holds one record per leaf and splits as it fills at 32, so
-// it has to grow a level for all of them to be found. The root's level is
-// checked so that a case that did not make the root split cannot pass for one
-// that did.
+// A leaf holds at most 23 entries between inserts, because it splits as soon
+// as it reaches 24. 800 entries therefore need at least 35 leaves, whatever
+// the insert order. The root holds one entry per leaf and splits when it
+// reaches 32, so the tree must grow a level for every leaf to be reachable.
+// The test checks the root's level, so a case that did not split the root
+// cannot pass.
 func TestBTreeIndexInsertGrowingRoot(t *testing.T) {
 	const n = 800
 
@@ -281,8 +281,8 @@ func TestBTreeIndexInsertGrowingRoot(t *testing.T) {
 			name:  "given an empty B-tree index, when 800 entries for 0 to 799 are inserted in ascending order, then the root grows to level 1 and each value finds only its own record id",
 			order: func(i int) int32 { return int32(i) },
 		},
-		// 37 and 800 have no factor in common, so this goes through every
-		// value from 0 to 799 once, jumping about.
+		// 37 and 800 are coprime, so this visits every value from 0 to 799
+		// once, out of order.
 		{
 			name:  "given an empty B-tree index, when 800 entries for 0 to 799 are inserted in no order, then the root grows to level 1 and each value finds only its own record id",
 			order: func(i int) int32 { return int32(i * 37 % n) },
@@ -310,8 +310,9 @@ func TestBTreeIndexInsertGrowingRoot(t *testing.T) {
 	}
 }
 
-// More than 24 entries for one value do not fit in a leaf, so they overflow
-// into a chain of blocks, which the other values have to be filed around.
+// More than 24 entries for one key do not fit in a leaf, so they overflow
+// into a chain of blocks. Entries for other keys must be inserted around that
+// chain.
 func TestBTreeIndexInsertDuplicates(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -331,9 +332,9 @@ func TestBTreeIndexInsertDuplicates(t *testing.T) {
 				return entries
 			},
 		},
-		// The entries for 50 come first, so they overflow before any other value
-		// is there, and then the smaller values are inserted into the leaf that
-		// overflows, which has to move its entries out to take them.
+		// The entries for 50 are inserted first, so the leaf overflows before
+		// any other key exists. The smaller keys are then inserted into the
+		// overflowing leaf, which must move its entries out to accept them.
 		{
 			name: "given an empty B-tree index, when 60 entries for 50 are inserted and then one each for 0 to 99, then each value finds only its own record ids",
 			entries: func() []entry {
@@ -381,8 +382,8 @@ func TestBTreeIndexDelete(t *testing.T) {
 		entries []entry
 		deleted entry
 		wantErr error
-		// want is the record ids each value is searched for afterwards, and
-		// should give back, in any order.
+		// want maps each value that is searched for afterwards to the record
+		// ids the search should return, in any order.
 		want map[query.Constant][]string
 	}{
 		{
@@ -452,9 +453,9 @@ func TestBTreeIndexDelete(t *testing.T) {
 		})
 	}
 
-	// 60 entries for 50 overflow into a chain, so deleting all of them takes
-	// some out of the leaf the chain starts from and some out of the blocks it
-	// overflows into, and empties those blocks one after another.
+	// 60 entries for 50 overflow into a chain. Deleting all of them removes
+	// some entries from the leaf at the head of the chain and some from its
+	// overflow blocks, and empties those blocks one after another.
 	t.Run("given 60 entries for 50 in among one each for 0 to 99, when every entry for 50 is deleted, then 50 finds nothing and each other value still finds its own record id", func(t *testing.T) {
 		idx := newTestBTreeIndex(t)
 		defer idx.Close()
@@ -474,7 +475,7 @@ func TestBTreeIndexDelete(t *testing.T) {
 			}
 		}
 
-		// The one entry for 50 among the others is all that is left of 50.
+		// Only one entry for 50 remains, among the entries for other keys.
 		assertEachValueFinds(t, idx, others)
 	})
 
@@ -507,8 +508,8 @@ func TestBTreeIndexDelete(t *testing.T) {
 		}
 	})
 
-	// A delete searches for its value to find the entry, and gives the leaf
-	// back once the entry is out, so it leaves no search under way.
+	// A delete searches for its value to find the entry, and unpins the leaf
+	// once the entry is removed. It leaves no search in progress.
 	t.Run("given a B-tree index that was searched and then had an entry deleted, when it is moved, then it reports ErrNoSearch", func(t *testing.T) {
 		idx := newTestBTreeIndex(t)
 		defer idx.Close()
@@ -530,11 +531,11 @@ func TestBTreeIndexDelete(t *testing.T) {
 	})
 }
 
-// A search reads one directory block per level and then the leaf, so the cost
-// is the number of directory levels it takes for a root to reach numBlocks
-// leaves, plus one. The root is always there, so there is always at least one
-// level, and the levels go up by one each time the leaves pass a power of how
-// many children a directory block has.
+// A search reads one directory block per level and then the leaf. The cost
+// is therefore the number of directory levels a root needs to reach
+// numBlocks leaves, plus one. The root always exists, so there is at least
+// one level. The level count rises by one each time the number of leaves
+// passes a power of the fan-out of a directory block.
 func TestBTreeIndexSearchCost(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -566,9 +567,9 @@ func TestBTreeIndexSearchCost(t *testing.T) {
 			recordsPerBlock: 10,
 			want:            3,
 		},
-		// An exact power is where a logarithm worked out in floating point can
-		// come out a hair either side of a whole number, so these two pin down
-		// that the cost turns over at 1000 and not one leaf either side of it.
+		// At an exact power, a floating-point logarithm can fall slightly above
+		// or below the integer. These two cases check that the cost changes at
+		// exactly 1000 leaves, not one leaf earlier or later.
 		{
 			name:            "when an index of the cube of how many children a directory block has is costed, then a search reads three directory levels and a leaf",
 			numBlocks:       1000,
@@ -581,17 +582,17 @@ func TestBTreeIndexSearchCost(t *testing.T) {
 			recordsPerBlock: 10,
 			want:            5,
 		},
-		// An empty index still has its root and its one leaf, which a search
-		// reads to find it holds nothing.
+		// An empty index still has its root and one leaf. A search reads both
+		// to find that the index holds nothing.
 		{
 			name:            "when an index of no blocks is costed, then a search reads the root and the leaf",
 			numBlocks:       0,
 			recordsPerBlock: 10,
 			want:            2,
 		},
-		// A directory block of one record cannot branch, so it is costed as if
-		// it held two, the fewest a tree can be built from: 5 leaves take three
-		// levels of two.
+		// A directory block with one record cannot branch, so its fan-out is
+		// taken as 2, the minimum that can form a tree. 5 leaves then need
+		// three levels.
 		{
 			name:            "when an index of 5 leaves holding one record per block is costed, then a search reads three directory levels and a leaf, as if each block held two",
 			numBlocks:       5,
@@ -608,8 +609,8 @@ func TestBTreeIndexSearchCost(t *testing.T) {
 	}
 }
 
-// assertEachValueFinds checks that a search for each value of entries finds the
-// record ids of the entries filed under it, and no others, in any order.
+// assertEachValueFinds checks that a search for each value in entries returns
+// exactly the record ids of the entries for that value, in any order.
 func assertEachValueFinds(t *testing.T, idx Index, entries []entry) {
 	t.Helper()
 
@@ -639,8 +640,8 @@ func TestBTreeIndexDataRecordID(t *testing.T) {
 	})
 }
 
-// newTestBTreeIndex opens a B-tree index on an int field over a database of its
-// own.
+// newTestBTreeIndex opens a B-tree index on an int field, in a database of
+// its own.
 func newTestBTreeIndex(t *testing.T) *BTreeIndex {
 	t.Helper()
 
@@ -652,10 +653,10 @@ func newTestBTreeIndex(t *testing.T) *BTreeIndex {
 	return idx
 }
 
-// assertNewBTreeIndexFiles checks that the files of the index named
-// testIndexName are as a new index leaves them: a leaf file of one empty leaf
-// with no overflow, and a directory file of one root at level 0 holding
-// wantRoot alone.
+// assertNewBTreeIndexFiles checks the files of the index named testIndexName
+// against the state of a new index. The leaf file must hold one empty leaf
+// with no overflow block. The directory file must hold one root at level 0
+// whose only entry is wantRoot.
 func assertNewBTreeIndexFiles(
 	t *testing.T,
 	tx *transaction.Transaction,
@@ -676,8 +677,8 @@ func assertNewBTreeIndexFiles(
 	assertDirRecords(t, tx, root, dirLayout, []string{wantRoot})
 }
 
-// assertFileSize checks that fileName is want blocks long, and reports whether
-// it is.
+// assertFileSize checks that fileName has want blocks, and reports whether it
+// does.
 func assertFileSize(t *testing.T, tx *transaction.Transaction, fileName string, want int) bool {
 	t.Helper()
 

@@ -10,43 +10,46 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// ErrEntryNotFound reports deleting an entry the index does not hold.
+// ErrEntryNotFound is returned when a delete targets an entry that the index
+// does not hold.
 //
-// An entry is only deleted alongside the record it points to, so one that is
-// not there means the index and its table have already come apart. That is
-// reported rather than passed over, so that it is found where it shows.
+// An entry is only deleted together with the record it points to. A missing
+// entry therefore means that the index and its table are already out of sync.
+// The delete reports this instead of ignoring it, so the inconsistency is
+// detected where it first appears.
 var ErrEntryNotFound = errors.New("index entry not found")
 
-// ErrNoSearch reports reading an index that is not in the middle of a search:
-// one that has not been searched yet, or has been closed since.
+// ErrNoSearch is returned when an index is read while no search is in
+// progress: either no search has been started, or the index has been closed
+// since.
 var ErrNoSearch = errors.New("index has no search under way")
 
-// HashIndex is an index that spreads its entries over a fixed number of
-// buckets by a hash of the value they are filed under.
+// HashIndex is an index that distributes its entries over a fixed number of
+// buckets by a hash of their key.
 //
-// Each bucket is a table of its own, named after the index and the bucket's
-// number. A search reads the one bucket its value hashes to and passes over
-// the entries there that were filed under some other value, so what it costs
-// is the size of a bucket rather than of the whole index.
+// Each bucket is a separate table, named after the index and the bucket
+// number. A search reads the one bucket that its key hashes to, and skips the
+// entries there that have another key. The cost of a search therefore depends
+// on the size of one bucket, not on the size of the index.
 type HashIndex struct {
 	tx        *transaction.Transaction
 	indexName string
 	layout    *recordmanager.Layout
-	// searchKey is the value being searched for, and is only meaningful while
+	// searchKey is the key of the current search. It is only meaningful while
 	// ts is open.
 	searchKey query.Constant
-	// ts reads the bucket searchKey hashes to. It is nil until the first
-	// search, since which bucket to open is not known before then.
+	// ts scans the bucket that searchKey hashes to. It is nil before the first
+	// search, because the bucket to open is not known until then.
 	ts *query.TableScan
 }
 
 var _ Index = (*HashIndex)(nil)
 
-// NewHashIndex returns the hash index named indexName, whose entries are laid
-// out as layout says.
+// NewHashIndex returns the hash index named indexName, whose entries use
+// layout.
 //
-// Nothing is opened here, so nothing can fail: a bucket is opened by the
-// search that needs it.
+// NewHashIndex opens nothing, so it cannot fail. Each search opens the bucket
+// it needs.
 func NewHashIndex(tx *transaction.Transaction, indexName string, layout *recordmanager.Layout) *HashIndex {
 	return &HashIndex{
 		tx:        tx,
@@ -55,8 +58,9 @@ func NewHashIndex(tx *transaction.Transaction, indexName string, layout *recordm
 	}
 }
 
-// MoveBeforeFirstMatch closes whichever bucket was open and opens the one
-// searchKey hashes to, before its first entry.
+// MoveBeforeFirstMatch closes the open bucket, if any, and opens the bucket
+// that searchKey hashes to. The index is positioned before the first entry of
+// that bucket.
 func (hi *HashIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
 	hi.Close()
 
@@ -71,9 +75,8 @@ func (hi *HashIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
 	return nil
 }
 
-// MoveToNextMatch moves on through the bucket to the next entry filed under
-// the search key, passing over the entries of other values that hash to the
-// same bucket.
+// MoveToNextMatch moves through the bucket to the next entry for the search
+// key. It skips entries for other keys that hash to the same bucket.
 func (hi *HashIndex) MoveToNextMatch() (bool, error) {
 	if err := hi.requireSearch(); err != nil {
 		return false, err
@@ -98,8 +101,8 @@ func (hi *HashIndex) MoveToNextMatch() (bool, error) {
 	}
 }
 
-// DataRecordID puts the record id of the current entry back together from the
-// two fields it was taken apart into.
+// DataRecordID builds the record id of the current entry from the two fields
+// that store it.
 func (hi *HashIndex) DataRecordID() (*recordmanager.RecordID, error) {
 	if err := hi.requireSearch(); err != nil {
 		return nil, err
@@ -117,10 +120,11 @@ func (hi *HashIndex) DataRecordID() (*recordmanager.RecordID, error) {
 	return recordmanager.NewRecordID(int(blkNum), int(slot)), nil
 }
 
-// Insert adds an entry filing rid under value to the bucket value hashes to.
+// Insert adds an entry that maps value to rid to the bucket that value hashes
+// to.
 //
-// It searches for value to get there, so whatever search was under way is
-// dropped, as it is by any other search.
+// Insert searches for value to open the bucket, so it discards any search in
+// progress.
 func (hi *HashIndex) Insert(value query.Constant, rid *recordmanager.RecordID) error {
 	if err := hi.MoveBeforeFirstMatch(value); err != nil {
 		return err
@@ -138,11 +142,12 @@ func (hi *HashIndex) Insert(value query.Constant, rid *recordmanager.RecordID) e
 	return hi.ts.SetValue(IndexedValueField, value)
 }
 
-// Delete takes out the entry filing rid under value.
+// Delete removes the entry that maps value to rid.
 //
-// It searches for value to find the entry, so whatever search was under way is
-// dropped. Both halves have to match: the same record id filed under another
-// value in the same bucket is a different entry, and is left alone.
+// Delete searches for value to find the entry, so it discards any search in
+// progress. Both the key and the record id must match: an entry in the same
+// bucket with the same record id but another key is a different entry, and is
+// not removed.
 func (hi *HashIndex) Delete(value query.Constant, rid *recordmanager.RecordID) error {
 	if err := hi.MoveBeforeFirstMatch(value); err != nil {
 		return err
@@ -167,8 +172,8 @@ func (hi *HashIndex) Delete(value query.Constant, rid *recordmanager.RecordID) e
 	}
 }
 
-// requireSearch reports ErrNoSearch unless a bucket is open, which it is from
-// a search until the index is closed.
+// requireSearch returns ErrNoSearch unless a bucket is open. A bucket is open
+// from a search until the index is closed.
 func (hi *HashIndex) requireSearch() error {
 	if hi.ts == nil {
 		return fmt.Errorf("read index %s: %w", hi.indexName, ErrNoSearch)
@@ -177,7 +182,7 @@ func (hi *HashIndex) requireSearch() error {
 	return nil
 }
 
-// Close gives back the block of whichever bucket is open.
+// Close unpins the block of the open bucket, if there is one.
 func (hi *HashIndex) Close() {
 	if hi.ts == nil {
 		return
@@ -187,36 +192,40 @@ func (hi *HashIndex) Close() {
 	hi.ts = nil
 }
 
-// numBuckets is how many buckets a hash index spreads its entries over.
+// numBuckets is the number of buckets in a hash index.
 const numBuckets = 100
 
-// HashIndexSearchCost is how many blocks a search through a hash index of
-// numBlocks blocks reads, each block holding recordsPerBlock entries.
+// HashIndexSearchCost returns the number of blocks that a search reads in a
+// hash index with numBlocks blocks, where each block holds recordsPerBlock
+// entries.
 //
-// A search reads the one bucket its value hashes to, and the buckets share the
-// blocks between them, so it reads one bucket's share. That supposes the
-// values spread evenly, which is what a hash is for; a value many records are
-// filed under makes its bucket bigger than the share, and this does not see it.
+// A search reads the one bucket that its key hashes to. The buckets divide
+// the blocks between them, so the estimate is one bucket's share of the
+// blocks. This assumes that the keys are distributed evenly, which is the
+// purpose of a hash. A key shared by many records makes its bucket larger
+// than the share, and the estimate does not account for that.
 //
 // The share is rounded up. A bucket whose entries fill one block and start
-// another is in two, and a bucket with any entries at all is in at least one.
+// another occupies two blocks, and any non-empty bucket occupies at least
+// one.
 //
-// recordsPerBlock plays no part here. It is taken because what a search costs
-// through a B-tree turns on it, and the planner should not have to know which
-// kind of index it is asking about to know what to pass.
+// recordsPerBlock is not used. It is a parameter because the cost of a B-tree
+// search depends on it, and the planner should be able to pass the same
+// arguments whatever the index type.
 func HashIndexSearchCost(numBlocks int, recordsPerBlock int) int {
 	return (numBlocks + numBuckets - 1) / numBuckets
 }
 
-// bucketOf is the number of the bucket the entries filed under value go in.
+// bucketOf returns the number of the bucket that holds the entries for value.
 //
-// The bucket a value goes in is written to disk as part of a file name, so the
-// hash has to come out the same in every process that opens the index. That
-// rules out hash/maphash, whose seed is picked afresh each time; an int is
-// taken as it is and a varchar through FNV-1a, neither of which has a seed.
+// The bucket number is written to disk as part of a file name, so the hash
+// must give the same result in every process that opens the index. This rules
+// out hash/maphash, which picks a new seed in each process. An int is used
+// as it is, and a varchar is hashed with FNV-1a. Neither uses a seed.
 //
-// The remainder is kept non-negative. Go's % takes the sign of the dividend,
-// and a negative int would otherwise land in a bucket that does not exist.
+// The remainder is made non-negative. Go's % operator takes the sign of the
+// dividend, so a negative int would otherwise map to a bucket that does not
+// exist.
 func bucketOf(value query.Constant) int {
 	if value.Type() == recordmanager.FieldTypeInt {
 		// AsInt cannot fail here: the type has just been checked.
@@ -225,7 +234,7 @@ func bucketOf(value query.Constant) int {
 		return ((int(n) % numBuckets) + numBuckets) % numBuckets
 	}
 
-	// AsString cannot fail either, a constant being one of the two kinds.
+	// AsString cannot fail either: a constant is either an int or a string.
 	s, _ := value.AsString()
 	h := fnv.New32a()
 	h.Write([]byte(s))

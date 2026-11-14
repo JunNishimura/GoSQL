@@ -10,45 +10,47 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// What the name of a B-tree index is followed by to name its two files.
+// Suffixes appended to the name of a B-tree index to name its two files.
 //
-// They end in letters so that they never name a bucket of a hash index of the
-// same name, whose buckets are named after the index and a number.
+// The suffixes are letters so that the file names cannot collide with the
+// buckets of a hash index of the same name. A bucket name is the index name
+// followed by a number.
 const (
 	leafFileSuffix = "leaf"
 	dirFileSuffix  = "dir"
 )
 
-// BTreeIndex is an index that keeps its entries in order of the value they are
-// filed under, in the leaves of a tree whose directory says which leaf a value
-// is in.
+// BTreeIndex is an index that stores its entries in leaf blocks, sorted by
+// key. A directory tree maps each key to the leaf that holds it.
 //
-// The leaves are one file and the directory another, named after the index.
-// A search goes down the directory from its root to the one leaf the value
-// can be in, and reads its entries there, so what it costs is the depth of the
-// tree rather than the size of the index.
+// The leaves are stored in one file and the directory in another. Both files
+// are named after the index. A search descends the directory from the root to
+// the one leaf that can hold the key, and reads the entries there. The cost
+// of a search therefore depends on the depth of the tree, not on the size of
+// the index.
 type BTreeIndex struct {
 	tx           *transaction.Transaction
 	indexName    string
 	leafFileName string
 	leafLayout   *recordmanager.Layout
 	dirLayout    *recordmanager.Layout
-	// rootBlk is the root of the directory. It is always the first block of
-	// the directory file, however deep the tree grows.
+	// rootBlk is the root block of the directory. It is always the first
+	// block of the directory file, however deep the tree grows.
 	rootBlk *filemanager.BlockId
-	// leaf reads the leaf being searched. It is nil until the first search,
-	// and again once the index is closed.
+	// leaf reads the leaf of the current search. It is nil when no search is
+	// in progress.
 	leaf *btreeLeaf
 }
 
 var _ Index = (*BTreeIndex)(nil)
 
-// NewBTreeIndex opens the B-tree index named indexName, whose leaf entries
-// are laid out as leafLayout says, making its files if they do not exist yet.
+// NewBTreeIndex opens the B-tree index named indexName. leafLayout is the
+// layout of its leaf entries. The index files are created if they do not
+// exist yet.
 //
-// A new index starts with one empty leaf, and a root that files it under the
-// least value of the indexed field's type, so that every value there is falls
-// into some leaf.
+// A new index starts with one empty leaf. Its root holds one directory entry
+// that maps the minimum key of the indexed field's type to that leaf, so
+// every possible key belongs to some leaf.
 func NewBTreeIndex(tx *transaction.Transaction, indexName string, leafLayout *recordmanager.Layout) (*BTreeIndex, error) {
 	leafFileName := indexName + leafFileSuffix
 	if err := createIfEmpty(tx, leafFileName, leafLayout, -1, nil); err != nil {
@@ -65,7 +67,8 @@ func NewBTreeIndex(tx *transaction.Transaction, indexName string, leafLayout *re
 	}
 	dirFileName := indexName + dirFileSuffix
 	firstLeaf := &dirEntry{value: least, childBlockNumber: 0}
-	// The flag is the root's level: at 0, its children are leaves.
+	// The flag of a directory block is its level. At level 0, the children
+	// are leaves.
 	if err := createIfEmpty(tx, dirFileName, dirLayout, 0, firstLeaf); err != nil {
 		return nil, err
 	}
@@ -80,9 +83,10 @@ func NewBTreeIndex(tx *transaction.Transaction, indexName string, leafLayout *re
 	}, nil
 }
 
-// createIfEmpty gives fileName its first block, flagged with flag and holding
-// first if it is not nil, unless the file already has blocks, which means the
-// index was made before and is only being opened again.
+// createIfEmpty appends the first block to fileName if the file has no
+// blocks. The block's flag is set to flag, and first is inserted when it is
+// not nil. A file that already has blocks belongs to an existing index, and
+// is left unchanged.
 func createIfEmpty(
 	tx *transaction.Transaction,
 	fileName string,
@@ -115,9 +119,9 @@ func createIfEmpty(
 	return page.insertDir(0, first.value, first.childBlockNumber)
 }
 
-// newDirLayout is the layout of the directory records of a B-tree whose leaf
-// entries are laid out as leafLayout says: the child block, and the value the
-// entries under it start from, of the same type and width as in a leaf.
+// newDirLayout returns the layout of the directory entries for a B-tree whose
+// leaf entries use leafLayout. A directory entry holds a child block number
+// and a key. The key has the same type and length as in a leaf entry.
 func newDirLayout(leafLayout *recordmanager.Layout) (*recordmanager.Layout, error) {
 	leafSchema := leafLayout.Schema()
 
@@ -141,9 +145,9 @@ func newDirLayout(leafLayout *recordmanager.Layout) (*recordmanager.Layout, erro
 	return recordmanager.NewLayout(schema), nil
 }
 
-// leastValue is the least value of the type the entries laid out as
-// leafLayout are filed under: the least int, or the empty string, which comes
-// before every other.
+// leastValue returns the minimum key for the leaf entries that use
+// leafLayout. This is the minimum int for an int key, and the empty string
+// for a varchar key.
 func leastValue(leafLayout *recordmanager.Layout) (query.Constant, error) {
 	fieldType, err := leafLayout.Schema().Type(IndexedValueField)
 	if err != nil {
@@ -157,11 +161,11 @@ func leastValue(leafLayout *recordmanager.Layout) (query.Constant, error) {
 	return query.NewStringConstant(""), nil
 }
 
-// MoveBeforeFirstMatch goes down the directory to the leaf searchKey is filed
-// in and opens it before the first entry for searchKey.
+// MoveBeforeFirstMatch descends the directory to the leaf that searchKey
+// belongs to, and opens that leaf before the first entry for searchKey.
 //
-// The directory is read only on the way down: it is given back once it has
-// said which leaf to open, and the leaf is all the search holds from then on.
+// The directory is only read during the descent. Its block is unpinned once
+// the leaf is known, and from then on the search pins only the leaf.
 func (bi *BTreeIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
 	bi.Close()
 
@@ -184,7 +188,7 @@ func (bi *BTreeIndex) MoveBeforeFirstMatch(searchKey query.Constant) error {
 	return nil
 }
 
-// MoveToNextMatch moves on to the next entry filed under the search key.
+// MoveToNextMatch moves to the next entry for the search key.
 func (bi *BTreeIndex) MoveToNextMatch() (bool, error) {
 	if err := bi.requireSearch(); err != nil {
 		return false, err
@@ -193,7 +197,8 @@ func (bi *BTreeIndex) MoveToNextMatch() (bool, error) {
 	return bi.leaf.next()
 }
 
-// DataRecordID is where the table record of the current entry is kept.
+// DataRecordID returns the record id of the table record that the current
+// entry points to.
 func (bi *BTreeIndex) DataRecordID() (*recordmanager.RecordID, error) {
 	if err := bi.requireSearch(); err != nil {
 		return nil, err
@@ -202,8 +207,9 @@ func (bi *BTreeIndex) DataRecordID() (*recordmanager.RecordID, error) {
 	return bi.leaf.dataRecordID()
 }
 
-// requireSearch reports ErrNoSearch unless a leaf is open, which it is from a
-// search until the index is closed or has an entry inserted or deleted.
+// requireSearch returns ErrNoSearch unless a leaf is open. A leaf is open
+// from a search until the index is closed, or until an entry is inserted or
+// deleted.
 func (bi *BTreeIndex) requireSearch() error {
 	if bi.leaf == nil {
 		return fmt.Errorf("read B-tree index %s: %w", bi.indexName, ErrNoSearch)
@@ -212,15 +218,15 @@ func (bi *BTreeIndex) requireSearch() error {
 	return nil
 }
 
-// Insert files rid under value.
+// Insert adds an entry that maps value to rid.
 //
-// It searches for value to get to the leaf, so whatever search was under way
-// is dropped, as it is by any other search, and the leaf is given back once
-// the entry is in it.
+// Insert searches for value to find the leaf, so it discards any search in
+// progress. It unpins the leaf once the entry is inserted.
 //
-// If the leaf split, the directory is told of the new leaf, from the root
-// down, so that the entries moved into it are found. If that splits the root
-// in turn, the tree grows a level, with the root still where it was.
+// If the leaf splits, Insert adds a directory entry for the new leaf,
+// starting from the root. Without that entry, a search would not find the
+// entries moved to the new leaf. If the root splits as a result, the tree
+// grows by one level. The root block stays at the same position.
 func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) error {
 	if err := bi.MoveBeforeFirstMatch(value); err != nil {
 		return err
@@ -245,13 +251,13 @@ func (bi *BTreeIndex) Insert(value query.Constant, rid *recordmanager.RecordID) 
 	return root.makeNewRoot(*fromRoot)
 }
 
-// Delete takes out the entry filing rid under value, reporting
-// ErrEntryNotFound if there is none.
+// Delete removes the entry that maps value to rid. It returns
+// ErrEntryNotFound if no such entry exists.
 //
-// It searches for value to find the entry, so whatever search was under way
-// is dropped, and the leaf is given back once the entry is out. Nothing above
-// the leaf changes: a leaf left with fewer entries is not merged with its
-// neighbour, so the directory still sends value to it.
+// Delete searches for value to find the entry, so it discards any search in
+// progress. It unpins the leaf once the entry is removed. The directory does
+// not change: a leaf with fewer entries is not merged with its neighbor, so
+// the directory still maps value to that leaf.
 func (bi *BTreeIndex) Delete(value query.Constant, rid *recordmanager.RecordID) error {
 	if err := bi.MoveBeforeFirstMatch(value); err != nil {
 		return err
@@ -262,30 +268,34 @@ func (bi *BTreeIndex) Delete(value query.Constant, rid *recordmanager.RecordID) 
 	return err
 }
 
-// BTreeIndexSearchCost is how many blocks a search through a B-tree index of
-// numBlocks leaf blocks reads, each block holding recordsPerBlock records.
+// BTreeIndexSearchCost returns the number of blocks that a search reads in a
+// B-tree index with numBlocks leaf blocks, where each block holds
+// recordsPerBlock records.
 //
-// A search reads one directory block per level on its way down, and then the
-// leaf it arrives at. The root is always there, so there is at least one
-// level; each level down multiplies by how many children a directory block
-// has, so the levels are the fewest it takes for that many to reach numBlocks.
-// That is the logarithm of numBlocks rounded up, worked out by multiplying
-// rather than in floating point, which can land a hair either side of a whole
-// number at an exact power and turn the cost over one leaf early or late.
+// A search reads one directory block per level and then one leaf. The root
+// always exists, so the tree has at least one level. Each level multiplies
+// the number of reachable blocks by the fan-out of a directory block. The
+// number of levels is therefore the smallest n for which the fan-out to the
+// power n reaches numBlocks. This is the logarithm of numBlocks, rounded up.
 //
-// How many children a directory block has is taken to be recordsPerBlock, the
-// number of leaf records in a block, since that is what the planner has to
-// give. A directory record is narrower than a leaf record, so a directory
-// block has more children than that, and the levels come out a little more
-// than they are: the cost errs on the side of an index being dearer.
+// The function computes this by repeated multiplication instead of a
+// floating-point logarithm. At an exact power of the fan-out, a
+// floating-point result can fall slightly above or below the integer, and
+// the level count would then be off by one.
 //
-// A block of one record cannot branch, so it is costed as if it held two, the
-// fewest a tree can be built from.
+// The fan-out is assumed to be recordsPerBlock, the number of leaf records in
+// a block, because that is the only figure the planner has. A directory
+// record is narrower than a leaf record, so the real fan-out is higher. The
+// estimate can therefore have more levels than the tree, which overstates the
+// cost of using the index.
 //
-// The leaves are taken to be full and a value's entries to fit in one leaf,
-// neither of which is always so: leaves are left half full by a split, and
-// entries for one value can overflow into a chain of blocks. Both make a
-// search read more than this says.
+// A block that holds one record cannot branch. Its fan-out is taken as 2, the
+// minimum that can form a tree.
+//
+// The estimate also assumes that every leaf is full and that all entries for
+// one key fit in one leaf. Neither always holds. A split leaves both leaves
+// half full, and the entries for one key can overflow into a chain of blocks.
+// In both cases a search reads more blocks than this estimate.
 func BTreeIndexSearchCost(numBlocks int, recordsPerBlock int) int {
 	fanOut := max(recordsPerBlock, 2)
 
@@ -297,7 +307,7 @@ func BTreeIndexSearchCost(numBlocks int, recordsPerBlock int) int {
 	return levels + 1
 }
 
-// Close gives back the block of whichever leaf is open.
+// Close unpins the block of the open leaf, if there is one.
 func (bi *BTreeIndex) Close() {
 	if bi.leaf == nil {
 		return

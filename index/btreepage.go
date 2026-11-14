@@ -10,34 +10,34 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// Where the two ints of a B-tree page's header sit within its block.
+// Offsets of the two header ints of a B-tree page within its block.
 const (
 	flagOffset       = 0
 	numRecordsOffset = flagOffset + filemanager.IntBytes
 )
 
-// btreePage is one block of a B-tree, seen as a header followed by records kept
-// in order of the value they are filed under.
+// btreePage is one block of a B-tree: a header followed by records sorted by
+// key.
 //
-// The header is two ints. The first is a flag whose meaning is the caller's: a
-// directory block keeps its level there, and a leaf the block its entries
-// overflow into. The second is how many records the block holds, which is what
-// says where the records end, since a record here has no flag of its own saying
-// whether it is in use: the first numRecords slots are, and no others.
+// The header is two ints. The first is a flag whose meaning the caller
+// defines: a directory block stores its level there, and a leaf stores the
+// number of its overflow block. The second is the number of records in the
+// block. Records have no in-use flag of their own, so this count marks the
+// end of the records: the first numRecords slots are in use, and no others.
 //
-// Leaves and directory blocks are both this. What sets them apart is the layout
-// a page is opened with, which says which fields a record has.
+// Leaves and directory blocks both use this type. They differ only in the
+// layout the page is opened with, which defines the fields of a record.
 type btreePage struct {
 	tx     *transaction.Transaction
 	blk    *filemanager.BlockId
 	layout *recordmanager.Layout
 }
 
-// appendBTreeBlock adds a block to the end of fileName and writes the header of
-// an empty page there, flagged with flag.
+// appendBTreeBlock appends a block to fileName and writes the header of an
+// empty page to it, with the flag set to flag.
 //
-// Only the header is written. The slots past it are never read before a record
-// is put in them, since numRecords says none of them hold one.
+// Only the header is written. The slots after it are never read before a
+// record is written to them, because numRecords marks them as unused.
 func appendBTreeBlock(
 	tx *transaction.Transaction,
 	fileName string,
@@ -65,8 +65,8 @@ func appendBTreeBlock(
 	return blk, nil
 }
 
-// newBTreePage takes hold of blk on behalf of tx and reads it as a B-tree page
-// of records laid out as layout says. The block stays pinned until close.
+// newBTreePage pins blk for tx and reads it as a B-tree page whose records
+// use layout. The block stays pinned until close.
 func newBTreePage(
 	tx *transaction.Transaction,
 	blk *filemanager.BlockId,
@@ -83,7 +83,7 @@ func newBTreePage(
 	}, nil
 }
 
-// flag is the int the header keeps for the caller.
+// flag returns the header int whose meaning the caller defines.
 func (p *btreePage) flag() (int32, error) {
 	return p.tx.GetInt(p.blk, flagOffset)
 }
@@ -93,7 +93,7 @@ func (p *btreePage) setFlag(flag int32) error {
 	return p.tx.SetInt(p.blk, flagOffset, flag)
 }
 
-// numRecords is how many records the block holds.
+// numRecords returns the number of records in the block.
 func (p *btreePage) numRecords() (int, error) {
 	n, err := p.tx.GetInt(p.blk, numRecordsOffset)
 	if err != nil {
@@ -103,18 +103,17 @@ func (p *btreePage) numRecords() (int, error) {
 	return int(n), nil
 }
 
-// setNumRecords writes n to the header as the number of records the block
-// holds.
+// setNumRecords writes n to the header as the number of records in the
+// block.
 func (p *btreePage) setNumRecords(n int) error {
 	return p.tx.SetInt(p.blk, numRecordsOffset, int32(n))
 }
 
-// insertLeaf puts an entry filing rid under value at slot, moving the records
-// from slot on back by one to make room.
+// insertLeaf writes a leaf entry that maps value to rid at slot. It first
+// shifts the records from slot onward by one slot to make room.
 //
-// Where it goes is the caller's to work out, from findSlotBefore: the page
-// keeps its records in order only because every insert is made at the place
-// that keeps them so.
+// The caller chooses the slot, using findSlotBefore. The page stays sorted
+// only because every insert goes to the slot that preserves the order.
 func (p *btreePage) insertLeaf(slot int, value query.Constant, rid *recordmanager.RecordID) error {
 	if err := p.checkValue(value); err != nil {
 		return err
@@ -133,13 +132,13 @@ func (p *btreePage) insertLeaf(slot int, value query.Constant, rid *recordmanage
 	return p.setIntValue(slot, SlotField, rid.Slot())
 }
 
-// dataValue is the value the record at slot is filed under.
+// dataValue returns the key of the record at slot.
 func (p *btreePage) dataValue(slot int) (query.Constant, error) {
 	return p.value(slot, IndexedValueField)
 }
 
-// dataRecordID is the record id of the indexed table that the leaf record at
-// slot points to.
+// dataRecordID returns the record id of the table record that the leaf entry
+// at slot points to.
 func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
 	blkNum, err := p.intValue(slot, BlockNumberField)
 	if err != nil {
@@ -153,9 +152,9 @@ func (p *btreePage) dataRecordID(slot int) (*recordmanager.RecordID, error) {
 	return recordmanager.NewRecordID(blkNum, recordSlot), nil
 }
 
-// insertDir puts a directory record at slot, saying that the entries from value
-// on are reached through the child block numbered childBlockNumber. The records
-// from slot on are moved back by one to make room.
+// insertDir writes a directory entry at slot. The entry states that the child
+// block numbered childBlockNumber covers the keys from value upward. The
+// records from slot onward are first shifted by one slot to make room.
 func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber int) error {
 	if err := p.checkValue(value); err != nil {
 		return err
@@ -171,22 +170,25 @@ func (p *btreePage) insertDir(slot int, value query.Constant, childBlockNumber i
 	return p.setIntValue(slot, BlockNumberField, childBlockNumber)
 }
 
-// childBlockNumber is the block the directory record at slot points down to.
+// childBlockNumber returns the child block number of the directory entry at
+// slot.
 func (p *btreePage) childBlockNumber(slot int) (int, error) {
 	return p.intValue(slot, BlockNumberField)
 }
 
-// findSlotBefore is the last slot whose record is filed under a value less
-// than searchKey, or -1 if there is none.
+// findSlotBefore returns the last slot whose key is less than searchKey, or
+// -1 if there is none.
 //
-// It is the slot before where the records for searchKey start, or would start
-// if there were any: a search moves forward from it to the first of them, and
-// an insert goes in the slot after it, ahead of any already filed under the
-// same value. Records equal to searchKey are not "before" it, so with several
-// filed under the same value, the answer is the slot ahead of the first.
+// This is the slot before the position where the records for searchKey
+// start, or would start if there were any. A search moves forward from it to
+// the first of these records. An insert uses the slot after it, which places
+// the new record before any existing record with the same key. A record whose
+// key equals searchKey does not count as "before" it. With several records
+// for searchKey, the result is therefore the slot before the first of them.
 //
-// A searchKey of the other kind from the page's values reports
-// ErrConstantTypeMismatch, since the two have no order to find a place by.
+// If searchKey has a different type from the page's keys, findSlotBefore
+// returns ErrConstantTypeMismatch. Values of different types cannot be
+// ordered.
 func (p *btreePage) findSlotBefore(searchKey query.Constant) (int, error) {
 	n, err := p.numRecords()
 	if err != nil {
@@ -213,28 +215,29 @@ func (p *btreePage) findSlotBefore(searchKey query.Constant) (int, error) {
 
 // isFull reports whether the block has no room for another record.
 //
-// A record is put in a page before the page is asked about, so a page found
-// full has just taken its last record and is split there and then. That is
-// what lets an insert go ahead without asking first: the page it lands in was
-// split the last time it filled, so there is always room for one more.
+// A record is inserted before the page is checked. A page that reports full
+// has therefore just received its last record, and the caller splits it
+// immediately. This is why an insert does not need to check for room first:
+// any page that became full was split at that time, so a page always has room
+// for one more record.
 func (p *btreePage) isFull() (bool, error) {
 	n, err := p.numRecords()
 	if err != nil {
 		return false, err
 	}
 
-	// The next record would take the slot numbered n, which ends where slot
-	// n+1 would begin.
+	// The next record would use slot n. That slot ends where slot n+1 would
+	// begin.
 	return p.slotPos(n+1) > p.tx.BlockSize(), nil
 }
 
-// split moves the records from splitPos on into a block appended to the same
-// file, flagged with flag, and returns that block.
+// split moves the records from splitPos onward to a new block appended to the
+// same file, sets the flag of that block to flag, and returns the block.
 //
-// The records keep their order: the ones before splitPos stay where they are,
-// and the ones moved take up the new block from its first slot. Every value
-// left here is then no greater than every value moved, which is what lets the
-// caller file the new block in the directory under the first value it holds.
+// The records keep their order. The records before splitPos stay in place,
+// and the moved records fill the new block from slot 0. Every key that stays
+// is then less than or equal to every key that moved. The caller can
+// therefore add the new block to the directory under its first key.
 func (p *btreePage) split(splitPos int, flag int32) (*filemanager.BlockId, error) {
 	newBlk, err := appendBTreeBlock(p.tx, p.blk.FileName(), p.layout, flag)
 	if err != nil {
@@ -258,9 +261,9 @@ func (p *btreePage) split(splitPos int, flag int32) (*filemanager.BlockId, error
 		}
 	}
 
-	// The moved records are counted in the new block only once they are all
-	// in it, and the ones left here are counted afresh, so that neither block
-	// counts a slot that does not yet, or no longer, hold one of its records.
+	// The new block's count is set only after all records have been copied
+	// to it, and this block's count is reduced after that. Neither block
+	// ever counts a slot that does not hold one of its records.
 	if err := newPage.setNumRecords(n - splitPos); err != nil {
 		return nil, err
 	}
@@ -271,13 +274,14 @@ func (p *btreePage) split(splitPos int, flag int32) (*filemanager.BlockId, error
 	return newBlk, nil
 }
 
-// delete takes out the record at slot, moving the records after it forward by
-// one so that the records left still take up the first slots in order.
+// delete removes the record at slot. It shifts the records after slot toward
+// the front by one slot, so the remaining records still occupy the first
+// slots in order.
 //
-// The records are moved from the one after slot onward, so that each is copied
-// into a slot whose own record has already been moved out of it or deleted.
-// The last slot is left holding the record just copied out of it, which nothing
-// reads once it is no longer counted.
+// The shift starts with the record after slot and proceeds toward the end.
+// Each record is therefore copied into a slot whose own record has already
+// been moved or deleted. The last slot keeps a stale copy of its record.
+// Nothing reads that copy, because the slot is no longer counted.
 func (p *btreePage) delete(slot int) error {
 	n, err := p.numRecords()
 	if err != nil {
@@ -293,22 +297,24 @@ func (p *btreePage) delete(slot int) error {
 	return p.setNumRecords(n - 1)
 }
 
-// checkValue reports whether value fits the field the page's records are filed
-// under: ErrFieldTypeMismatch if it is of the other kind, and ErrStringTooLong
-// if it is a varchar of more characters than the field was declared to hold.
+// checkValue checks that value fits the key field of the page's records. It
+// returns ErrFieldTypeMismatch if value has a different type from the field.
+// It returns ErrStringTooLong if value is a varchar with more characters than
+// the field's declared length.
 //
-// Nothing below would catch either. A varchar written over an int field is its
-// length followed by its bytes, and reads back as the length: the page would
-// file the entry under a number nobody inserted, and say nothing. A varchar
-// over its limit is written whole, since the field has room for its limit in
-// the widest encoding; a little over, it reads back intact, and far enough
-// over, it runs into the next slot. Either way it breaks the width the schema
-// declared, which a record page refuses for the same reason.
+// No lower layer catches either error. A varchar written to an int field is
+// stored as its length followed by its bytes, and it reads back as the
+// length. The page would then silently index the entry by a number that
+// nobody inserted. A varchar over the length limit is written in full,
+// because the field reserves room for its limit in the widest encoding. If it
+// is slightly too long, it reads back intact. If it is much too long, it
+// overwrites the next slot. Both cases violate the length the schema
+// declares, and a record page rejects them for the same reason.
 //
-// It is checked before anything is written rather than as the value is,
-// because an insert moves the records after slot and counts the new one before
-// it writes it. Refused at that point, it would leave a gap holding whatever
-// the record moved out of it held, counted as a record of its own.
+// The check runs before anything is written, not while the value is written.
+// An insert shifts the records after slot and increments the count before it
+// writes the new record. An error at that point would leave a gap that is
+// counted as a record and holds a stale copy of the record shifted out of it.
 func (p *btreePage) checkValue(value query.Constant) error {
 	schema := p.layout.Schema()
 
@@ -327,16 +333,16 @@ func (p *btreePage) checkValue(value query.Constant) error {
 		return nil
 	}
 
-	// Neither can fail here: Type has just found the field, and value has
-	// just been found to be a varchar.
+	// Neither call can fail here: Type has just found the field, and value is
+	// known to be a varchar.
 	length, err := schema.Length(IndexedValueField)
 	if err != nil {
 		return err
 	}
 	s, _ := value.AsString()
 
-	// Characters are counted rather than bytes, as a record page counts them,
-	// because that is what a varchar's length means.
+	// The length is counted in characters, not bytes, because a varchar's
+	// declared length is a character count. A record page counts the same way.
 	if count := utf8.RuneCountInString(s); count > length {
 		return fmt.Errorf(
 			"file an entry under %s of %d characters in %s, whose records hold %d: %w",
@@ -347,11 +353,12 @@ func (p *btreePage) checkValue(value query.Constant) error {
 	return nil
 }
 
-// makeRoom moves the records from slot to the last back by one slot, leaving
-// slot free to be written, and counts the record about to be written there.
+// makeRoom shifts the records from slot to the last one toward the end by one
+// slot, so that slot is free to be written. It also increments the record
+// count for the record about to be written.
 //
-// The records are moved from the last one forward, so that each is copied into
-// a slot whose own record has already been moved out of it.
+// The shift starts with the last record and proceeds toward slot. Each record
+// is therefore copied into a slot whose own record has already been moved.
 func (p *btreePage) makeRoom(slot int) error {
 	n, err := p.numRecords()
 	if err != nil {
@@ -367,9 +374,9 @@ func (p *btreePage) makeRoom(slot int) error {
 	return p.setNumRecords(n + 1)
 }
 
-// copyRecordTo writes every field of the record at from over the record at to
-// in dst, which is laid out as this page is. dst may be this page itself, which
-// is how records are moved along within one block.
+// copyRecordTo copies every field of this page's record at slot from into
+// dst's record at slot to. dst must use the same layout as this page. dst can
+// be this page itself, which is how records are shifted within one block.
 func (p *btreePage) copyRecordTo(from int, dst *btreePage, to int) error {
 	for _, fieldName := range p.layout.Schema().Fields() {
 		v, err := p.value(from, fieldName)
@@ -384,21 +391,23 @@ func (p *btreePage) copyRecordTo(from int, dst *btreePage, to int) error {
 	return nil
 }
 
-// headerBytes is how much of the block the header takes, which is where the
-// first slot begins.
+// headerBytes is the size of the header in bytes. The first slot begins at
+// this offset.
 const headerBytes = numRecordsOffset + filemanager.IntBytes
 
-// slotPos is where slot begins within the block. Every slot is the same size,
-// so a slot is found by its number alone.
+// slotPos returns the offset of slot within the block. All slots have the
+// same size, so the offset depends only on the slot number.
 func (p *btreePage) slotPos(slot int) int {
 	return headerBytes + slot*p.layout.SlotSize()
 }
 
-// fieldPos is where fieldName of the record at slot sits within the block.
+// fieldPos returns the offset of fieldName of the record at slot within the
+// block.
 //
-// The layout leaves room at the front of each slot for the in-use flag a record
-// page keeps there; a B-tree page has no use for it, since numRecords says
-// which slots hold a record, and leaves those bytes alone.
+// The layout reserves space at the start of each slot for the in-use flag of
+// a record page. A B-tree page does not use that flag, because numRecords
+// already determines which slots hold a record. It leaves those bytes
+// untouched.
 func (p *btreePage) fieldPos(slot int, fieldName string) (int, error) {
 	offset, err := p.layout.Offset(fieldName)
 	if err != nil {
@@ -408,8 +417,8 @@ func (p *btreePage) fieldPos(slot int, fieldName string) (int, error) {
 	return p.slotPos(slot) + offset, nil
 }
 
-// value reads fieldName of the record at slot as whichever kind of value the
-// layout says the field holds.
+// value reads fieldName of the record at slot as a constant of the type that
+// the layout declares for the field.
 func (p *btreePage) value(slot int, fieldName string) (query.Constant, error) {
 	pos, err := p.fieldPos(slot, fieldName)
 	if err != nil {
@@ -439,10 +448,10 @@ func (p *btreePage) value(slot int, fieldName string) (query.Constant, error) {
 
 // intValue reads fieldName of the record at slot as an int.
 //
-// It is for the fields every index lays out as ints, the block numbers and the
-// slot, which are read as numbers to go somewhere rather than as values to
-// compare. Reading them through value would make a constant only to take the
-// int back out of it.
+// It is used for the fields that every index declares as ints: the block
+// numbers and the slot. These are used as positions, not compared as keys.
+// Reading them through value would wrap the int in a constant only to unwrap
+// it again.
 func (p *btreePage) intValue(slot int, fieldName string) (int, error) {
 	pos, err := p.fieldPos(slot, fieldName)
 	if err != nil {
@@ -481,13 +490,13 @@ func (p *btreePage) setValue(slot int, fieldName string, v query.Constant) error
 		return p.tx.SetInt(p.blk, pos, n)
 	}
 
-	// AsString cannot fail either, a constant being one of the two kinds.
+	// AsString cannot fail either: a constant is either an int or a string.
 	s, _ := v.AsString()
 
 	return p.tx.SetString(p.blk, pos, s)
 }
 
-// close gives back the pin taken when the page was opened.
+// close unpins the block that was pinned when the page was opened.
 func (p *btreePage) close() {
 	p.tx.Unpin(p.blk)
 }
