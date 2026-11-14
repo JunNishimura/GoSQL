@@ -3,6 +3,8 @@ package query
 import (
 	"slices"
 	"strings"
+
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
 // Predicate is the condition a query keeps records by: terms that all have to
@@ -72,6 +74,32 @@ func (p Predicate) ConjoinWith(other Predicate) Predicate {
 // caller that writes to it does not change the predicate it came from.
 func (p Predicate) Terms() []Term {
 	return slices.Clone(p.terms)
+}
+
+// SelectSubPred returns the predicate of the terms that can be evaluated
+// against a record of schema alone, in the order they were given, and whether
+// there are any.
+//
+// These are the terms a planner can test as a table is read, before it is
+// joined to anything, so that the join is given fewer records. That is safe
+// because the terms are joined by "and": a record one of them rules out is
+// ruled out of the whole predicate, wherever in the plan it is tested.
+//
+// Having no such terms is reported apart from a predicate of no terms. That
+// one holds everywhere, and a planner given it would put a select over the
+// table that keeps every record, rather than putting none.
+func (p Predicate) SelectSubPred(schema *recordmanager.Schema) (Predicate, bool) {
+	var terms []Term
+	for _, term := range p.terms {
+		if term.AppliesTo(schema) {
+			terms = append(terms, term)
+		}
+	}
+	if len(terms) == 0 {
+		return Predicate{}, false
+	}
+
+	return Predicate{terms: terms}, true
 }
 
 // String writes the terms in the order they were given, with "and" between

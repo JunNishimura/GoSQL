@@ -268,3 +268,57 @@ func TestPredicateTerms(t *testing.T) {
 		}
 	})
 }
+
+func TestPredicateSelectSubPred(t *testing.T) {
+	tests := []struct {
+		name      string
+		pred      Predicate
+		wantTerms []Term
+		wantOK    bool
+	}{
+		{
+			name:      "given a schema with id and name fields, when the sub-predicate of a predicate whose terms all name its fields is taken, then it is every term, in order",
+			pred:      NewPredicate(termThatHolds, termThatAlsoHolds),
+			wantTerms: []Term{termThatHolds, termThatAlsoHolds},
+			wantOK:    true,
+		},
+		// The term the schema cannot answer sits between the two it can, so
+		// leaving it out has to keep the order of those on either side.
+		{
+			name:      "given a schema with id and name fields, when the sub-predicate of a predicate with a term naming a field it does not have is taken, then that term is left out and the rest keep their order",
+			pred:      NewPredicate(termThatHolds, termOnAMissingField, termThatAlsoHolds),
+			wantTerms: []Term{termThatHolds, termThatAlsoHolds},
+			wantOK:    true,
+		},
+		// No term to test is told apart from a predicate of no terms, which
+		// holds everywhere: a planner reads it as nothing to select on, not as
+		// a select that keeps every record.
+		{
+			name:   "given a schema with id and name fields, when the sub-predicate of a predicate whose only term names a field it does not have is taken, then there is none",
+			pred:   NewPredicate(termOnAMissingField),
+			wantOK: false,
+		},
+		{
+			name:   "given a schema with id and name fields, when the sub-predicate of a predicate of no terms is taken, then there is none",
+			pred:   NewPredicate(),
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := newTestLayout(t).Schema()
+
+			got, ok := tt.pred.SelectSubPred(schema)
+			if ok != tt.wantOK {
+				t.Fatalf("SelectSubPred() ok = %t, want %t", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if !slices.Equal(got.Terms(), tt.wantTerms) {
+				t.Errorf("SelectSubPred() = %s, want %s", got, NewPredicate(tt.wantTerms...))
+			}
+		})
+	}
+}
