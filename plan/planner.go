@@ -99,3 +99,19 @@ func (p *Planner) ExecuteUpdate(sql string, tx *transaction.Transaction) (int, e
 		return 0, fmt.Errorf("execute %q: no planner method for a %T", sql, cmd)
 	}
 }
+
+// parseViewDefinition parses definition, the select statement view viewName
+// was created with, so that a query planner can plan the view from it.
+func parseViewDefinition(viewName, definition string) (parse.QueryData, error) {
+	parser, err := parse.NewParser(definition)
+	if err != nil {
+		return parse.QueryData{}, fmt.Errorf("parse the definition of view %q: %w", viewName, err)
+	}
+
+	data, err := parser.Query()
+	if err != nil {
+		return parse.QueryData{}, fmt.Errorf("parse the definition of view %q: %w", viewName, err)
+	}
+
+	return data, nil
+}

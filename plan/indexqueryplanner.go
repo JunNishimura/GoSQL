@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"fmt"
 	"maps"
 	"slices"
 
@@ -79,13 +78,9 @@ func (qp *IndexQueryPlanner) planTable(tableName string, pred query.Predicate, t
 		return nil, nil, err
 	}
 	if isView {
-		parser, err := parse.NewParser(definition)
+		viewData, err := parseViewDefinition(tableName, definition)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse the definition of view %q: %w", tableName, err)
-		}
-		viewData, err := parser.Query()
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse the definition of view %q: %w", tableName, err)
+			return nil, nil, err
 		}
 
 		p, err := qp.CreatePlan(viewData, tx)
