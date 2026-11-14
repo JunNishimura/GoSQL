@@ -1,6 +1,10 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
+
+	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
+)
 
 // Expression is one side of a term of a predicate: either the name of a field,
 // which stands for whatever the record being looked at holds in it, or a
@@ -15,6 +19,13 @@ type Expression interface {
 	// Evaluate returns the value the expression comes to for the record the
 	// scan is on.
 	Evaluate(s Scan) (Constant, error)
+	// AppliesTo reports whether the expression can be evaluated against a
+	// record of schema.
+	//
+	// This is what a planner sorts the terms of a predicate by: a term both of
+	// whose sides apply to one table's schema can be tested as that table is
+	// read, before it is joined to anything.
+	AppliesTo(schema *recordmanager.Schema) bool
 	fmt.Stringer
 }
 
@@ -56,6 +67,11 @@ func (e FieldExpression) Evaluate(s Scan) (Constant, error) {
 	return s.GetValue(e.fieldName)
 }
 
+// AppliesTo reports whether schema has the field the expression stands for.
+func (e FieldExpression) AppliesTo(schema *recordmanager.Schema) bool {
+	return schema.HasField(e.fieldName)
+}
+
 // FieldName is the name of the field the expression stands for.
 func (e FieldExpression) FieldName() string {
 	return e.fieldName
@@ -88,6 +104,13 @@ func NewConstantExpression(val Constant) ConstantExpression {
 // there being a record to read.
 func (e ConstantExpression) Evaluate(_ Scan) (Constant, error) {
 	return e.val, nil
+}
+
+// AppliesTo reports that the constant can be evaluated against a record of
+// any schema, an empty one included, since evaluating it reads nothing from
+// the record.
+func (e ConstantExpression) AppliesTo(_ *recordmanager.Schema) bool {
+	return true
 }
 
 // Value is the constant the expression stands for.
