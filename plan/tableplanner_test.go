@@ -231,3 +231,119 @@ func sortedPairs(pairs [][2]int32) [][2]int32 {
 
 	return sorted
 }
+
+// The other table, of oids from 0, is what is already planned, and is joined
+// to the test table, of ids from 0, on oid equal to id.
+//
+// Whether the join goes through the index on id turns on what it costs. With
+// 3 oids the join through the index reads 13 blocks; the product reads 3 when
+// the test table holds 20 records and 17 when it holds 200. So the cases that
+// want the index hold 200 records, and those that want a product hold 20.
+func TestTablePlannerMakeJoinPlan(t *testing.T) {
+	tests := []struct {
+		name        string
+		recordCount int
+		indexed     []string
+		sql         string
+		// wantIndexJoin is whether the plan should join through the index on id.
+		wantIndexJoin bool
+		want          [][2]int32
+	}{
+		{
+			name:          "given a table of 200 records indexed on id and another of 3 already planned, when the join plan under a predicate where id is oid is made, then it joins through the index on id and pairs each oid with the same id",
+			recordCount:   200,
+			indexed:       []string{"id"},
+			sql:           "select id, oid from test, other where id = oid",
+			wantIndexJoin: true,
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		// The index stands for the join term; the term on name still has to be
+		// tested, and only on the table's side of the join.
+		{
+			name:          "given a table of 200 records indexed on id and another of 3 already planned, when the join plan under a predicate where id is oid and name is 'name1' is made, then it joins through the index on id and keeps only the pair of 1",
+			recordCount:   200,
+			indexed:       []string{"id"},
+			sql:           "select id, oid from test, other where id = oid and name = 'name1'",
+			wantIndexJoin: true,
+			want:          [][2]int32{{1, 1}},
+		},
+		{
+			name:          "given a table of 20 records indexed on id and another of 3 already planned, when the join plan under a predicate where id is oid is made, then it puts them beside each other, which reads fewer blocks, and pairs each oid with the same id",
+			recordCount:   20,
+			indexed:       []string{"id"},
+			sql:           "select id, oid from test, other where id = oid",
+			wantIndexJoin: false,
+			want:          [][2]int32{{0, 0}, {1, 1}, {2, 2}},
+		},
+		{
+			name:          "given a table of 200 records with no index and another of 3 already planned, when the join plan under a predicate where id is oid and name is 'name1' is made, then it puts them beside each other and keeps only the pair of 1",
+			recordCount:   200,
+			indexed:       nil,
+			sql:           "select id, oid from test, other where id = oid and name = 'name1'",
+			wantIndexJoin: false,
+			want:          [][2]int32{{1, 1}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := newTestTransaction(t)
+			mm := newTestMetadataManager(t, tx)
+			createTestTable(t, tx, mm, tt.recordCount)
+			createIndexesThrough(t, tx, mm, tt.indexed)
+			createOtherTable(t, tx, mm, 3)
+
+			current := mustNewTablePlanOf(t, tx, mm, otherTableName)
+			p, ok := mustMakeJoinPlan(t, tx, mm, tt.sql, current)
+			if !ok {
+				t.Fatalf("makeJoinPlan() ok = false, want a join plan")
+			}
+
+			joinField, isIndexJoin := indexJoinFieldOf(p)
+			switch {
+			case tt.wantIndexJoin && !isIndexJoin:
+				t.Errorf("the plan joins through no index, want it to join through the index on id")
+			case !tt.wantIndexJoin && isIndexJoin:
+				t.Errorf("the plan joins through an index on the value of %s, want no index join", joinField)
+			case isIndexJoin && joinField != "oid":
+				t.Errorf("the plan joins through the index on id on the value of %s, want oid", joinField)
+			}
+
+			if pairs := sortedPairs(openAndReadIDPairs(t, p)); !slices.Equal(pairs, tt.want) {
+				t.Errorf("the plan read (id, oid) pairs %v, want %v", pairs, tt.want)
+			}
+		})
+	}
+
+	// With nothing to join on, which plan to make is the caller's choice: the
+	// heuristic planner tries the other tables before falling back on a
+	// product.
+	t.Run("given a table of 20 records and another of 3 already planned, when the join plan under a predicate where id is 3 is made, then there is none, since no term joins them", func(t *testing.T) {
+		tx := newTestTransaction(t)
+		mm := newTestMetadataManager(t, tx)
+		createTestTable(t, tx, mm, testRecordCount)
+		createOtherTable(t, tx, mm, 3)
+
+		current := mustNewTablePlanOf(t, tx, mm, otherTableName)
+		if p, ok := mustMakeJoinPlan(t, tx, mm, "select id, oid from test, other where id = 3", current); ok {
+			t.Errorf("makeJoinPlan() = %T, want none", p)
+		}
+	})
+}
+
+// mustMakeJoinPlan makes the join plan of current and the test table under the
+// predicate of sql.
+func mustMakeJoinPlan(t *testing.T, tx *transaction.Transaction, mm *metadatamanager.MetadataManager, sql string, current Plan) (Plan, bool) {
+	t.Helper()
+
+	tp, err := newTablePlanner(tx, testTableName, mustParseQuery(t, sql).Predicate(), mm)
+	if err != nil {
+		t.Fatalf("newTablePlanner(%q) error = %v", testTableName, err)
+	}
+
+	p, ok, err := tp.makeJoinPlan(current)
+	if err != nil {
+		t.Fatalf("makeJoinPlan() error = %v", err)
+	}
+
+	return p, ok
+}

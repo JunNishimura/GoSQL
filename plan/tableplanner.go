@@ -57,6 +57,68 @@ func (tp *tablePlanner) makeSelectPlan() Plan {
 	return tp.addSelectPred(p)
 }
 
+// makeJoinPlan returns the plan of joining the table to current, and whether
+// the predicate has a term that joins them at all.
+//
+// The join goes through an index of the table where a join term equates its
+// indexed field with a field of current, unless putting the two beside each
+// other and testing the join terms over that reads fewer blocks, as
+// cheaperJoin weighs them. Either way, the terms on the table alone are tested
+// on its side of the join and the join terms over the join.
+func (tp *tablePlanner) makeJoinPlan(current Plan) (Plan, bool, error) {
+	joinPred, ok := tp.pred.JoinSubPred(tp.stored.Schema(), current.Schema())
+	if !ok {
+		return nil, false, nil
+	}
+
+	product, err := tp.makeProductPlan(current)
+	if err != nil {
+		return nil, false, err
+	}
+	productJoin := NewSelectPlan(product, joinPred)
+
+	indexJoin, err := tp.makeIndexJoin(current, joinPred)
+	if err != nil {
+		return nil, false, err
+	}
+	if indexJoin == nil {
+		return productJoin, true, nil
+	}
+
+	return cheaperJoin(indexJoin, productJoin), true, nil
+}
+
+// makeIndexJoin returns the plan of joining the table to current through
+// whichever of its indexes a term of joinPred equates with a field of current
+// for the fewest blocks, with the terms on the table alone and the join terms
+// tested over it, or nil if there is none.
+//
+// joinPred holds only terms with a field of the table on one side and a field
+// of current on the other, so the field a term equates an indexed field with
+// is one of current's. Of two that cost the same, the one on the field that
+// comes first by name is taken, as it is by cheapestIndexSelect.
+func (tp *tablePlanner) makeIndexJoin(current Plan, joinPred query.Predicate) (Plan, error) {
+	var best Plan
+	for _, fieldName := range slices.Sorted(maps.Keys(tp.indexes)) {
+		joinField, ok := equatesWithField(joinPred, fieldName)
+		if !ok {
+			continue
+		}
+
+		indexJoin, err := NewIndexJoinPlan(current, tp.stored, tp.indexes[fieldName], joinField)
+		if err != nil {
+			return nil, err
+		}
+
+		candidate := NewSelectPlan(tp.addSelectPred(indexJoin), joinPred)
+		if best == nil || candidate.BlocksAccessed() < best.BlocksAccessed() {
+			best = candidate
+		}
+	}
+
+	return best, nil
+}
+
 // makeProductPlan returns the plan of putting every record of current beside
 // every record of the table, read as makeSelectPlan reads it.
 //
