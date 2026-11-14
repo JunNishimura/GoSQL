@@ -86,8 +86,8 @@ func TestIsNew(t *testing.T) {
 			want:    true,
 		},
 		{
-			// A directory made ahead of time, by hand or by a test, holds no
-			// database yet, so it has to be set up like one that did not exist.
+			// A directory created in advance, by hand or by a test, holds no
+			// database yet. It must be set up like a directory that did not exist.
 			name:    "given a database directory that exists but is empty, when a file manager is made on it, then it reports the database as new",
 			dirFunc: func(t *testing.T) string { return t.TempDir() },
 			want:    true,
@@ -104,8 +104,8 @@ func TestIsNew(t *testing.T) {
 			want: false,
 		},
 		{
-			// The temp table's file is removed as the file manager is made, so
-			// the directory is left as empty as one that never held anything.
+			// The temp table's file is removed when the file manager is created,
+			// so the directory is as empty as one that never held a file.
 			name: "given a database directory that holds only a temp table's file, when a file manager is made on it, then it reports the database as new",
 			dirFunc: func(t *testing.T) string {
 				dir := t.TempDir()
@@ -209,9 +209,9 @@ func TestWriteAndRead(t *testing.T) {
 		})
 	}
 
-	// The buffer manager and the log manager each guard their own state with
-	// their own lock, so nothing outside the file manager keeps two goroutines
-	// from reaching it at once.
+	// The buffer manager and the log manager each protect their own state with
+	// their own lock. Nothing outside the file manager prevents two goroutines
+	// from calling it at the same time.
 	t.Run("given goroutines that each write and read back their own block of the same file at the same time, then each reads what it wrote", func(t *testing.T) {
 		fm, _ := newTestFileManager(t)
 		const goroutines = 8
@@ -329,8 +329,8 @@ func TestLength(t *testing.T) {
 	}
 }
 
-// writeFirstBlock puts a value into block 0 of fileName, so that a test can tell
-// one file from another by its contents.
+// writeFirstBlock writes value to block 0 of fileName, so that a test can
+// distinguish files by their contents.
 func writeFirstBlock(t *testing.T, fm *FileManager, fileName string, value int32) {
 	t.Helper()
 	blk, err := fm.Append(fileName)
@@ -374,10 +374,10 @@ func TestArchive(t *testing.T) {
 		}
 	})
 
-	// The manager keeps every file it has opened, so archiving has to close and
-	// forget the handle. Otherwise the next read of that name would follow the
-	// handle to the file that was moved away, and the archive would keep growing
-	// instead of a new file being started.
+	// The manager keeps the handle of every file it has opened, so Archive must
+	// close and drop the handle. Otherwise the next read of that name would use
+	// the handle of the moved file. The archive would then keep growing, and no
+	// new file would be started.
 	t.Run("given a file that has been archived, when its name is used again, then it starts an empty file", func(t *testing.T) {
 		fm, dir := newTestFileManager(t)
 		writeFirstBlock(t, fm, testFileName, 100)
@@ -395,8 +395,8 @@ func TestArchive(t *testing.T) {
 		}
 	})
 
-	// Archiving exists to keep the old file, so it must not quietly replace one
-	// that is already there.
+	// The purpose of an archive is to keep the old file, so Archive must not
+	// overwrite an existing one.
 	t.Run("given an archive already at the destination, it refuses to replace it and leaves both files alone", func(t *testing.T) {
 		fm, dir := newTestFileManager(t)
 		destPath := filepath.Join(dir, "archive", "old.db")
@@ -423,9 +423,8 @@ func TestArchive(t *testing.T) {
 		}
 	})
 
-	// The archived file is synced before it is moved, so that it is whole on
-	// disk. Its name then refers to no file at all, so nothing under that name
-	// is left to sync.
+	// The archived file is synced before it is moved, so it is complete on disk.
+	// Its name then refers to no file, so nothing under that name needs a sync.
 	t.Run("given a file that has been written, when it is archived, then its name is reported as synced", func(t *testing.T) {
 		fm, dir := newTestFileManager(t)
 		writeFirstBlock(t, fm, testFileName, 100)
@@ -490,8 +489,8 @@ func TestIsSynced(t *testing.T) {
 			want: map[string]bool{"a.db": false, "b.db": true},
 		},
 		{
-			// A new file is an entry in the directory, and syncing the file
-			// does not put that entry on disk.
+			// A new file adds an entry to the directory, and syncing the file
+			// does not make that entry durable.
 			name: "given a file manager, when a block is written to a file that did not exist, then the database directory is reported as not synced",
 			act: func(t *testing.T, fm *FileManager) {
 				if err := fm.Write(NewBlockId("a.db", 0), NewPageByBlockSize(testBlockSize)); err != nil {
@@ -536,8 +535,8 @@ func TestSync(t *testing.T) {
 			want:     map[string]bool{"a.db": true, "b.db": false},
 		},
 		{
-			// A file synced to make a write durable has to be found after a
-			// crash too, which for a new file takes its directory entry.
+			// A file that is synced to make a write durable must also be found
+			// after a crash. For a new file this requires its directory entry.
 			name:     "given a file created by a write, when it is synced, then the database directory is reported as synced too",
 			written:  []string{"a.db"},
 			fileName: "a.db",
@@ -608,8 +607,8 @@ func TestSyncAll(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	// Close forgets the handles, so a file it left unsynced could not be synced
-	// through the manager afterwards.
+	// Close drops the handles, so a file that it left unsynced could not be
+	// synced through the manager afterwards.
 	t.Run("given a file manager that has written to a file, when it is closed, then the file is reported as synced", func(t *testing.T) {
 		fm, _ := newTestFileManager(t)
 		writeFirstBlock(t, fm, testFileName, 100)
@@ -652,8 +651,8 @@ func TestClose(t *testing.T) {
 		}
 	})
 
-	// Close forgets the handles as well as closing them, so a closed handle is
-	// never used again: a later read opens the file afresh.
+	// Close closes the handles and also drops them, so a closed handle is never
+	// used again. A later read opens the file again.
 	t.Run("given a file manager that has been closed, when a file it wrote is read, then it reads what was written", func(t *testing.T) {
 		fm, _ := newTestFileManager(t)
 		writeFirstBlock(t, fm, testFileName, 100)

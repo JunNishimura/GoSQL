@@ -7,8 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// IntBytes is the width of an int as stored in a Page. Callers that lay out
-// records need it to compute the offset of each field, so it is exported.
+// IntBytes is the size in bytes of an int stored in a Page. It is exported
+// because callers that lay out records need it to compute field offsets.
 const IntBytes = 4
 
 type Page struct {
@@ -100,10 +100,11 @@ func (p *Page) SetString(offset int, value string) error {
 	return p.SetBytes(offset, []byte(value))
 }
 
-// MaxLength is the number of bytes SetString needs for a string of at most
-// strlen characters: the length prefix, plus the widest encoding of each
-// character. Callers that lay out records need it to size a varchar field,
-// which is why it takes no page, the same reason IntBytes is exported.
+// MaxLength returns the number of bytes that SetString needs for a string of
+// at most strlen characters: the length prefix plus the widest encoding of
+// each character. Callers that lay out records need it to size a varchar
+// field. It therefore takes no page, for the same reason that IntBytes is
+// exported.
 func MaxLength(strlen int) int {
 	return IntBytes + strlen*utf8.UTFMax
 }

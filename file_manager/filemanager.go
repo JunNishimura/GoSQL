@@ -22,39 +22,39 @@ func (s *Stats) BlocksWritten() int {
 	return s.blocksWritten
 }
 
-// FileManager is safe to use from several goroutines at once. The buffer
-// manager and the log manager each reach it under their own lock, so mu is
-// what keeps them from interleaving on openFiles, unsynced and stats.
+// FileManager is safe for concurrent use. The buffer manager and the log
+// manager each call it under their own lock, so mu is the only lock that
+// protects openFiles, unsynced and stats from concurrent access.
 type FileManager struct {
 	dbDirectory string
 	blockSize   int
 	openFiles   map[string]*os.File
-	// unsynced names the files written since they were last synced. A write
-	// only reaches the OS's page cache, so these are the files whose latest
-	// blocks a crash of the OS could still lose.
+	// unsynced holds the names of the files written since their last sync. A
+	// write only reaches the OS page cache, so an OS crash can still lose the
+	// latest blocks of these files.
 	unsynced map[string]struct{}
 	// dirUnsynced reports whether a file has been created in the database
-	// directory since the directory was last synced. Syncing a new file puts
-	// its contents on disk but not the directory entry that names it.
+	// directory since the directory was last synced. Syncing a new file makes
+	// its contents durable, but not the directory entry that names it.
 	dirUnsynced bool
 	stats       Stats
 	isNew       bool
 	mu          sync.Mutex
 }
 
-// TempFilePrefix starts the name of every file a temp table is kept in.
+// TempFilePrefix is the prefix of the name of every temp table file.
 //
-// It begins with '#', which the SQL tokenizer never puts in a word, so no
-// statement can name a table that starts with it: a user's table cannot share
-// a temp table's file, and nothing but a temp table is ever named this way.
+// It begins with '#', which the SQL tokenizer never accepts in a word. No
+// statement can therefore name a table that starts with it. A user table
+// cannot share a file with a temp table, and only temp tables have such names.
 //
-// A temp table lasts no longer than the query that made it, so one found when
-// a file manager is made was left behind by a database that stopped before it
-// could remove it.
+// A temp table does not outlive the query that created it. A temp file found
+// when a file manager is created was therefore left by a database that
+// stopped before it could remove the file.
 const TempFilePrefix = "#temp"
 
-// dirName is the name IsSynced takes for the database directory itself: the
-// directory as a path relative to itself.
+// dirName is the name that IsSynced accepts for the database directory
+// itself: the path of the directory relative to itself.
 const dirName = "."
 
 func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
@@ -66,8 +66,8 @@ func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 		return nil, fmt.Errorf("read directory %s: %w", dbDir, err)
 	}
 
-	// Temp files are removed before the directory is judged new, so that one
-	// holding nothing else is taken for the empty directory it now is.
+	// Temp files are removed before the check for a new directory. A
+	// directory that held only temp files then counts as empty.
 	kept := 0
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), TempFilePrefix) {
@@ -89,14 +89,14 @@ func NewFileManager(dbDir string, blockSize int) (*FileManager, error) {
 	}, nil
 }
 
-// IsNew reports whether the database directory held nothing when the file
-// manager was made on it, either because it did not exist or because it was
-// empty. That is what tells a database starting up that it has no catalogs to
-// recover and has to make them instead.
+// IsNew reports whether the database directory was empty when the file
+// manager was created, either because it did not exist or because it held no
+// files. A database that starts up uses this to decide whether to recover its
+// catalogs or to create them.
 //
-// Any file at all counts, hidden ones too, since telling a database's files
-// from anything else would mean knowing their names, which is not this
-// layer's business.
+// Every file counts, including hidden ones. Distinguishing database files
+// from other files would require knowing their names, and this layer does not
+// know them.
 func (f *FileManager) IsNew() bool {
 	return f.isNew
 }
@@ -190,22 +190,21 @@ func (f *FileManager) Append(fileName string) (*BlockId, error) {
 	return NewBlockId(fileName, newBlockNum), nil
 }
 
-// Archive moves fileName out of the database directory to destPath, creating
-// the directories leading up to it. The name is then free: reading or writing
-// it again starts an empty file.
+// Archive moves fileName out of the database directory to destPath, and
+// creates the parent directories of destPath as needed. The name is then
+// free: the next read or write of it starts an empty file.
 //
-// The file is synced first, so that the archive is whole on disk, and its
-// handle is then closed and forgotten. The manager keeps every file it has
-// opened, and a handle follows the file it was opened on rather than the path,
-// so a forgotten one would keep pointing at the file that was moved away.
+// The file is synced first, so that the archive is complete on disk. Its
+// handle is then closed and dropped from openFiles. A handle refers to the
+// file it was opened on, not to the path. A handle kept in openFiles would
+// therefore still refer to the moved file.
 //
-// Once the file is moved, every directory the move changed is synced: the
-// database directory, which no longer names the file, and each directory from
-// the destination up to the first one that already existed, which name the file
-// and the directories created to hold it.
+// After the move, every directory that the move changed is synced. These are
+// the database directory, which no longer names the file, and each directory
+// from the destination up to the first one that already existed.
 //
-// An existing destPath is refused rather than replaced. Archiving is done to
-// keep the old file, so quietly writing over an earlier one would defeat it.
+// Archive returns an error if destPath already exists. The purpose of an
+// archive is to keep the old file, so it must not overwrite an earlier one.
 func (f *FileManager) Archive(fileName, destPath string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -255,7 +254,8 @@ func (f *FileManager) Archive(fileName, destPath string) error {
 	return nil
 }
 
-// existingAncestor returns the closest of dir and its ancestors that exists.
+// existingAncestor returns dir if it exists, or else its closest ancestor
+// that exists.
 func existingAncestor(dir string) (string, error) {
 	for {
 		_, err := os.Stat(dir)
@@ -273,7 +273,7 @@ func existingAncestor(dir string) (string, error) {
 	}
 }
 
-// syncDir puts the entries of the directory at path on disk.
+// syncDir syncs the directory at path, which makes its entries durable.
 func syncDir(path string) error {
 	dir, err := os.Open(path)
 	if err != nil {
@@ -287,17 +287,15 @@ func syncDir(path string) error {
 	return nil
 }
 
-// Close syncs and closes every file the manager has opened and forgets them, so
-// that using the manager afterwards opens each file afresh rather than going
-// through a closed handle.
+// Close syncs and closes every open file and drops its handle. A later use of
+// the manager then opens each file again instead of using a closed handle.
 //
-// Each file is synced before it is closed, since once its handle is forgotten
-// nothing would be left to sync it through, and the database directory is
-// synced after them.
+// Each file is synced before it is closed, because the manager cannot sync a
+// file without its handle. The database directory is synced after the files.
 //
-// Every handle is closed and forgotten even when one fails to sync or close,
-// since a handle that could not be closed is no more usable than one that was,
-// and the failures are reported together.
+// Every handle is closed and dropped even if a sync or a close fails, because
+// a handle that failed to close is not usable either. The errors are returned
+// together.
 func (f *FileManager) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -319,11 +317,11 @@ func (f *FileManager) Close() error {
 }
 
 // IsSynced reports whether everything written to fileName has been synced to
-// disk. A file that has never been written counts as synced, since there is
-// nothing of it a crash could lose.
+// disk. A file that has never been written counts as synced, because a crash
+// cannot lose anything from it.
 //
-// Given ".", it reports on the database directory instead: whether every file
-// created in it is named on disk.
+// For ".", it reports on the database directory instead: whether the entry of
+// every file created in it is on disk.
 func (f *FileManager) IsSynced(fileName string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -335,13 +333,13 @@ func (f *FileManager) IsSynced(fileName string) bool {
 	return !ok
 }
 
-// Sync puts everything written to fileName on disk, so that it survives a crash
-// of the OS and not only of the process. A file with nothing unsynced is left
-// alone.
+// Sync makes everything written to fileName durable, so that it survives a
+// crash of the OS and not only of the process. It does nothing for a file
+// with no unsynced writes.
 //
-// The database directory is synced too if a file has been created in it, since
-// a new file that is on disk but not named in its directory cannot be found
-// after a crash.
+// The database directory is also synced if a file has been created in it. A
+// new file whose directory entry is not on disk cannot be found after a
+// crash.
 func (f *FileManager) Sync(fileName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -352,12 +350,12 @@ func (f *FileManager) Sync(fileName string) error {
 	return f.syncDBDir()
 }
 
-// SyncAll syncs every file written since it was last synced, and the database
-// directory if a file has been created in it.
+// SyncAll syncs every file with unsynced writes, and the database directory
+// if a file has been created in it.
 //
-// It covers the files of every transaction, not only of the caller's: a block
-// a transaction changed may have been written out early to free its buffer, and
-// nothing remembers which transaction that block belonged to.
+// It covers the files of all transactions, not only the caller's. The buffer
+// manager can write a modified block early to free its buffer, and nothing
+// records which transaction modified that block.
 func (f *FileManager) SyncAll() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -383,7 +381,7 @@ func (f *FileManager) syncDBDir() error {
 	return nil
 }
 
-// syncFile syncs fileName if it has anything unsynced. The caller must hold mu.
+// syncFile syncs fileName if it has unsynced writes. The caller must hold mu.
 func (f *FileManager) syncFile(fileName string) error {
 	if _, ok := f.unsynced[fileName]; !ok {
 		return nil
