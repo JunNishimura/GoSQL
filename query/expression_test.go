@@ -203,3 +203,44 @@ func TestConstantExpressionValue(t *testing.T) {
 		}
 	})
 }
+
+func TestFieldExpressionAppliesTo(t *testing.T) {
+	tests := []struct {
+		name      string
+		fieldName string
+		want      bool
+	}{
+		{
+			name:      "given a schema with an id field, when an expression naming id is checked against it, then it applies",
+			fieldName: "id",
+			want:      true,
+		},
+		{
+			name:      "given a schema with an id field, when an expression naming a field it does not have is checked against it, then it does not apply",
+			fieldName: "missing",
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := newTestLayout(t).Schema()
+
+			if got := NewFieldExpression(tt.fieldName).AppliesTo(schema); got != tt.want {
+				t.Errorf("AppliesTo() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// A literal reads nothing from a record, so there is no schema it cannot be
+// evaluated against, an empty one included.
+func TestConstantExpressionAppliesTo(t *testing.T) {
+	t.Run("given a schema with no fields, when a constant expression is checked against it, then it applies", func(t *testing.T) {
+		schema := recordmanager.NewSchema()
+
+		if got := NewConstantExpression(NewIntConstant(7)).AppliesTo(schema); !got {
+			t.Errorf("AppliesTo() = %t, want true", got)
+		}
+	})
+}

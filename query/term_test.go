@@ -163,3 +163,55 @@ func TestTermRHS(t *testing.T) {
 		}
 	})
 }
+
+func TestTermAppliesTo(t *testing.T) {
+	tests := []struct {
+		name string
+		lhs  Expression
+		rhs  Expression
+		want bool
+	}{
+		{
+			name: "given a schema with id and name fields, when a term of id and a constant is checked against it, then it applies",
+			lhs:  NewFieldExpression("id"),
+			rhs:  NewConstantExpression(NewIntConstant(testRecordID)),
+			want: true,
+		},
+		{
+			name: "given a schema with id and name fields, when a term of id and name is checked against it, then it applies",
+			lhs:  NewFieldExpression("id"),
+			rhs:  NewFieldExpression("name"),
+			want: true,
+		},
+		{
+			name: "given a schema with id and name fields, when a term of two constants is checked against it, then it applies",
+			lhs:  NewConstantExpression(NewIntConstant(1)),
+			rhs:  NewConstantExpression(NewIntConstant(1)),
+			want: true,
+		},
+		// The two cases below each leave one side out of the schema, so a
+		// term that checked only one of its sides would get one of them wrong.
+		{
+			name: "given a schema with id and name fields, when a term of id and a field it does not have is checked against it, then it does not apply",
+			lhs:  NewFieldExpression("id"),
+			rhs:  NewFieldExpression("missing"),
+			want: false,
+		},
+		{
+			name: "given a schema with id and name fields, when a term of a field it does not have and id is checked against it, then it does not apply",
+			lhs:  NewFieldExpression("missing"),
+			rhs:  NewFieldExpression("id"),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := newTestLayout(t).Schema()
+
+			if got := NewTerm(tt.lhs, tt.rhs).AppliesTo(schema); got != tt.want {
+				t.Errorf("AppliesTo() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
