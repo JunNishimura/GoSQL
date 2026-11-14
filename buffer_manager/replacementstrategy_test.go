@@ -2,8 +2,8 @@ package buffermanager
 
 import "testing"
 
-// assertChosen checks that a strategy returned the expected buffer, where an
-// index of -1 means that no buffer was expected at all.
+// assertChosen checks that a strategy returned the expected buffer. An index
+// of -1 means that no buffer was expected.
 func assertChosen(t *testing.T, got *Buffer, pool []*Buffer, wantIndex int) {
 	t.Helper()
 
@@ -107,8 +107,8 @@ func TestFifoStrategyChooseUnpinnedBuffer(t *testing.T) {
 	}
 }
 
-// pinChange reports that the buffer at the given pool index became pinned or
-// unpinned, mirroring what the manager tells a strategy.
+// pinChange is a notification that the buffer at the given pool index was
+// pinned or unpinned, as the manager sends it to a strategy.
 type pinChange struct {
 	index  int
 	pinned bool
@@ -197,8 +197,8 @@ func TestClockStrategyChooseUnpinnedBuffer(t *testing.T) {
 	tests := []struct {
 		name string
 		pins []int
-		// wantIndexes holds the buffer expected from each successive call, so
-		// that the movement of the clock hand can be observed. -1 means nil.
+		// wantIndexes is the buffer expected from each successive call, which
+		// shows how the clock hand moves. -1 means nil.
 		wantIndexes []int
 	}{
 		{
@@ -257,8 +257,8 @@ func TestUnmodifiedFirstStrategyChooseUnpinnedBuffer(t *testing.T) {
 	tests := []struct {
 		name string
 		pins []int
-		// txNums holds the transaction that modified each buffer, where -1
-		// marks a buffer that needs no write-back.
+		// txNums is the transaction that modified each buffer. -1 marks a
+		// buffer that needs no write-back.
 		txNums    []int
 		wantIndex int
 	}{
@@ -312,8 +312,9 @@ func TestLeastRecentlyModifiedStrategyChooseUnpinnedBuffer(t *testing.T) {
 	tests := []struct {
 		name string
 		pins []int
-		// txNums marks each buffer as modified, where -1 means unmodified, and
-		// lsns holds the log record protecting it, where -1 means none.
+		// txNums is the transaction that modified each buffer, and -1 means
+		// unmodified. lsns is the LSN of the log record that protects each
+		// buffer, and -1 means none.
 		txNums    []int
 		lsns      []int
 		wantIndex int

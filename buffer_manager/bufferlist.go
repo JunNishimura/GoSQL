@@ -4,21 +4,21 @@ import (
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
 
-// pinnedBuffer is a buffer one transaction has pinned, and how many times it did
-// so. The count matters because every pin has to be matched by an unpin: a
-// block pinned twice and released once would stay in the pool for good.
+// pinnedBuffer is a buffer that one transaction has pinned, with the number of
+// pins. The count matters because every pin must be matched by an unpin. A
+// block pinned twice and unpinned once would stay in the pool permanently.
 type pinnedBuffer struct {
 	buffer *Buffer
 	pins   int
 }
 
-// BufferList serves one transaction. It remembers the buffers that transaction
-// pinned, so that it can hand them back by block and release them all when the
-// transaction ends.
+// BufferList serves one transaction. It records the buffers that the
+// transaction has pinned, so that it can return them by block and unpin them
+// all when the transaction ends.
 //
-// The buffer manager is shared by every transaction and is what actually owns
-// the pool; the records here are private to this transaction. Sharing them
-// would let a transaction unpin a buffer another one is still using.
+// The buffer manager is shared by all transactions and owns the pool. The
+// records here are private to one transaction. If they were shared, a
+// transaction could unpin a buffer that another one is still using.
 type BufferList struct {
 	bufferManager *BufferManager
 	pinned        map[filemanager.BlockId]pinnedBuffer
@@ -31,22 +31,22 @@ func NewBufferList(bm *BufferManager) *BufferList {
 	}
 }
 
-// Buffer returns the buffer this transaction has pinned for blk, or nil if it
-// has not pinned it.
+// Buffer returns the buffer that this transaction has pinned for blk, or nil
+// if it has not pinned blk.
 //
-// Asking for a block the transaction never pinned is a bug in the caller, and
-// nil is what makes it show up. Handing back some other buffer would let the
-// caller write into a block it does not hold.
+// A request for a block that the transaction never pinned is a bug in the
+// caller, and the nil result exposes it. Returning another buffer would let
+// the caller write to a block that it does not hold.
 func (bl *BufferList) Buffer(blk *filemanager.BlockId) *Buffer {
 	return bl.pinned[*blk].buffer
 }
 
-// Pin pins blk for this transaction and keeps the buffer, so that Buffer can
-// hand it back and the pin can be released at the end.
+// Pin pins blk for this transaction and records the buffer, so that Buffer
+// can return it and the pin can be released at the end.
 //
-// Pinning a block that is already pinned raises the count rather than replacing
-// the record. The pool counts the pins too, so releasing one of them must not
-// release the others.
+// Pinning a block that is already pinned increments its count and keeps the
+// record. The pool counts the pins too, so releasing one pin must not release
+// the others.
 func (bl *BufferList) Pin(blk *filemanager.BlockId) error {
 	buf, err := bl.bufferManager.Pin(blk)
 	if err != nil {
@@ -61,12 +61,13 @@ func (bl *BufferList) Pin(blk *filemanager.BlockId) error {
 	return nil
 }
 
-// Unpin gives up one pin on blk. The record is dropped once the last one is
-// gone rather than left at a count of zero, so that a block with no record is
-// the only way to say this transaction does not hold it.
+// Unpin releases one pin on blk. When the last pin is released, the record is
+// removed, not kept with a count of zero. A missing record is then the only
+// state that means the transaction does not hold the block.
 //
-// Unpinning a block this transaction never pinned does nothing. The record is
-// what names the buffer to release, so without one there is nothing to do.
+// Unpinning a block that this transaction never pinned does nothing. The
+// record identifies the buffer to release, so without a record there is
+// nothing to release.
 func (bl *BufferList) Unpin(blk *filemanager.BlockId) {
 	held, ok := bl.pinned[*blk]
 	if !ok {
@@ -83,12 +84,12 @@ func (bl *BufferList) Unpin(blk *filemanager.BlockId) {
 	bl.pinned[*blk] = held
 }
 
-// UnpinAll releases every pin this transaction holds, which is what it does
-// when it ends.
+// UnpinAll releases every pin that this transaction holds. A transaction
+// calls it when it ends.
 //
-// Each block is released as many times as it was pinned. Releasing it once
-// would leave a repeatedly pinned buffer stuck in the pool for the rest of the
-// run, since the pool only frees a buffer when its last pin is gone.
+// Each block is unpinned as many times as it was pinned. The pool frees a
+// buffer only when its last pin is released, so a single unpin would leave a
+// buffer that was pinned several times in the pool permanently.
 func (bl *BufferList) UnpinAll() {
 	for _, held := range bl.pinned {
 		for range held.pins {

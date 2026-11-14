@@ -70,8 +70,9 @@ func TestNewBuffer(t *testing.T) {
 				t.Errorf("blk = %v, want nil", buf.blk)
 			}
 
-			// Page keeps its buffer unexported, so the size is verified through
-			// the bounds check of SetInt at the last writable offset and one past it.
+			// Page does not export its byte slice. The size is therefore checked
+			// through the bounds check of SetInt, at the last writable offset and
+			// at one past it.
 			if err := buf.contents.SetInt(tt.blockSize-4, 1); err != nil {
 				t.Errorf("SetInt(%d) error = %v, want nil", tt.blockSize-4, err)
 			}
@@ -85,7 +86,7 @@ func TestNewBuffer(t *testing.T) {
 func TestBlock(t *testing.T) {
 	tests := []struct {
 		name string
-		// blkNum names which of the appended blocks the buffer is assigned to.
+		// blkNum is the number of the appended block that the buffer is assigned to.
 		blkNum int
 	}{
 		{
@@ -127,8 +128,8 @@ func TestBlock(t *testing.T) {
 		})
 	}
 
-	// A buffer that has never been assigned holds no block, and callers such as
-	// the recovery manager have to be able to tell that apart from a real one.
+	// A buffer that has never been assigned holds no block. Callers such as the
+	// recovery manager must be able to distinguish that from a real block.
 	t.Run("given a buffer that has never been assigned a block, it reports none rather than a block of its own", func(t *testing.T) {
 		fm, lm := newTestManagers(t, testBlockSize)
 
@@ -185,9 +186,9 @@ func TestContents(t *testing.T) {
 		})
 	}
 
-	// Contents must hand out the buffer's own page rather than a copy. Callers
-	// such as an undo restoring a pre-image write through it and expect flush
-	// to put that write on disk; a copy would silently discard the change.
+	// Contents must return the buffer's own page, not a copy. A caller such as
+	// an undo that restores a pre-image writes through it, and expects flush to
+	// write the change to disk. A copy would silently discard the change.
 	t.Run("when the page it returned is written to and the buffer is flushed, then the write reaches the disk", func(t *testing.T) {
 		const (
 			txNum         = 1
@@ -469,8 +470,8 @@ func TestUnpin(t *testing.T) {
 	}
 }
 
-// appendLogRecord writes a record into the log page kept in memory and returns
-// its LSN. The record only reaches disk once the log manager is flushed.
+// appendLogRecord appends a record to the in-memory log page and returns its
+// LSN. The record only reaches disk when the log manager is flushed.
 func appendLogRecord(t *testing.T, lm *logmanager.LogManager) int {
 	t.Helper()
 
@@ -481,8 +482,9 @@ func appendLogRecord(t *testing.T, lm *logmanager.LogManager) int {
 	return lsn
 }
 
-// logFlushed reports whether the log manager has written its page to disk, which
-// shows up as a boundary smaller than the block size in block 0 of the log file.
+// logFlushed reports whether the log manager has written its page to disk. A
+// flushed page has a boundary smaller than the block size in block 0 of the
+// log file.
 func logFlushed(t *testing.T, fm *filemanager.FileManager) bool {
 	t.Helper()
 

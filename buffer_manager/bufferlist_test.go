@@ -14,7 +14,7 @@ const (
 )
 
 // newTestBufferManager builds a manager whose pool is one buffer smaller than
-// the data file, so that a test can both pin blocks and run the pool out.
+// the data file, so that a test can pin blocks and also exhaust the pool.
 func newTestBufferManager(t *testing.T) *BufferManager {
 	t.Helper()
 	fm, lm := newTestManagers(t, testBlockSize)
@@ -51,9 +51,9 @@ func TestNewBufferList(t *testing.T) {
 		}
 	})
 
-	// Every transaction gets its own list, and they share one buffer manager.
-	// Each has to remember only the buffers it pinned: a shared record would let
-	// a transaction unpin a buffer another one is still using.
+	// Every transaction has its own list, and all lists share one buffer
+	// manager. Each list must record only the buffers it pinned. With a shared
+	// record, a transaction could unpin a buffer that another one still uses.
 	t.Run("given two lists over the same buffer manager, when one records a pin, then the other does not see it", func(t *testing.T) {
 		bm := newTestBufferManager(t)
 
@@ -84,8 +84,8 @@ func TestBufferListPin(t *testing.T) {
 			wantPins: 1,
 		},
 		{
-			// Each pin has to be matched by an unpin, so a repeat is counted
-			// rather than ignored.
+			// Each pin must be matched by an unpin, so a repeated pin is
+			// counted, not ignored.
 			name:     "given a block this list already pinned, a second pin is counted rather than ignored",
 			pinCalls: 2,
 			wantPins: 2,
@@ -144,8 +144,8 @@ func TestBufferListPin(t *testing.T) {
 		}
 	})
 
-	// A pin that never happened must not be recorded, or the transaction would
-	// later unpin a buffer it does not hold.
+	// A pin that failed must not be recorded. Otherwise the transaction would
+	// later unpin a buffer that it does not hold.
 	t.Run("given a pool with no buffer left, it reports ErrBufferAbort and records nothing", func(t *testing.T) {
 		bm := newTestBufferManager(t)
 		bm.maxWaitTime = 50 * time.Millisecond
@@ -186,9 +186,9 @@ func TestBufferListBuffer(t *testing.T) {
 		}
 	})
 
-	// Asking for a block this transaction never pinned is a bug in the caller,
-	// and nil is what makes it show up. Handing back some other buffer would let
-	// the caller write into a block it does not hold.
+	// A request for a block that this transaction never pinned is a bug in the
+	// caller, and the nil result exposes it. Returning another buffer would let
+	// the caller write to a block that it does not hold.
 	t.Run("given a block this list has not pinned, it returns none rather than some other buffer", func(t *testing.T) {
 		bl := NewBufferList(newTestBufferManager(t))
 		blk := filemanager.NewBlockId(testDataFile, 0)
@@ -204,8 +204,8 @@ func TestBufferListUnpin(t *testing.T) {
 		name     string
 		pinCalls int
 		wantPins int
-		// wantAvailable is the pool's free count afterwards. The pool only
-		// counts a buffer as free once its last pin is gone.
+		// wantAvailable is the number of free buffers in the pool afterwards.
+		// The pool counts a buffer as free only when its last pin is released.
 		wantAvailable int
 	}{
 		{
@@ -241,8 +241,8 @@ func TestBufferListUnpin(t *testing.T) {
 
 			bl.Unpin(blk)
 
-			// A block with no pins left must have no record at all, so that a
-			// count of zero never reads as a buffer this transaction holds.
+			// A block with no pins left must have no record. A record with a
+			// count of zero could be read as a buffer the transaction holds.
 			held, present := bl.pinned[*blk]
 			if tt.wantPins == 0 {
 				if present {
@@ -274,9 +274,9 @@ func TestBufferListUnpin(t *testing.T) {
 }
 
 func TestBufferListUnpinAll(t *testing.T) {
-	// UnpinAll has to release a block as many times as it was pinned. Releasing
-	// each block once would leave a repeatedly pinned buffer stuck in the pool
-	// for the rest of the run.
+	// UnpinAll must unpin a block as many times as it was pinned. A single
+	// unpin per block would leave a buffer that was pinned several times in the
+	// pool permanently.
 	t.Run("given a block pinned once and another pinned twice, every hold is given up and the pool is free again", func(t *testing.T) {
 		bm := newTestBufferManager(t)
 		bl := NewBufferList(bm)

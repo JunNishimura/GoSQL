@@ -16,9 +16,9 @@ const defaultMaxWaitTime = 10 * time.Second
 // The caller is expected to abort its transaction and retry.
 var ErrBufferAbort = errors.New("no buffer available")
 
-// Stats reports how the buffer pool has been used. Hits counts the pins that
-// were served without a disk read, so comparing it against Pins shows how well
-// the pool absorbs requests, while Waits shows how often the pool ran out.
+// Stats holds usage counters of the buffer pool. Hits counts the pins that
+// needed no disk read, so the ratio of Hits to Pins shows how well the pool
+// absorbs requests. Waits counts how often a pin found no free buffer.
 type Stats struct {
 	pins    int
 	hits    int
@@ -45,8 +45,8 @@ func (s Stats) Flushes() int {
 type BufferManager struct {
 	fileManager *filemanager.FileManager
 	bufferPool  []*Buffer
-	// bufferByBlock indexes the pool by the block each buffer holds, so that a pin
-	// does not have to scan every buffer to find one.
+	// bufferByBlock maps each block to the buffer that holds it, so that a pin
+	// does not have to scan the pool.
 	bufferByBlock map[filemanager.BlockId]*Buffer
 	numAvailable  int
 	maxWaitTime   time.Duration
@@ -100,8 +100,8 @@ func (bm *BufferManager) Pin(blk *filemanager.BlockId) (*Buffer, error) {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
 
-	// sync.Cond cannot wait with a deadline, so a timer wakes the waiters up once
-	// maxWaitTime has passed.
+	// sync.Cond has no wait with a deadline, so a timer wakes the waiters after
+	// maxWaitTime.
 	timedOut := false
 	timer := time.AfterFunc(bm.maxWaitTime, func() {
 		bm.mu.Lock()
@@ -111,8 +111,8 @@ func (bm *BufferManager) Pin(blk *filemanager.BlockId) (*Buffer, error) {
 	})
 	defer timer.Stop()
 
-	// waited keeps a pin that goes around the loop several times from being
-	// counted as more than one wait.
+	// waited ensures that a pin that loops several times is counted as one
+	// wait.
 	waited := false
 	for {
 		buf, err := bm.tryToPin(blk)
@@ -146,8 +146,8 @@ func (bm *BufferManager) Unpin(buf *Buffer) {
 	}
 }
 
-// Available returns how many buffers in the pool are not pinned, which is how
-// many more blocks can be pinned without waiting for one to be unpinned.
+// Available returns the number of unpinned buffers in the pool. That many
+// more blocks can be pinned without waiting.
 func (bm *BufferManager) Available() int {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
@@ -159,14 +159,15 @@ func (bm *BufferManager) findExistingBuffer(blk *filemanager.BlockId) *Buffer {
 	return bm.bufferByBlock[*blk]
 }
 
-// FlushAll writes out every buffer txNum modified and then syncs every file
-// with unsynced writes, so that the transaction's changes survive a crash of the
-// OS. A commit, a rollback and a checkpoint call this before writing their
-// record, which must not reach the disk ahead of the data it describes.
+// FlushAll writes every buffer that txNum modified, and then syncs every file
+// with unsynced writes. The changes of the transaction then survive an OS
+// crash. A commit, a rollback and a checkpoint call FlushAll before they
+// write their log record, because that record must not reach disk before the
+// data it describes.
 //
-// The sync covers more than the buffers written here: a block the transaction
-// modified may have been written out earlier to free its buffer, which leaves
-// that buffer no longer carrying txNum.
+// The sync covers more than the buffers written here. A block that the
+// transaction modified can have been written earlier to free its buffer, and
+// that buffer no longer has txNum.
 func (bm *BufferManager) FlushAll(txNum int) error {
 	bm.mu.Lock()
 	defer bm.mu.Unlock()
@@ -207,12 +208,13 @@ func (bm *BufferManager) tryToPin(blk *filemanager.BlockId) (*Buffer, error) {
 	return buf, nil
 }
 
-// assignBufferToBlock loads blk into buf and keeps bufferByBlock pointing at the
-// buffer that actually holds each block.
+// assignBufferToBlock loads blk into buf and updates bufferByBlock, so that
+// each block maps to the buffer that actually holds it.
 func (bm *BufferManager) assignBufferToBlock(buf *Buffer, blk *filemanager.BlockId) error {
-	// Drop the old mapping only while it still names this buffer. An assignment
-	// that failed midway can leave a buffer carrying a block id owned by another
-	// buffer, and removing that entry would hide a block that is really there.
+	// The old mapping is removed only if it still points to this buffer. A
+	// failed assignment can leave a buffer with the block id of a block that
+	// another buffer holds. Removing that entry would hide a block that is
+	// in the pool.
 	if buf.blk != nil && bm.bufferByBlock[*buf.blk] == buf {
 		delete(bm.bufferByBlock, *buf.blk)
 	}
