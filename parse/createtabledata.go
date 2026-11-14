@@ -7,19 +7,19 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// ErrInvalidVarcharLength reports a varchar field declared with a negative
-// length.
+// ErrInvalidVarcharLength is returned for a varchar field that is declared
+// with a negative length.
 //
-// It is kept apart from ErrBadSyntax because the statement follows the grammar,
-// which allows any int as the length. What is wrong is the value: no string is
-// shorter than no characters, and a layout given a negative length would give
-// the field negative room in a record.
+// It is separate from ErrBadSyntax because the statement is grammatical: the
+// grammar allows any int as the length. The value is the problem. No string
+// has fewer than zero characters, and a layout with a negative length would
+// give the field a negative size in a record.
 var ErrInvalidVarcharLength = errors.New("invalid varchar length")
 
 var _ UpdateCommand = CreateTableData{}
 
-// CreateTableData is what a create table statement asks for: a table of the
-// given name, whose records have the fields of the schema.
+// CreateTableData is the content of a create table statement: a table with
+// the given name, whose records have the fields of the schema.
 type CreateTableData struct {
 	tableName string
 	schema    *recordmanager.Schema
@@ -27,21 +27,21 @@ type CreateTableData struct {
 
 func (CreateTableData) isUpdateCommand() {}
 
-// TableName is the table to create.
+// TableName returns the name of the table to create.
 func (d CreateTableData) TableName() string {
 	return d.tableName
 }
 
-// Schema is the fields of the table, in the order written.
+// Schema returns the fields of the table, in the order written.
 //
-// It is a copy, as the fields and tables of QueryData are. A schema is written
-// to through AddField, so handing out the one held here would let a caller
-// change the table this statement creates.
+// The result is a copy, like the fields and tables of QueryData. A schema is
+// modified through AddField, so returning the stored schema would let a
+// caller change the table that this statement creates.
 func (d CreateTableData) Schema() *recordmanager.Schema {
 	copied := recordmanager.NewSchema()
 	if err := copied.AddAll(d.schema); err != nil {
-		// A schema of no fields has no name for one being copied to clash
-		// with, so AddAll has nothing to refuse.
+		// A schema with no fields has no name that a copied field can
+		// duplicate, so AddAll cannot fail.
 		panic(fmt.Sprintf("copy the schema of table %s: %v", d.tableName, err))
 	}
 

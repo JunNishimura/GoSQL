@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// newTestQueryData parses s as a query, failing the test if it does not parse.
+// newTestQueryData parses s as a query, and fails the test if s is not valid.
 func newTestQueryData(t *testing.T, s string) QueryData {
 	t.Helper()
 
@@ -42,8 +42,9 @@ func TestQueryDataTables(t *testing.T) {
 	})
 }
 
-// A view is stored as the text of its query and parsed again whenever it is
-// used, so what String writes has to be SQL this package reads back.
+// A view is stored as the text of its query and parsed again each time it is
+// used. The output of String must therefore be SQL that this package can
+// parse.
 func TestQueryDataString(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -55,8 +56,8 @@ func TestQueryDataString(t *testing.T) {
 			input: "select sname from student",
 			want:  "select sname from student",
 		},
-		// A string constant is written in single quotes, the only quotes the
-		// tokenizer reads a string constant from.
+		// A string constant is written in single quotes, which are the only
+		// quotes that the tokenizer accepts for a string constant.
 		{
 			name:  "given query data of a query of several fields and tables with a where clause, then it is the query with its string constants in single quotes",
 			input: "select sname, sid from student, enroll where sid = studentid and major = 'Math'",

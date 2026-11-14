@@ -7,17 +7,18 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// Parser reads SQL by recursive descent, one method for each rule of the
-// grammar, and builds what the rules describe as it goes.
+// Parser is a recursive descent parser for SQL. It has one method for each
+// rule of the grammar, and each method builds the data that its rule
+// describes.
 //
-// Each method starts at the first token of its rule and leaves the lexer at the
-// first token after it, so a rule made of others is those methods called in the
-// order their parts are written.
+// Each method starts at the first token of its rule and leaves the lexer at
+// the first token after the rule. A rule that consists of other rules
+// therefore calls their methods in the order in which its parts are written.
 type Parser struct {
 	lex *Lexer
 }
 
-// NewParser returns a parser at the start of s.
+// NewParser returns a parser positioned at the start of s.
 func NewParser(s string) (*Parser, error) {
 	lex, err := NewLexer(s)
 	if err != nil {
@@ -27,11 +28,12 @@ func NewParser(s string) (*Parser, error) {
 	return &Parser{lex: lex}, nil
 }
 
-// Query parses a select statement, which has to be the whole of the input.
+// Query parses a select statement, which must be the whole input.
 //
-// Tokens left over after the statement are an error rather than ignored.
-// Ignoring them would run "where sid = 3 or sid = 4" as "where sid = 3", and
-// answer a query other than the one that was asked without saying so.
+// Tokens that remain after the statement are an error and are not ignored.
+// If they were ignored, "where sid = 3 or sid = 4" would run as "where sid =
+// 3". The database would then silently answer a different query than the one
+// that was written.
 func (p *Parser) Query() (QueryData, error) {
 	if err := p.lex.EatKeyword("select"); err != nil {
 		return QueryData{}, err
@@ -67,8 +69,8 @@ func (p *Parser) Query() (QueryData, error) {
 	}, nil
 }
 
-// UpdateCmd parses a statement that changes the database, which has to be the
-// whole of the input.
+// UpdateCmd parses a statement that changes the database, which must be the
+// whole input.
 func (p *Parser) UpdateCmd() (UpdateCommand, error) {
 	switch {
 	case p.lex.MatchKeyword("insert"):
@@ -86,9 +88,9 @@ func (p *Parser) UpdateCmd() (UpdateCommand, error) {
 
 // insert parses an insert statement.
 //
-// The counts of fields and values are compared only once the statement has
-// been read to its end, so that a statement wrong in both ways is reported for
-// its syntax first.
+// The numbers of fields and values are compared only after the whole
+// statement has been read. A statement with both a syntax error and a count
+// mismatch is then reported for its syntax first.
 func (p *Parser) insert() (InsertData, error) {
 	if err := p.lex.EatKeyword("insert"); err != nil {
 		return InsertData{}, err
@@ -174,8 +176,8 @@ func (p *Parser) delete() (DeleteData, error) {
 
 // modify parses an update statement.
 //
-// Only one field is set per statement, so a second assignment is left over
-// after it and reported by end, rather than ignored.
+// A statement sets only one field. A second assignment remains unparsed after
+// the statement, and end reports it as an error.
 func (p *Parser) modify() (ModifyData, error) {
 	if err := p.lex.EatKeyword("update"); err != nil {
 		return ModifyData{}, err
@@ -221,11 +223,11 @@ func (p *Parser) modify() (ModifyData, error) {
 	}, nil
 }
 
-// create parses a create statement, handing over to the method for the kind of
-// thing created once the create has been eaten.
+// create parses a create statement. After it consumes "create", it delegates
+// to the method for the kind of object that is created.
 //
-// The kind is the word after the create, and the lexer sees only the token it
-// is at, so it cannot be told apart before the create is taken.
+// The kind is the word after "create". The lexer exposes only its current
+// token, so the kind is not known until "create" has been consumed.
 func (p *Parser) create() (UpdateCommand, error) {
 	if err := p.lex.EatKeyword("create"); err != nil {
 		return nil, err
@@ -243,21 +245,21 @@ func (p *Parser) create() (UpdateCommand, error) {
 	}
 }
 
-// fieldSpec is what a create table says about one field, before it is added to
-// a schema. The length is an int, as the schema takes it, and is unused for an
-// int field.
+// fieldSpec is the definition of one field in a create table statement,
+// before it is added to a schema. The length is an int, as a schema expects,
+// and is unused for an int field.
 type fieldSpec struct {
 	name      string
 	fieldType recordmanager.FieldType
 	length    int
 }
 
-// createTable parses the rest of a create table statement, from the table that
-// follows the create.
+// createTable parses the rest of a create table statement, starting at the
+// "table" keyword after "create".
 //
-// The fields are added to the schema only once the statement has been read to
-// its end, so that, as with an insert, a statement wrong in more than one way
-// is reported for its syntax first.
+// The fields are added to the schema only after the whole statement has been
+// read. As with an insert, a statement with more than one error is then
+// reported for its syntax first.
 func (p *Parser) createTable() (CreateTableData, error) {
 	if err := p.lex.EatKeyword("table"); err != nil {
 		return CreateTableData{}, err
@@ -304,8 +306,8 @@ func (p *Parser) fieldDefs() ([]fieldSpec, error) {
 	return commaSeparated(p, p.fieldDef)
 }
 
-// fieldDef parses a field name and the type that follows it: int, or varchar
-// with its length in parentheses.
+// fieldDef parses a field name and its type: int, or varchar with a length in
+// parentheses.
 func (p *Parser) fieldDef() (fieldSpec, error) {
 	name, err := p.field()
 	if err != nil {
@@ -340,11 +342,12 @@ func (p *Parser) fieldDef() (fieldSpec, error) {
 	}
 }
 
-// createView parses the rest of a create view statement, from the view that
-// follows the create.
+// createView parses the rest of a create view statement, starting at the
+// "view" keyword after "create".
 //
-// The query is the last part of the statement, so the check Query makes that
-// nothing follows it is also the check that nothing follows the statement.
+// The query is the last part of the statement. The check in Query that no
+// token follows the query therefore also checks that no token follows the
+// statement.
 func (p *Parser) createView() (CreateViewData, error) {
 	if err := p.lex.EatKeyword("view"); err != nil {
 		return CreateViewData{}, err
@@ -370,11 +373,11 @@ func (p *Parser) createView() (CreateViewData, error) {
 	}, nil
 }
 
-// createIndex parses the rest of a create index statement, from the index that
-// follows the create.
+// createIndex parses the rest of a create index statement, starting at the
+// "index" keyword after "create".
 //
-// An index is on one field, so a second one is left where the closing
-// parenthesis should be and reported, rather than ignored.
+// An index is on one field. A second field appears where the closing
+// parenthesis is expected, and is reported as an error.
 func (p *Parser) createIndex() (CreateIndexData, error) {
 	if err := p.lex.EatKeyword("index"); err != nil {
 		return CreateIndexData{}, err
@@ -416,9 +419,10 @@ func (p *Parser) createIndex() (CreateIndexData, error) {
 	}, nil
 }
 
-// optionalWhere parses a where clause if there is one, and returns its
-// predicate. With no where clause, it returns a predicate of no terms, which
-// every record meets, so a statement without one needs nothing apart.
+// optionalWhere parses a where clause if one is present, and returns its
+// predicate. Without a where clause it returns a predicate with no terms,
+// which every record satisfies. A statement without a where clause therefore
+// needs no special case.
 func (p *Parser) optionalWhere() (query.Predicate, error) {
 	if !p.lex.MatchKeyword("where") {
 		return query.NewPredicate(), nil
@@ -431,7 +435,7 @@ func (p *Parser) optionalWhere() (query.Predicate, error) {
 	return p.predicate()
 }
 
-// end reports ErrBadSyntax unless the statement just parsed is the whole of the
+// end returns ErrBadSyntax unless the statement just parsed is the whole
 // input.
 func (p *Parser) end() error {
 	if !p.lex.MatchEnd() {
@@ -443,8 +447,8 @@ func (p *Parser) end() error {
 
 // idList parses one or more names separated by commas.
 //
-// The fields of a select list and the tables of a from clause are both this,
-// so one method reads either.
+// The fields of a select list and the tables of a from clause both have this
+// form, so one method parses both.
 func (p *Parser) idList() ([]string, error) {
 	return commaSeparated(p, p.lex.EatID)
 }
@@ -454,12 +458,12 @@ func (p *Parser) constList() ([]query.Constant, error) {
 	return commaSeparated(p, p.constant)
 }
 
-// commaSeparated parses one or more of what item parses, separated by commas,
-// and returns them in the order written.
+// commaSeparated parses one or more items separated by commas, using item for
+// each, and returns them in the order written.
 //
-// It is a function rather than a method because a method cannot take a type
-// parameter. A list ends at the first item not followed by a comma, so a comma
-// with nothing after it is an item that item fails to parse.
+// It is a function and not a method, because a method cannot have a type
+// parameter. A list ends at the first item that is not followed by a comma. A
+// trailing comma is therefore followed by an item that item fails to parse.
 func commaSeparated[T any](p *Parser, item func() (T, error)) ([]T, error) {
 	var items []T
 	for {
@@ -478,12 +482,12 @@ func commaSeparated[T any](p *Parser, item func() (T, error)) ([]T, error) {
 	}
 }
 
-// predicate parses one or more terms joined by "and".
+// predicate parses one or more terms separated by "and".
 //
-// The terms are gathered in a loop and made into one predicate at the end,
-// rather than parsing what follows each "and" as a predicate of its own and
-// conjoining it, which would build a predicate for every term only to take its
-// terms back out.
+// The terms are collected in a loop and combined into one predicate at the
+// end. The alternative is to parse the text after each "and" as a separate
+// predicate and conjoin it. That would build a predicate for every term only
+// to extract its terms again.
 func (p *Parser) predicate() (query.Predicate, error) {
 	var terms []query.Term
 	for {
@@ -502,7 +506,7 @@ func (p *Parser) predicate() (query.Predicate, error) {
 	}
 }
 
-// term parses two expressions with an equals sign between them.
+// term parses two expressions separated by an equals sign.
 func (p *Parser) term() (query.Term, error) {
 	lhs, err := p.expression()
 	if err != nil {

@@ -7,46 +7,47 @@ import (
 	"github.com/JunNishimura/GoSQL/query"
 )
 
-// QueryData is what a select statement asks for: the fields to return, the
-// tables to take them from, and the condition a record has to meet.
+// QueryData is the content of a select statement: the fields to return, the
+// tables to read, and the condition that a record must satisfy.
 //
-// The fields and tables are handed out as copies, as query.NewPredicate copies
-// the terms it is given, so that a caller writing to what it was returned does
-// not change the query under whoever else holds it.
+// The fields and tables are returned as copies, in the same way that
+// query.NewPredicate copies its terms. A caller that writes to a returned
+// slice then does not change the query for its other holders.
 type QueryData struct {
 	fields []string
 	tables []string
 	pred   query.Predicate
 }
 
-// Fields are the fields the query returns, in the order written, which is the
-// order of the columns of its result.
+// Fields returns the fields of the query result, in the order written. This
+// is the order of the result columns.
 func (q QueryData) Fields() []string {
 	return slices.Clone(q.fields)
 }
 
-// Tables are the tables the query reads, in the order written.
+// Tables returns the tables that the query reads, in the order written.
 func (q QueryData) Tables() []string {
 	return slices.Clone(q.tables)
 }
 
-// Predicate is the condition the query keeps records by. A query with no where
-// clause has a predicate of no terms, which every record meets.
+// Predicate returns the condition that the query filters records by. A query
+// with no where clause has a predicate with no terms, which every record
+// satisfies.
 func (q QueryData) Predicate() query.Predicate {
 	return q.pred
 }
 
-// String writes the query back out as SQL that parses to the same query data.
+// String returns the query as SQL that parses to the same query data.
 //
-// A view is stored as this text and parsed again whenever it is used, so being
-// read back is what it is for. It is written in the one form the parser leaves
-// a query in, in lower case with a space after each comma, rather than as it
-// was first typed.
+// A view is stored as this text and parsed again each time it is used, so the
+// text must be parseable. It is written in the normalized form of the parser:
+// lower case, with a space after each comma. It is not the text as originally
+// typed.
 func (q QueryData) String() string {
 	s := "select " + strings.Join(q.fields, ", ") + " from " + strings.Join(q.tables, ", ")
 
-	// A predicate of no terms writes nothing, and stands for a where clause
-	// that was never written.
+	// A predicate with no terms returns the empty string. It represents a
+	// where clause that was not written.
 	if pred := q.pred.String(); pred != "" {
 		s += " where " + pred
 	}

@@ -4,8 +4,8 @@ import "github.com/JunNishimura/GoSQL/query"
 
 var _ UpdateCommand = DeleteData{}
 
-// DeleteData is what a delete statement asks for: the records of a table that
-// meet a condition, to be removed.
+// DeleteData is the content of a delete statement: a table, and the predicate
+// that selects the records to delete.
 type DeleteData struct {
 	tableName string
 	pred      query.Predicate
@@ -13,13 +13,14 @@ type DeleteData struct {
 
 func (DeleteData) isUpdateCommand() {}
 
-// TableName is the table the records are removed from.
+// TableName returns the table that the records are deleted from.
 func (d DeleteData) TableName() string {
 	return d.tableName
 }
 
-// Predicate is the condition a record has to meet to be removed. A delete with
-// no where clause has a predicate of no terms, which every record meets.
+// Predicate returns the condition that a record must satisfy to be deleted. A
+// delete with no where clause has a predicate with no terms, which every
+// record satisfies.
 func (d DeleteData) Predicate() query.Predicate {
 	return d.pred
 }

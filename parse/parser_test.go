@@ -10,8 +10,8 @@ import (
 	recordmanager "github.com/JunNishimura/GoSQL/record_manager"
 )
 
-// newTestParser makes a parser over s, failing the test if the first token
-// cannot be read.
+// newTestParser creates a parser over s, and fails the test if the first
+// token cannot be read.
 func newTestParser(t *testing.T, s string) *Parser {
 	t.Helper()
 
@@ -83,8 +83,8 @@ func TestParserConstant(t *testing.T) {
 			input: "'Math'",
 			want:  query.NewStringConstant("Math"),
 		},
-		// The text is digits, so a parser that turned every constant into a
-		// number where it could would come back with the int 42.
+		// The text consists of digits. A parser that converted every constant
+		// to a number where possible would return the int 42.
 		{
 			name:  "given a parser at a string constant whose text is digits, then it returns a varchar constant",
 			input: "'42'",
@@ -138,8 +138,8 @@ func TestParserExpression(t *testing.T) {
 			input: "42",
 			want:  query.NewConstantExpression(query.NewIntConstant(42)),
 		},
-		// A field and a string constant can be spelled the same, and only the
-		// quotes say which one was written.
+		// A field and a string constant can have the same spelling, and only
+		// the quotes distinguish them.
 		{
 			name:  "given a parser at a string constant whose text is a field name, then it returns a constant expression",
 			input: "'sname'",
@@ -273,8 +273,8 @@ func TestParserPredicate(t *testing.T) {
 			input: "sid = 3 and major = 'Math'",
 			want:  query.NewPredicate(sidIs3, majorIsMath),
 		},
-		// The terms after the first are parsed as a predicate of their own
-		// and conjoined, so this is where their order could come out wrong.
+		// The terms after the first are parsed as a separate predicate and
+		// conjoined, so their order could be wrong in this case.
 		{
 			name:  "given a parser at three terms joined by and, then it returns the predicate of all three in the order written",
 			input: "sid = 3 and major = 'Math' and sid = studentid",
@@ -319,8 +319,8 @@ func TestParserQuery(t *testing.T) {
 		wantTables []string
 		wantPred   query.Predicate
 	}{
-		// A query with no where clause keeps every record, which a predicate
-		// of no terms already says, so there is no absence to stand for.
+		// A query with no where clause keeps every record. A predicate with
+		// no terms already expresses that, so no "missing" value is needed.
 		{
 			name:       "given a query of one field from one table, then it has that field and that table and a predicate of no terms",
 			input:      "select sname from student",
@@ -328,8 +328,8 @@ func TestParserQuery(t *testing.T) {
 			wantTables: []string{"student"},
 			wantPred:   query.NewPredicate(),
 		},
-		// The order of the fields is the order of the columns of the result,
-		// so it is kept as written.
+		// The order of the fields is the order of the result columns, so it
+		// is kept as written.
 		{
 			name:       "given a query of several fields from several tables with a where clause, then it has them all in the order written",
 			input:      "select sname, sid, grade from student, enroll where sid = studentid and grade = 'A'",
@@ -404,9 +404,9 @@ func TestParserQuery(t *testing.T) {
 			name:  "given a query whose where has no predicate, then it reports ErrBadSyntax",
 			input: "select sname from student where",
 		},
-		// Stopping at the end of the grammar and ignoring the rest would run
-		// "where sid = 3 or sid = 4" as "where sid = 3", and answer a query
-		// other than the one that was asked.
+		// If the parser stopped at the end of the grammar and ignored the
+		// rest, "where sid = 3 or sid = 4" would run as "where sid = 3", which
+		// is a different query than the one that was written.
 		{
 			name:  "given a query followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
 			input: "select sname from student where sid = 3 or sid = 4",
@@ -586,8 +586,8 @@ func TestParserInsert(t *testing.T) {
 			input:   "insert into student (sid) values (sname)",
 			wantErr: ErrBadSyntax,
 		},
-		// Which value goes to which field is settled by position, so a value
-		// with no field, or a field with no value, has nowhere to be written.
+		// Values are assigned to fields by position. A value without a field,
+		// or a field without a value, cannot be written.
 		{
 			name:    "given an insert of more fields than values, then it reports ErrFieldValueCountMismatch",
 			input:   "insert into student (sid, sname) values (1)",
@@ -623,8 +623,8 @@ func TestParserDelete(t *testing.T) {
 		wantTable string
 		wantPred  query.Predicate
 	}{
-		// A delete with no where clause removes every record, which a
-		// predicate of no terms already says.
+		// A delete with no where clause deletes every record. A predicate
+		// with no terms already expresses that.
 		{
 			name:      "given a delete with no where clause, then it is delete data of the table and a predicate of no terms",
 			input:     "delete from student",
@@ -697,8 +697,8 @@ func TestParserDelete(t *testing.T) {
 			name:  "given a delete whose where has no predicate, then it reports ErrBadSyntax",
 			input: "delete from student where",
 		},
-		// Ignoring what follows would delete the records where sid is 3 and
-		// leave those where it is 4, which were asked to be deleted too.
+		// If the rest were ignored, the records with sid 3 would be deleted
+		// and those with sid 4 would stay, although the statement names both.
 		{
 			name:  "given a delete followed by tokens the grammar has no place for, then it reports ErrBadSyntax",
 			input: "delete from student where sid = 3 or sid = 4",
@@ -732,8 +732,8 @@ func TestParserModify(t *testing.T) {
 		wantValue query.Expression
 		wantPred  query.Predicate
 	}{
-		// An update with no where clause changes every record, which a
-		// predicate of no terms already says.
+		// An update with no where clause modifies every record. A predicate
+		// with no terms already expresses that.
 		{
 			name:      "given an update of a field to a constant with no where clause, then it is modify data of the table, the field, the constant and a predicate of no terms",
 			input:     "update student set gradyear = 2020",
@@ -750,8 +750,8 @@ func TestParserModify(t *testing.T) {
 			wantValue: query.NewConstantExpression(query.NewStringConstant("Joe")),
 			wantPred:  sidIs3,
 		},
-		// The new value is an expression, so it can be what another field of
-		// the same record holds.
+		// The new value is an expression, so it can be the value of another
+		// field of the same record.
 		{
 			name:      "given an update of a field to another field, then its new value is a field expression",
 			input:     "update student set majorid = minorid where sid = 3",
@@ -822,9 +822,9 @@ func TestParserModify(t *testing.T) {
 			name:  "given an update whose where has no predicate, then it reports ErrBadSyntax",
 			input: "update student set gradyear = 2020 where",
 		},
-		// Only one field is set per update, so a second assignment is tokens
-		// the grammar has no place for. Ignoring it would leave sname as it
-		// was without saying so.
+		// An update sets only one field, so the grammar has no rule for the
+		// tokens of a second assignment. If they were ignored, sname would
+		// silently keep its value.
 		{
 			name:  "given an update that sets two fields, then it reports ErrBadSyntax",
 			input: "update student set gradyear = 2020, sname = 'Joe'",
@@ -908,9 +908,9 @@ func TestParserCreate(t *testing.T) {
 	}
 }
 
-// newTestParserAfterCreate makes a parser over s and eats the create it starts
-// with, which is where create leaves the parser before it hands over to the
-// method for the kind of thing created.
+// newTestParserAfterCreate creates a parser over s and consumes the leading
+// "create". This is the state in which create delegates to the method for
+// the kind of object that is created.
 func newTestParserAfterCreate(t *testing.T, s string) *Parser {
 	t.Helper()
 
@@ -929,8 +929,8 @@ func TestParserCreateTable(t *testing.T) {
 		wantTable  string
 		wantFields []fieldSpec
 	}{
-		// The order of the fields is the order a layout gives them offsets
-		// in, so it is kept as written.
+		// The order of the fields is the order in which a layout assigns
+		// their offsets, so it is kept as written.
 		{
 			name:      "given a create table of int and varchar fields, then it is create table data of the table and a schema of the fields in the order written",
 			input:     "create table student (sid int, sname varchar(10), gradyear int)",
@@ -950,8 +950,8 @@ func TestParserCreateTable(t *testing.T) {
 				{name: "sname", fieldType: recordmanager.FieldTypeVarchar, length: 10},
 			},
 		},
-		// A varchar of no characters holds only the empty string, which is of
-		// little use but not wrong.
+		// A varchar of zero characters can hold only the empty string. That
+		// is rarely useful, but it is valid.
 		{
 			name:      "given a create table of a varchar of length zero, then its field has length zero",
 			input:     "create table student (note varchar(0))",
@@ -1044,8 +1044,8 @@ func TestParserCreateTable(t *testing.T) {
 			input:   "create table student (sid int) (sname varchar(10))",
 			wantErr: ErrBadSyntax,
 		},
-		// The grammar allows any int here, so this is not a syntax error, but
-		// no string is shorter than no characters.
+		// The grammar allows any int here, so this is not a syntax error.
+		// However, no string has fewer than zero characters.
 		{
 			name:    "given a create table of a varchar of negative length, then it reports ErrInvalidVarcharLength",
 			input:   "create table student (sname varchar(-1))",
@@ -1214,9 +1214,9 @@ func TestParserCreateIndex(t *testing.T) {
 			name:  "given a create index with no field, then it reports ErrBadSyntax",
 			input: "create index sidindex on student ()",
 		},
-		// An index is on one field, so a second one is not part of the
-		// grammar. Ignoring it would make an index on sid alone without
-		// saying so.
+		// An index is on one field, so the grammar has no rule for a second
+		// field. If it were ignored, an index on sid alone would be created
+		// silently.
 		{
 			name:  "given a create index on two fields, then it reports ErrBadSyntax",
 			input: "create index sidindex on student (sid, sname)",
