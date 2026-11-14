@@ -322,3 +322,87 @@ func TestPredicateSelectSubPred(t *testing.T) {
 		})
 	}
 }
+
+// newTestDeptSchema builds the schema a table is joined to the one of
+// newTestLayout on: "dept_id" is equated with "id" by a join term, and
+// "dept_name" is there so the schema holds more than the field it is joined on.
+func newTestDeptSchema(t *testing.T) *recordmanager.Schema {
+	t.Helper()
+
+	s := recordmanager.NewSchema()
+	if err := s.AddIntField("dept_id"); err != nil {
+		t.Fatalf("AddIntField(%q) error = %v", "dept_id", err)
+	}
+	if err := s.AddStringField("dept_name", testStringFieldLength); err != nil {
+		t.Fatalf("AddStringField(%q) error = %v", "dept_name", err)
+	}
+
+	return s
+}
+
+func TestPredicateJoinSubPred(t *testing.T) {
+	var (
+		joinTerm          = NewTerm(NewFieldExpression("id"), NewFieldExpression("dept_id"))
+		reversedJoinTerm  = NewTerm(NewFieldExpression("dept_name"), NewFieldExpression("name"))
+		deptTerm          = NewTerm(NewFieldExpression("dept_id"), NewConstantExpression(NewIntConstant(1)))
+		termOnAThirdTable = NewTerm(NewFieldExpression("id"), NewFieldExpression("missing"))
+	)
+
+	tests := []struct {
+		name      string
+		pred      Predicate
+		wantTerms []Term
+		wantOK    bool
+	}{
+		{
+			name:      "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate equating id with dept_id is taken, then it is that term",
+			pred:      NewPredicate(joinTerm),
+			wantTerms: []Term{joinTerm},
+			wantOK:    true,
+		},
+		// Either schema alone answers the terms mixed in here, so they are
+		// tested as each table is read and are no business of the join.
+		{
+			name:      "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate mixing join terms with terms on one schema is taken, then it is the join terms in order, with a field of the second schema on either side",
+			pred:      NewPredicate(termThatHolds, joinTerm, deptTerm, reversedJoinTerm),
+			wantTerms: []Term{joinTerm, reversedJoinTerm},
+			wantOK:    true,
+		},
+		{
+			name:   "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate whose terms each name fields of one schema is taken, then there is none",
+			pred:   NewPredicate(termThatHolds, deptTerm),
+			wantOK: false,
+		},
+		// Neither schema answers this term alone, but the two joined do not
+		// either, since one of its fields is in neither. It belongs to a join
+		// with some third table, not this one.
+		{
+			name:   "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate equating id with a field neither has is taken, then there is none",
+			pred:   NewPredicate(termOnAThirdTable),
+			wantOK: false,
+		},
+		{
+			name:   "given a schema with id and name fields and one with dept_id and dept_name, when the sub-predicate of a predicate of no terms is taken, then there is none",
+			pred:   NewPredicate(),
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema1 := newTestLayout(t).Schema()
+			schema2 := newTestDeptSchema(t)
+
+			got, ok := tt.pred.JoinSubPred(schema1, schema2)
+			if ok != tt.wantOK {
+				t.Fatalf("JoinSubPred() ok = %t, want %t", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if !slices.Equal(got.Terms(), tt.wantTerms) {
+				t.Errorf("JoinSubPred() = %s, want %s", got, NewPredicate(tt.wantTerms...))
+			}
+		})
+	}
+}
