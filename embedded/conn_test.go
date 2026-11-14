@@ -26,8 +26,8 @@ func TestConnBegin(t *testing.T) {
 	})
 
 	// database/sql never begins a second transaction on a connection before the
-	// first ends, so one that does is a mistake to report rather than one to
-	// quietly leave the first transaction behind for.
+	// first has ended. A second Begin is therefore a caller error. It must be
+	// reported, and must not silently abandon the first transaction.
 	t.Run("given a connection with a transaction begun, when another is begun, then it reports an error", func(t *testing.T) {
 		c := newTestConnWithTable(t)
 
@@ -46,8 +46,8 @@ func TestTxCommit(t *testing.T) {
 			t.Fatalf("Commit() error = %v", err)
 		}
 
-		// Checked first, since a transaction left on the connection would hold
-		// the locks the read below has to wait for.
+		// This is checked first, because a transaction left on the connection
+		// would hold the locks that the read below waits for.
 		if c.tx != nil {
 			t.Fatal("the connection still holds a transaction after Commit")
 		}
@@ -77,7 +77,8 @@ func TestTxRollback(t *testing.T) {
 
 func TestConnClose(t *testing.T) {
 	// database/sql closes a connection without ending its transaction when the
-	// connection goes bad or the pool shrinks, and nothing else would end it.
+	// connection fails or the pool shrinks. Close is then the only code that
+	// can end the transaction.
 	t.Run("given a connection with a record put in through a transaction begun on it, when the connection is closed, then the transaction is rolled back", func(t *testing.T) {
 		c := newTestConnWithTable(t)
 		executeUpdates(t, c.db, c.tx, "insert into test (id) values (7)")
@@ -95,8 +96,9 @@ func TestConnClose(t *testing.T) {
 	})
 }
 
-// newTestConnWithTableOutsideTx returns a connection to a database of its own
-// that holds the committed, empty table test, with no transaction begun on it.
+// newTestConnWithTableOutsideTx returns a connection to a database of its
+// own. The database holds the committed, empty table test, and the connection
+// has no open transaction.
 func newTestConnWithTableOutsideTx(t *testing.T) *Conn {
 	t.Helper()
 
@@ -123,8 +125,8 @@ func TestConnExecContext(t *testing.T) {
 		if n, err := res.RowsAffected(); err != nil || n != 1 {
 			t.Errorf("RowsAffected() = %d, %v, want 1, nil", n, err)
 		}
-		// Checked before the read below, which would wait on the locks of a
-		// transaction left behind.
+		// This is checked before the read below, which would wait for the locks
+		// of a transaction that was left open.
 		if c.tx != nil {
 			t.Fatal("the connection holds a transaction after ExecContext, want none")
 		}
@@ -133,8 +135,8 @@ func TestConnExecContext(t *testing.T) {
 		}
 	})
 
-	// The insert fails on the value after taking a slot for the record, so what
-	// it leaves behind has to be rolled back rather than committed with it.
+	// The insert fails on the value after it has claimed a slot for the record.
+	// That partial change must be rolled back, not committed.
 	t.Run("given a connection with no transaction, when an insert that fails partway is executed, then it reports the error and a later transaction reads no record", func(t *testing.T) {
 		c := newTestConnWithTableOutsideTx(t)
 
@@ -194,8 +196,8 @@ func TestResultLastInsertId(t *testing.T) {
 	})
 }
 
-// executeAndCommit runs every statement in sqls through c's database in a
-// transaction of its own that it then commits, leaving c alone.
+// executeAndCommit runs every statement in sqls on the database of c, in a
+// separate transaction that it then commits. It does not change c.
 func executeAndCommit(t *testing.T, c *Conn, sqls ...string) {
 	t.Helper()
 

@@ -14,8 +14,8 @@ type person struct {
 	name string
 }
 
-// openTestDB opens a database of its own through database/sql, closed when the
-// test ends.
+// openTestDB opens a database of its own through database/sql. It is closed
+// when the test ends.
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 
@@ -32,7 +32,7 @@ func openTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// exec runs query through db and reports how many records it changed.
+// exec runs query through db and returns the number of records it changed.
 func exec(t *testing.T, db interface {
 	Exec(query string, args ...any) (sql.Result, error)
 }, query string) int64 {

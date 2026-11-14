@@ -29,9 +29,10 @@ func TestNewConnector(t *testing.T) {
 }
 
 func TestConnectorConnect(t *testing.T) {
-	// database/sql keeps a pool of connections from one connector, so every one
-	// of them has to share the database the connector opened: two would each
-	// keep a buffer pool and a lock table of their own over the same files.
+	// database/sql keeps a pool of connections from one connector, so all of
+	// them must share the database that the connector opened. Two separate
+	// databases would each have their own buffer pool and lock table over the
+	// same files.
 	t.Run("given a connector, when two connections are made, then both are to the database the connector opened", func(t *testing.T) {
 		c := newTestConnector(t)
 
@@ -65,8 +66,8 @@ func TestConnectorClose(t *testing.T) {
 	t.Run("given a connector, when it is closed, then every file its database opened is closed", func(t *testing.T) {
 		before := openFDs(t)
 		c := newTestConnector(t)
-		// Without files open to start with, the count after Close would match
-		// whether or not Close closed anything.
+		// If no files were open at the start, the count after Close would
+		// match whether or not Close closed anything.
 		if opened := openFDs(t); opened <= before {
 			t.Fatalf("the process has %d files open before Close, want more than the %d before the database was opened", opened, before)
 		}

@@ -9,22 +9,22 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// ErrTxInProgress is reported by Begin on a connection that already has a
-// transaction begun on it.
+// ErrTxInProgress is returned by Begin on a connection that already has an
+// open transaction.
 var ErrTxInProgress = errors.New("embedded: a transaction is already in progress on the connection")
 
 // Conn is a connection to a database. It runs statements in the transaction
-// begun on it, if there is one.
+// that was begun on it, if there is one.
 type Conn struct {
 	db *server.DB
 	tx *transaction.Transaction
 }
 
-// ErrArgsUnsupported is reported for a statement run with arguments, which the
-// parser has no placeholders to take.
+// ErrArgsUnsupported is returned for a statement that is run with arguments.
+// The parser supports no placeholders.
 var ErrArgsUnsupported = errors.New("embedded: statements with arguments are not supported")
 
-// ErrLastInsertIdUnsupported is reported by Result.LastInsertId.
+// ErrLastInsertIdUnsupported is returned by Result.LastInsertId.
 var ErrLastInsertIdUnsupported = errors.New("embedded: LastInsertId is not supported")
 
 var (
@@ -37,9 +37,10 @@ func (c *Conn) Prepare(query string) (driver.Stmt, error) {
 	return nil, nil
 }
 
-// ExecContext runs a statement that changes the database. On a connection with
-// a transaction begun, it runs in that transaction; otherwise it runs in one of
-// its own, committed if the statement succeeds and rolled back if it fails.
+// ExecContext runs a statement that changes the database. If the connection
+// has an open transaction, the statement runs in it. Otherwise it runs in a
+// transaction of its own, which is committed if the statement succeeds and
+// rolled back if it fails.
 func (c *Conn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	if len(args) > 0 {
 		return nil, ErrArgsUnsupported
@@ -68,10 +69,10 @@ func (c *Conn) ExecContext(ctx context.Context, query string, args []driver.Name
 	return Result{rowsAffected: int64(n)}, nil
 }
 
-// QueryContext runs a select statement. On a connection with a transaction
-// begun, it runs in that transaction; otherwise it runs in one of its own,
-// committed when the rows are closed, or rolled back if the query cannot be
-// planned or opened.
+// QueryContext runs a select statement. If the connection has an open
+// transaction, the query runs in it. Otherwise it runs in a transaction of
+// its own. That transaction is committed when the rows are closed, or rolled
+// back if the query cannot be planned or opened.
 func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	if len(args) > 0 {
 		return nil, ErrArgsUnsupported
@@ -80,8 +81,8 @@ func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	if c.tx != nil {
 		rows, err := c.openRows(query, c.tx, nil)
 		if err != nil {
-			// Returned as it is, the nil *Rows would make a driver.Rows that is
-			// not nil.
+			// A nil *Rows returned directly would become a non-nil driver.Rows
+			// interface value.
 			return nil, err
 		}
 		return rows, nil
@@ -99,8 +100,8 @@ func (c *Conn) QueryContext(ctx context.Context, query string, args []driver.Nam
 	return rows, nil
 }
 
-// openRows plans query in tx and opens its scan, handing autoTx to the rows to
-// commit when they are closed.
+// openRows plans query in tx and opens its scan. It passes autoTx to the
+// rows, which commit it when they are closed.
 func (c *Conn) openRows(query string, tx, autoTx *transaction.Transaction) (*Rows, error) {
 	p, err := c.db.Planner().CreateQueryPlan(query, tx)
 	if err != nil {
@@ -119,7 +120,7 @@ func (c *Conn) openRows(query string, tx, autoTx *transaction.Transaction) (*Row
 	}, nil
 }
 
-// Close rolls back the transaction begun on the connection, if there is one.
+// Close rolls back the open transaction of the connection, if there is one.
 func (c *Conn) Close() error {
 	if c.tx == nil {
 		return nil
@@ -143,9 +144,9 @@ func (c *Conn) Begin() (driver.Tx, error) {
 	return &Tx{conn: c}, nil
 }
 
-// commit commits the transaction begun on the connection and leaves the
-// connection without one. A failed commit leaves the transaction on the
-// connection, since it has not ended.
+// commit commits the open transaction of the connection and clears it. After
+// a failed commit the transaction stays on the connection, because it has
+// not ended.
 func (c *Conn) commit() error {
 	if err := c.tx.Commit(); err != nil {
 		return err
@@ -155,9 +156,9 @@ func (c *Conn) commit() error {
 	return nil
 }
 
-// rollback rolls back the transaction begun on the connection and leaves the
-// connection without one. A failed rollback leaves the transaction on the
-// connection, since it has not ended.
+// rollback rolls back the open transaction of the connection and clears it.
+// After a failed rollback the transaction stays on the connection, because it
+// has not ended.
 func (c *Conn) rollback() error {
 	if err := c.tx.Rollback(); err != nil {
 		return err
@@ -174,30 +175,30 @@ type Tx struct {
 
 var _ driver.Tx = (*Tx)(nil)
 
-// Commit commits the transaction and leaves the connection without one.
+// Commit commits the transaction and clears it from the connection.
 func (tx *Tx) Commit() error {
 	return tx.conn.commit()
 }
 
-// Rollback rolls back the transaction and leaves the connection without one.
+// Rollback rolls back the transaction and clears it from the connection.
 func (tx *Tx) Rollback() error {
 	return tx.conn.rollback()
 }
 
-// Result reports what a statement that changed the database did.
+// Result holds the outcome of a statement that changed the database.
 type Result struct {
 	rowsAffected int64
 }
 
 var _ driver.Result = Result{}
 
-// LastInsertId is not supported, since a table has no column the database fills
-// in on its own.
+// LastInsertId is not supported, because a table has no column that the
+// database fills in automatically.
 func (r Result) LastInsertId() (int64, error) {
 	return 0, ErrLastInsertIdUnsupported
 }
 
-// RowsAffected reports how many records the statement changed.
+// RowsAffected returns the number of records that the statement changed.
 func (r Result) RowsAffected() (int64, error) {
 	return r.rowsAffected, nil
 }
