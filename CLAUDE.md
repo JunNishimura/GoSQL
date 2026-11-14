@@ -19,6 +19,34 @@ Write all comments in English. This applies to Go doc comments, inline comments,
 
 Commit message bodies are the exception: those may be written in Japanese.
 
+### Style
+
+Write comments in plain technical English, so that a reader understands each
+sentence on the first pass.
+
+- **One fact per sentence.** Split a sentence that carries a condition, its
+  consequence and the reason for it.
+- **At most one level of relative clause.** A clause nested inside another
+  clause (`a tree whose directory says which leaf a value is in`) becomes a
+  second sentence.
+- **Prefer the technical term to an everyday phrase.** Write "keyed by",
+  "releases", "descends to", not "filed under", "gives back", "goes down".
+- **Put the subject first.** Write "Any index opened before the failure is
+  closed", not "What was opened before a failure is closed again".
+- **Use one term for one concept.** Once a comment calls something the key, it
+  does not later become "the value it is filed under".
+
+```go
+// Bad
+// BTreeIndex is an index that keeps its entries in order of the value they are
+// filed under, in the leaves of a tree whose directory says which leaf a value
+// is in.
+
+// Good
+// BTreeIndex stores its entries in leaf blocks, sorted by key.
+// A directory tree maps each key to the leaf that holds it.
+```
+
 ## Commit Message
 
 Use [Conventional Commits](https://www.conventionalcommits.org/) format:
