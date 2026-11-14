@@ -16,9 +16,10 @@ func mustCreateLogRecord(t *testing.T, record []byte) LogRecord {
 	return rec
 }
 
-// asLogRecord adapts a constructor's concrete result to LogRecord. Forwarding
-// the two values directly would put a typed nil pointer into the interface,
-// which does not compare equal to nil and would hide a failed construction.
+// asLogRecord converts the concrete result of a constructor to a LogRecord.
+// Passing the two values on directly would put a typed nil pointer into the
+// interface. That value does not compare equal to nil and would hide a failed
+// construction.
 func asLogRecord[T LogRecord](rec T, err error) (LogRecord, error) {
 	if err != nil {
 		return nil, err
@@ -26,8 +27,8 @@ func asLogRecord[T LogRecord](rec T, err error) (LogRecord, error) {
 	return rec, nil
 }
 
-// Each constructor validates the bytes it is handed, so that a truncated record
-// is reported rather than read past the end of the slice.
+// Each constructor validates the bytes it receives, so that a truncated
+// record is reported and not read past the end of the slice.
 func TestRecordConstructorsRejectShortRecords(t *testing.T) {
 	tests := []struct {
 		name string
@@ -62,9 +63,9 @@ func TestRecordConstructorsRejectShortRecords(t *testing.T) {
 	}
 }
 
-// minimalRecord implements only what a record with no data to restore should
-// have to. The assertion below stops LogRecord from growing a method that such
-// a record could satisfy only with an empty body.
+// minimalRecord implements only the methods that a record with no data to
+// restore needs. The assertion below prevents LogRecord from gaining a method
+// that such a record could only implement with an empty body.
 type minimalRecord struct{}
 
 func (minimalRecord) Op() Op        { return Checkpoint }
@@ -72,9 +73,9 @@ func (minimalRecord) TxNumber() int { return noTxNum }
 
 var _ LogRecord = minimalRecord{}
 
-// Only the records that changed data implement Undoable. Recovery decides
-// whether to restore a record by that distinction alone, so a boundary record
-// that started implementing it would be undone by mistake.
+// Only the records that changed data implement Undoable. Recovery uses only
+// this distinction to decide whether to restore a record. A boundary record
+// that implemented it would therefore be undone by mistake.
 func TestUndoableRecords(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -123,8 +124,8 @@ func TestUndoableRecords(t *testing.T) {
 	}
 }
 
-// Op codes are written into the log file, so their numeric values are part of
-// the on-disk format and must not be reordered once logs exist.
+// Op codes are written to the log file. Their numeric values are part of the
+// on-disk format and must not be reordered once logs exist.
 func TestOpValues(t *testing.T) {
 	tests := []struct {
 		name string
@@ -237,8 +238,8 @@ func TestCreateLogRecord(t *testing.T) {
 			if got := rec.TxNumber(); got != tt.wantTxNum {
 				t.Errorf("TxNumber() = %d, want %d", got, tt.wantTxNum)
 			}
-			// String identifies which concrete type was built, which Op alone
-			// cannot do if the factory returned the wrong record.
+			// String identifies the concrete type that was built. Op alone
+			// cannot do this if the factory returned the wrong record type.
 			if got, ok := rec.(interface{ String() string }); !ok {
 				t.Errorf("record does not implement String()")
 			} else if s := got.String(); s != tt.wantType {
@@ -294,8 +295,8 @@ func TestCreateLogRecord(t *testing.T) {
 
 	for _, tt := range shortRecordTests {
 		t.Run(tt.name, func(t *testing.T) {
-			// The third case carries a valid checkpoint op, so overwrite it with
-			// an op whose layout demands a txNum that is not there.
+			// The third case has a valid checkpoint op. It is overwritten with
+			// an op whose layout requires a txNum, which the record does not have.
 			record := tt.record
 			if len(record) == checkpointRecordSize {
 				p := filemanager.NewPageByBytes(record)

@@ -15,7 +15,7 @@ func TestNewCheckpointRecord(t *testing.T) {
 		if got := rec.Op(); got != Checkpoint {
 			t.Errorf("Op() = %d, want %d (Checkpoint)", got, Checkpoint)
 		}
-		// A checkpoint belongs to no transaction, so it reports the same "no
+		// A checkpoint belongs to no transaction. It returns the same "no
 		// transaction" marker that Buffer uses for an unassigned buffer.
 		if got := rec.TxNumber(); got != noTxNum {
 			t.Errorf("TxNumber() = %d, want %d", got, noTxNum)
@@ -81,8 +81,8 @@ func TestWriteCheckpointRecordToLog(t *testing.T) {
 				t.Fatalf("Next() error = %v", err)
 			}
 
-			// A checkpoint record carries no txNum, so only the op code is
-			// written and the record is one int wide.
+			// A checkpoint record has no txNum, so only the op code is written
+			// and the record is one int long.
 			if len(bytes) != checkpointRecordSize {
 				t.Errorf("record size = %d, want %d", len(bytes), checkpointRecordSize)
 			}

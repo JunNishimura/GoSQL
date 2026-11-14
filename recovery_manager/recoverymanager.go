@@ -8,8 +8,8 @@ import (
 )
 
 // RecoveryManager writes the log records of a single transaction and undoes
-// them when that transaction has to be rolled back. Each transaction owns one
-// instance, which is why txNum is fixed at construction.
+// them when that transaction is rolled back. Each transaction owns one
+// instance, so txNum is fixed at construction.
 type RecoveryManager struct {
 	logManager    *logmanager.LogManager
 	bufferManager *buffermanager.BufferManager
@@ -17,8 +17,8 @@ type RecoveryManager struct {
 }
 
 // NewRecoveryManager creates the recovery manager for transaction txNum and
-// appends its start record, so the transaction is on the log from the moment it
-// begins.
+// appends its start record, so that the transaction is on the log from the
+// moment it begins.
 func NewRecoveryManager(lm *logmanager.LogManager, bm *buffermanager.BufferManager, txNum int) (*RecoveryManager, error) {
 	if _, err := WriteStartRecordToLog(lm, txNum); err != nil {
 		return nil, fmt.Errorf("write start record for tx %d: %w", txNum, err)
@@ -31,13 +31,14 @@ func NewRecoveryManager(lm *logmanager.LogManager, bm *buffermanager.BufferManag
 	}, nil
 }
 
-// Commit makes the transaction's changes permanent.
+// Commit makes the changes of the transaction permanent.
 //
 // The steps are ordered so that the commit record is never on disk before the
-// data it commits: the modified buffers are written out first, and only then is
-// the commit record appended and flushed. A crash between the two leaves the
-// transaction looking unfinished, which recovery can undo, whereas the reverse
-// order would leave a committed transaction whose changes were lost.
+// data it commits. The modified buffers are written first, and the commit
+// record is appended and flushed after that. After a crash between the two
+// steps, the transaction appears unfinished, and recovery can undo it. In the
+// reverse order, a crash could leave a committed transaction whose changes
+// were lost.
 func (rm *RecoveryManager) Commit() error {
 	if err := rm.bufferManager.FlushAll(rm.txNum); err != nil {
 		return fmt.Errorf("flush buffers of tx %d: %w", rm.txNum, err)
@@ -55,15 +56,15 @@ func (rm *RecoveryManager) Commit() error {
 	return nil
 }
 
-// LogSetInt records the int at offset in buf as it stands now, before the
-// caller overwrites it, and returns the LSN of that record.
+// LogSetInt logs the current int at offset in buf, before the caller
+// overwrites it, and returns the LSN of the log record.
 //
-// Reading the pre-image here rather than taking it from the caller is what
-// pairs this with undo: the value that goes into the log is by construction the
-// one that was there, and there is no new value to record by mistake. The
-// caller writes the new value afterwards and passes the returned LSN to
-// Buffer.SetModified, so the record is on the log before the buffer can be
-// flushed.
+// LogSetInt reads the pre-image itself and does not take it from the caller.
+// The logged value is therefore always the value that was in the buffer, and
+// the caller cannot log the new value by mistake. This matches what undo
+// expects. The caller writes the new value afterwards and passes the returned
+// LSN to Buffer.SetModified, so the record is on the log before the buffer
+// can be flushed.
 func (rm *RecoveryManager) LogSetInt(buf *buffermanager.Buffer, offset int) (int, error) {
 	oldVal := buf.Contents().GetInt(offset)
 
@@ -74,9 +75,9 @@ func (rm *RecoveryManager) LogSetInt(buf *buffermanager.Buffer, offset int) (int
 	return lsn, nil
 }
 
-// LogSetString records the string at offset in buf as it stands now, before the
-// caller overwrites it, and returns the LSN of that record. See LogSetInt for
-// why the pre-image is read here.
+// LogSetString logs the current string at offset in buf, before the caller
+// overwrites it, and returns the LSN of the log record. Like LogSetInt, it
+// reads the pre-image itself.
 func (rm *RecoveryManager) LogSetString(buf *buffermanager.Buffer, offset int) (int, error) {
 	oldVal := buf.Contents().GetString(offset)
 
@@ -87,13 +88,13 @@ func (rm *RecoveryManager) LogSetString(buf *buffermanager.Buffer, offset int) (
 	return lsn, nil
 }
 
-// Rollback undoes everything the transaction did and marks it as finished.
+// Rollback undoes every change of the transaction and marks it as finished.
 //
-// The order mirrors Commit: the restored blocks are written out before the
-// rollback record is appended, so the record never claims a rollback that is
-// not on disk yet. A crash in between leaves the transaction looking unfinished
-// and recovery undoes it again, which is harmless because restoring a
-// pre-image twice yields the same block.
+// The order mirrors Commit. The restored blocks are written before the
+// rollback record is appended, so the record never reports a rollback that is
+// not on disk. After a crash between the two steps, the transaction appears
+// unfinished and recovery undoes it again. This is harmless, because
+// restoring a pre-image twice gives the same block.
 func (rm *RecoveryManager) Rollback() error {
 	if err := rm.undoOwnRecords(); err != nil {
 		return err
@@ -115,13 +116,13 @@ func (rm *RecoveryManager) Rollback() error {
 	return nil
 }
 
-// undoOwnRecords walks the log backwards, restoring the pre-image of every
-// record this transaction wrote.
+// undoOwnRecords reads the log backwards and restores the pre-image of every
+// record that this transaction wrote.
 //
-// Reading backwards is what makes repeated changes to the same value come out
-// right: the earliest pre-image is applied last. The walk stops at the
-// transaction's own start record, since nothing written before it began can
-// belong to it.
+// The backward order handles repeated changes to the same value correctly,
+// because the earliest pre-image is applied last. The scan stops at the
+// transaction's own start record, because no earlier record can belong to the
+// transaction.
 func (rm *RecoveryManager) undoOwnRecords() error {
 	it, err := rm.logManager.Iterator()
 	if err != nil {
@@ -157,13 +158,12 @@ func (rm *RecoveryManager) undoOwnRecords() error {
 	return nil
 }
 
-// undo restores one record's pre-image. The record only knows how to write the
-// value into a page, so pinning the block it belongs to, marking the buffer as
-// modified and unpinning are done here.
+// undo restores the pre-image of one record. The record only writes the value
+// into a page. undo therefore pins the block of the record, marks the buffer
+// as modified and unpins it.
 //
-// The buffer is marked with an LSN of -1 because an undo writes no log record
-// of its own, so there is nothing the buffer has to wait for before it can be
-// flushed.
+// The buffer is marked with an LSN of -1. An undo writes no log record, so
+// the buffer does not depend on a log flush before it can be written.
 func (rm *RecoveryManager) undo(u Undoable) error {
 	blk := u.Block()
 
@@ -181,11 +181,11 @@ func (rm *RecoveryManager) undo(u Undoable) error {
 	return nil
 }
 
-// Recover undoes every transaction that the log shows as unfinished, which is
-// what the database does on start up after a crash.
+// Recover undoes every transaction that the log shows as unfinished. The
+// database calls it at startup after a crash.
 //
 // It ends by writing a checkpoint, so that a later recovery can stop there
-// instead of walking the whole log again.
+// and does not scan the whole log again.
 func (rm *RecoveryManager) Recover() error {
 	if err := rm.undoUnfinishedRecords(); err != nil {
 		return err
@@ -207,18 +207,18 @@ func (rm *RecoveryManager) Recover() error {
 	return nil
 }
 
-// undoUnfinishedRecords walks the log backwards, restoring the pre-image of
-// every record whose transaction never committed or rolled back.
+// undoUnfinishedRecords reads the log backwards and restores the pre-image of
+// every record whose transaction neither committed nor rolled back.
 //
-// Walking backwards is what makes the finished set usable: a transaction's
-// commit or rollback record is written after everything else it did, so it is
-// always seen before the records it settles. It is also what makes repeated
-// changes to the same value come out right, since the earliest pre-image is
-// applied last.
+// The backward order makes the set of finished transactions reliable. The
+// commit or rollback record of a transaction is written after all its other
+// records, so the scan always reads it before them. The backward order also
+// handles repeated changes to the same value correctly, because the earliest
+// pre-image is applied last.
 //
-// The walk stops at a checkpoint. A checkpoint is only written when no
-// transaction is in progress and every buffer has been flushed, so nothing
-// before it can need undoing.
+// The scan stops at a checkpoint. A checkpoint is only written when no
+// transaction is in progress and every buffer has been flushed, so no record
+// before it needs an undo.
 func (rm *RecoveryManager) undoUnfinishedRecords() error {
 	it, err := rm.logManager.Iterator()
 	if err != nil {

@@ -12,8 +12,8 @@ const (
 	testLogFile   = "test.log"
 )
 
-// CommitRecord must satisfy LogRecord so that the recovery manager can treat it
-// uniformly with the other record types.
+// CommitRecord must satisfy LogRecord, so that the recovery manager can
+// handle it in the same way as the other record types.
 var _ LogRecord = (*CommitRecord)(nil)
 
 func newTestLogManager(t *testing.T) *logmanager.LogManager {
@@ -136,8 +136,8 @@ func TestWriteCommitRecordToLog(t *testing.T) {
 				t.Errorf("WriteCommitRecordToLog() = %d, want %d", lsn, tt.wantLSN)
 			}
 
-			// The most recent record must be readable back as an equivalent
-			// CommitRecord, since recovery reads the log backwards.
+			// The most recent record must decode into an equivalent CommitRecord,
+			// because recovery reads the log backwards.
 			it, err := lm.Iterator()
 			if err != nil {
 				t.Fatalf("Iterator() error = %v", err)

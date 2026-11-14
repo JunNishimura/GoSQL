@@ -13,10 +13,9 @@ const (
 	testDataFile   = "test.tbl"
 )
 
-// newTestRecoveryManagerDeps builds a log manager and a buffer manager backed by
-// the same file manager, which is how they are paired in a running database.
-// The file manager is returned as well so that tests can inspect what actually
-// reached the disk.
+// newTestRecoveryManagerDeps builds a log manager and a buffer manager on the
+// same file manager, as in a running database. It also returns the file
+// manager, so that tests can check what actually reached the disk.
 func newTestRecoveryManagerDeps(t *testing.T) (*filemanager.FileManager, *logmanager.LogManager, *buffermanager.BufferManager) {
 	t.Helper()
 	fm, err := filemanager.NewFileManager(t.TempDir(), testBlockSize)
@@ -34,8 +33,8 @@ func newTestRecoveryManagerDeps(t *testing.T) (*filemanager.FileManager, *logman
 	return fm, lm, bm
 }
 
-// lastLogRecord reads back the most recently appended record, since the log
-// iterator walks the log backwards.
+// lastLogRecord returns the most recently appended record. The log iterator
+// reads the log backwards, so this is the first record it returns.
 func lastLogRecord(t *testing.T, lm *logmanager.LogManager) LogRecord {
 	t.Helper()
 	it, err := lm.Iterator()
@@ -56,9 +55,9 @@ func lastLogRecord(t *testing.T, lm *logmanager.LogManager) LogRecord {
 	return rec
 }
 
-// lastLogRecordOnDisk reads the most recently appended record straight from the
-// log file, bypassing the log manager's in-memory page so that a record that was
-// only appended but never flushed is not visible.
+// lastLogRecordOnDisk reads the most recently appended record directly from
+// the log file. It bypasses the in-memory page of the log manager, so a
+// record that was appended but never flushed is not visible.
 func lastLogRecordOnDisk(t *testing.T, fm *filemanager.FileManager) LogRecord {
 	t.Helper()
 	numBlocks, err := fm.Length(testLogFile)
@@ -118,8 +117,8 @@ func TestNewRecoveryManager(t *testing.T) {
 		})
 	}
 
-	// The start record must be on the log by the time the constructor returns,
-	// so that recovery can tell which transactions were in progress.
+	// The start record must be on the log when the constructor returns, so
+	// that recovery can determine which transactions were in progress.
 	startRecordTests := []struct {
 		name  string
 		txNum int
@@ -154,9 +153,9 @@ func TestNewRecoveryManager(t *testing.T) {
 }
 
 func TestRecoveryManagerCommit(t *testing.T) {
-	// The commit record must be on disk when Commit returns, since that record
-	// is what tells recovery the transaction finished. Reading the block through
-	// the file manager checks exactly that: the log manager's own iterator would
+	// The commit record must be on disk when Commit returns, because it tells
+	// recovery that the transaction finished. The test reads the block through
+	// the file manager to check this. The log manager's own iterator would
 	// flush the page first and hide a missing flush.
 	tests := []struct {
 		name  string
@@ -243,8 +242,8 @@ func TestRecoveryManagerCommit(t *testing.T) {
 	}
 }
 
-// blockOnDisk reads a block straight from the file manager, so that a value the
-// buffer pool still holds in memory does not pass for one that was written out.
+// blockOnDisk reads a block directly from the file manager. A value that is
+// only in the buffer pool is then not mistaken for one that was written.
 func blockOnDisk(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId) *filemanager.Page {
 	t.Helper()
 	p := filemanager.NewPageByBlockSize(testBlockSize)
@@ -254,8 +253,8 @@ func blockOnDisk(t *testing.T, fm *filemanager.FileManager, blk *filemanager.Blo
 	return p
 }
 
-// writeBlockOnDisk puts a block into the state it would be in after the
-// transaction's change had already reached disk.
+// writeBlockOnDisk sets a block to the state it would have after the change
+// of the transaction had reached disk.
 func writeBlockOnDisk(t *testing.T, fm *filemanager.FileManager, blk *filemanager.BlockId, set func(*filemanager.Page) error) {
 	t.Helper()
 	p := filemanager.NewPageByBlockSize(testBlockSize)
@@ -269,7 +268,7 @@ func writeBlockOnDisk(t *testing.T, fm *filemanager.FileManager, blk *filemanage
 
 func TestRecoveryManagerRollback(t *testing.T) {
 	// Like the commit record, the rollback record must be on disk when Rollback
-	// returns, since that record is what tells recovery the transaction is over.
+	// returns, because it tells recovery that the transaction has ended.
 	tests := []struct {
 		name  string
 		txNum int
@@ -310,9 +309,9 @@ func TestRecoveryManagerRollback(t *testing.T) {
 
 	preImageTests := []struct {
 		name string
-		// setCurrent puts the value the transaction wrote into the block.
+		// setCurrent writes the value that the transaction wrote to the block.
 		setCurrent func(*filemanager.Page) error
-		// logPreImage records what the value had been before that write.
+		// logPreImage logs the value from before that write.
 		logPreImage func(*logmanager.LogManager, *filemanager.BlockId) (int, error)
 		verify      func(*testing.T, *filemanager.Page)
 	}{
@@ -364,7 +363,7 @@ func TestRecoveryManagerRollback(t *testing.T) {
 			}
 
 			// Rollback flushes the transaction's buffers, so the restored value
-			// must be readable straight from the file.
+			// must be readable directly from the file.
 			tt.verify(t, blockOnDisk(t, fm, blk))
 		})
 	}
@@ -413,8 +412,8 @@ func TestRecoveryManagerRollback(t *testing.T) {
 		}
 	})
 
-	// The walk backwards stops at the transaction's own start record: nothing
-	// written before a transaction began can belong to it.
+	// The backward scan stops at the transaction's own start record, because
+	// no earlier record can belong to the transaction.
 	t.Run("given a record written before this transaction started, the walk stops at the start record and leaves it alone", func(t *testing.T) {
 		const txNum = 1
 
@@ -425,7 +424,7 @@ func TestRecoveryManagerRollback(t *testing.T) {
 		}
 		writeBlockOnDisk(t, fm, blk, func(p *filemanager.Page) error { return p.SetInt(0, 100) })
 
-		// A record carrying the same txNum, appended before the transaction starts.
+		// A record with the same txNum, appended before the transaction starts.
 		if _, err := WriteSetIntRecordToLog(lm, txNum, blk, 0, 7); err != nil {
 			t.Fatalf("WriteSetIntRecordToLog() error = %v", err)
 		}
@@ -452,7 +451,7 @@ func TestRecoveryManagerRecover(t *testing.T) {
 
 	tests := []struct {
 		name string
-		// writeLog replays what the log held when the database came back up.
+		// writeLog writes the records that the log held when the database restarted.
 		writeLog func(*testing.T, *logmanager.LogManager, *filemanager.BlockId)
 		want     int32
 	}{
@@ -505,8 +504,8 @@ func TestRecoveryManagerRecover(t *testing.T) {
 			want: 100,
 		},
 		{
-			// Reading backwards is what makes this come out right: the oldest
-			// pre-image has to be the one applied last.
+			// The backward order makes this correct: the oldest pre-image must
+			// be applied last.
 			name: "given a value overwritten twice, the walk backwards leaves the oldest of the two pre-images in place",
 			writeLog: func(t *testing.T, lm *logmanager.LogManager, blk *filemanager.BlockId) {
 				writeSetIntRecord(t, lm, 1, blk, 1)
@@ -543,8 +542,8 @@ func TestRecoveryManagerRecover(t *testing.T) {
 	}
 }
 
-// writeSetIntRecord logs that txNum overwrote the int at offset 0 of blk, whose
-// previous value was oldVal.
+// writeSetIntRecord logs that txNum overwrote the int at offset 0 of blk,
+// and that the previous value was oldVal.
 func writeSetIntRecord(t *testing.T, lm *logmanager.LogManager, txNum int, blk *filemanager.BlockId, oldVal int32) {
 	t.Helper()
 	if _, err := WriteSetIntRecordToLog(lm, txNum, blk, 0, oldVal); err != nil {
@@ -553,8 +552,8 @@ func writeSetIntRecord(t *testing.T, lm *logmanager.LogManager, txNum int, blk *
 }
 
 func TestRecoveryManagerRecoverWritesCheckpoint(t *testing.T) {
-	// Recover ends by writing a checkpoint, which is what lets a later recovery
-	// stop there instead of walking the whole log again.
+	// Recover ends by writing a checkpoint, so that a later recovery can stop
+	// there and does not scan the whole log again.
 	t.Run("it ends by putting a checkpoint on the log, so a later recovery can stop there", func(t *testing.T) {
 		fm, lm, bm := newTestRecoveryManagerDeps(t)
 		rm, err := NewRecoveryManager(lm, bm, 99)
@@ -573,19 +572,19 @@ func TestRecoveryManagerRecoverWritesCheckpoint(t *testing.T) {
 	})
 }
 
-// LogSetInt and LogSetString read the pre-image out of the buffer before the
-// caller overwrites it, which is the half of the write path that pairs with
-// undo. What ends up in the log has to be the old value, not the new one.
+// LogSetInt and LogSetString read the pre-image from the buffer before the
+// caller overwrites it. This is the part of the write path that undo depends
+// on. The log must hold the old value, not the new one.
 func TestRecoveryManagerLogSetValue(t *testing.T) {
 	const txNum = 1
 
 	tests := []struct {
 		name string
-		// setOld puts the value the log record must capture into the block.
+		// setOld writes the value that the log record must capture to the block.
 		setOld func(*filemanager.Page) error
-		// log records that value through the recovery manager.
+		// log logs that value through the recovery manager.
 		log func(*RecoveryManager, *buffermanager.Buffer) (int, error)
-		// overwrite is what the caller does after logging.
+		// overwrite is the write that the caller does after logging.
 		overwrite func(*filemanager.Page) error
 		// verify checks the record that reached the log.
 		verify func(*testing.T, LogRecord)
@@ -663,8 +662,8 @@ func TestRecoveryManagerLogSetValue(t *testing.T) {
 			if err != nil {
 				t.Fatalf("logging the pre-image: %v", err)
 			}
-			// The caller overwrites only after the record is on the log, so a
-			// record built from the new value would show up here.
+			// The caller overwrites the value only after the record is on the log.
+			// A record built from the new value would therefore be detected here.
 			if err := tt.overwrite(buf.Contents()); err != nil {
 				t.Fatalf("overwriting the value: %v", err)
 			}
@@ -677,8 +676,8 @@ func TestRecoveryManagerLogSetValue(t *testing.T) {
 	}
 }
 
-// The record has to name the block the buffer holds, since that is what undo
-// pins to put the value back.
+// The record must identify the block that the buffer holds, because undo
+// pins that block to restore the value.
 func TestRecoveryManagerLogSetIntRecordsTheBuffersBlock(t *testing.T) {
 	const txNum = 1
 

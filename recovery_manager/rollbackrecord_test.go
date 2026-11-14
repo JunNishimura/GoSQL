@@ -111,8 +111,8 @@ func TestWriteRollbackRecordToLog(t *testing.T) {
 				t.Errorf("WriteRollbackRecordToLog() = %d, want %d", lsn, tt.wantLSN)
 			}
 
-			// The most recent record must be readable back as an equivalent
-			// RollbackRecord, since recovery reads the log backwards.
+			// The most recent record must decode into an equivalent
+			// RollbackRecord, because recovery reads the log backwards.
 			it, err := lm.Iterator()
 			if err != nil {
 				t.Fatalf("Iterator() error = %v", err)

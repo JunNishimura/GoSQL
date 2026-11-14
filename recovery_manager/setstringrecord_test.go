@@ -8,8 +8,9 @@ import (
 )
 
 // newSetStringRecordBytes builds the on-disk bytes of a set string record
-// without going through the log manager. It uses the production encoder, whose
-// output TestSetStringRecordLayout pins to an explicit byte sequence.
+// without the log manager. It uses the production encoder, and
+// TestSetStringRecordLayout checks the encoder's output against an explicit
+// byte sequence.
 func newSetStringRecordBytes(t *testing.T, txNum int, blk *filemanager.BlockId, offset int, oldVal string) []byte {
 	t.Helper()
 	record, err := newSetStringRecord(txNum, blk, offset, oldVal)
@@ -19,9 +20,10 @@ func newSetStringRecordBytes(t *testing.T, txNum int, blk *filemanager.BlockId, 
 	return record
 }
 
-// Both the file name and the overwritten value are stored inline, so this
-// record has two length-prefixed fields. The layout is pinned to explicit bytes
-// so that a mistake made symmetrically in the encoder and the parser shows up.
+// The file name and the overwritten value are both stored inline, so this
+// record has two length-prefixed fields. The test compares the layout with
+// explicit bytes, so that a mistake made in both the encoder and the parser
+// is detected.
 func TestSetStringRecordLayout(t *testing.T) {
 	t.Run("the bytes on the log read as the op, the transaction, the file name, the block, the offset and the old value, each inline field behind its length", func(t *testing.T) {
 		record := newSetStringRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, "hi")
@@ -91,9 +93,9 @@ func TestNewSetStringRecord(t *testing.T) {
 		})
 	}
 
-	// This record has two inline fields, so there is one more way for a
-	// truncated record to look plausible than there is for a set int record:
-	// the length of the value can claim more bytes than the record holds.
+	// This record has two inline fields. A truncated record can therefore
+	// look valid in one more way than a set int record: the length prefix
+	// of the value can claim more bytes than the record holds.
 	full := newSetStringRecordBytes(t, 1, filemanager.NewBlockId("test.tbl", 2), 80, "hi")
 
 	shortRecordTests := []struct {
@@ -148,8 +150,8 @@ func TestNewSetStringRecord(t *testing.T) {
 	}
 }
 
-// Undo writes the pre-image into the page it is handed. The offset and the old
-// value are not otherwise readable, so this is what verifies they survived the
+// Undo writes the pre-image into the page it receives. The offset and the old
+// value have no other accessor, so this test verifies that they survive the
 // round trip through the log format.
 func TestSetStringRecordUndo(t *testing.T) {
 	tests := []struct {
@@ -192,7 +194,7 @@ func TestSetStringRecordUndo(t *testing.T) {
 				t.Fatalf("NewSetStringRecord() error = %v", err)
 			}
 
-			// Stand in for the block as it looks after the change the record
+			// The page represents the block after the change that the record
 			// describes: the offset holds the new value, not the old one.
 			p := filemanager.NewPageByBlockSize(testBlockSize)
 			if err := p.SetString(tt.offset, tt.overwith); err != nil {
@@ -226,7 +228,7 @@ func TestSetStringRecordString(t *testing.T) {
 			want:   `<SETSTRING 1 [file test.tbl, block 2] 80 "hi">`,
 		},
 		{
-			// Quoting keeps an empty value from reading as a missing field.
+			// The quotes prevent an empty value from looking like a missing field.
 			name:   "given an empty old value, the empty string is shown rather than left out",
 			txNum:  42,
 			offset: 0,

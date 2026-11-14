@@ -7,9 +7,9 @@ import (
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
-// SetStringRecord records the value a string held before a transaction
-// overwrote it. It shares the header of a set int record and differs only in
-// the trailing value, which is length-prefixed rather than a fixed four bytes.
+// SetStringRecord holds the value of a string before a transaction overwrote
+// it. It has the same header as a set int record. Only the trailing value
+// differs: it is a length-prefixed string instead of a fixed four bytes.
 type SetStringRecord struct {
 	txNum  int
 	blk    *filemanager.BlockId
@@ -54,8 +54,8 @@ func (r *SetStringRecord) Block() *filemanager.BlockId {
 	return r.blk
 }
 
-// Undo puts the overwritten value back. Pinning the block that p belongs to and
-// marking the buffer modified are the caller's job.
+// Undo restores the overwritten value. The caller must pin the block that p
+// belongs to and mark the buffer as modified.
 func (r *SetStringRecord) Undo(p *filemanager.Page) error {
 	if err := p.SetString(r.offset, r.oldVal); err != nil {
 		return fmt.Errorf("restore string at offset %d of %s: %w", r.offset, r.blk, err)
@@ -63,13 +63,14 @@ func (r *SetStringRecord) Undo(p *filemanager.Page) error {
 	return nil
 }
 
-// String quotes the value so that an empty one does not read as a missing field.
+// String quotes the value, so that an empty value is not mistaken for a
+// missing field.
 func (r *SetStringRecord) String() string {
 	return fmt.Sprintf("<SETSTRING %d %s %d %q>", r.txNum, r.blk, r.offset, r.oldVal)
 }
 
-// WriteSetStringRecordToLog appends a record of the value at offset in blk, as
-// it stood before txNum overwrote it, and returns its LSN.
+// WriteSetStringRecordToLog appends a record for the string at offset in blk
+// and returns its LSN. oldVal is the value before txNum overwrote it.
 func WriteSetStringRecordToLog(lm *logmanager.LogManager, txNum int, blk *filemanager.BlockId, offset int, oldVal string) (int, error) {
 	record, err := newSetStringRecord(txNum, blk, offset, oldVal)
 	if err != nil {

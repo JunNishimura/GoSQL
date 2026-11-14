@@ -7,15 +7,15 @@ import (
 	logmanager "github.com/JunNishimura/GoSQL/log_manager"
 )
 
-// A set int record is laid out as the op code, the transaction number, the name
-// of the file, the block number within it, the offset of the value inside that
-// block, and finally the value that was overwritten.
+// A set int record consists of the op code, the transaction number, the file
+// name, the block number, the offset of the value in that block, and the
+// value that was overwritten.
 //
-// The file name is stored inline as a length-prefixed string, so every field
-// after it sits at an offset that is only known once the name has been read.
+// The file name is stored inline as a length-prefixed string. The offset of
+// every later field is therefore known only after the name has been read.
 const fileNameOffset = 2 * filemanager.IntBytes
 
-// SetIntRecord records the value an int held before a transaction overwrote it.
+// SetIntRecord holds the value of an int before a transaction overwrote it.
 type SetIntRecord struct {
 	txNum  int
 	blk    *filemanager.BlockId
@@ -54,8 +54,8 @@ func (r *SetIntRecord) Block() *filemanager.BlockId {
 	return r.blk
 }
 
-// Undo puts the overwritten value back. Pinning the block that p belongs to and
-// marking the buffer modified are the caller's job.
+// Undo restores the overwritten value. The caller must pin the block that p
+// belongs to and mark the buffer as modified.
 func (r *SetIntRecord) Undo(p *filemanager.Page) error {
 	if err := p.SetInt(r.offset, r.oldVal); err != nil {
 		return fmt.Errorf("restore int at offset %d of %s: %w", r.offset, r.blk, err)
@@ -67,8 +67,8 @@ func (r *SetIntRecord) String() string {
 	return fmt.Sprintf("<SETINT %d %s %d %d>", r.txNum, r.blk, r.offset, r.oldVal)
 }
 
-// WriteSetIntRecordToLog appends a record of the value at offset in blk, as it
-// stood before txNum overwrote it, and returns its LSN.
+// WriteSetIntRecordToLog appends a record for the int at offset in blk and
+// returns its LSN. oldVal is the value before txNum overwrote it.
 func WriteSetIntRecordToLog(lm *logmanager.LogManager, txNum int, blk *filemanager.BlockId, offset int, oldVal int32) (int, error) {
 	record, err := newSetIntRecord(txNum, blk, offset, oldVal)
 	if err != nil {
@@ -106,13 +106,13 @@ func newSetIntRecord(txNum int, blk *filemanager.BlockId, offset int, oldVal int
 	return record, nil
 }
 
-// readSetRecordHeader decodes the part shared by the records that overwrote a
-// value: which transaction, and which block. It returns the offset just past
+// readSetRecordHeader decodes the header shared by the records that overwrote
+// a value: the transaction number and the block. It returns the offset after
 // the header, where the record's own fields begin.
 //
-// Every read is bounds checked first. Page.GetInt reads past the end of a short
-// slice, and Page.GetString trusts the length prefix it finds, so a truncated
-// record would otherwise be decoded into a plausible-looking one.
+// Every read is preceded by a bounds check. Page.GetInt reads past the end of
+// a short slice, and Page.GetString trusts the length prefix it finds. A
+// truncated record would otherwise decode into a record that looks valid.
 func readSetRecordHeader(record []byte, op Op) (txNum int, blk *filemanager.BlockId, rest int, err error) {
 	if len(record) < fileNameOffset+filemanager.IntBytes {
 		return 0, nil, 0, fmt.Errorf("log record for op %d is %d bytes, too short to hold a file name", op, len(record))
