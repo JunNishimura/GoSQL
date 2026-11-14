@@ -11,20 +11,20 @@ import (
 	recoverymanager "github.com/JunNishimura/GoSQL/recovery_manager"
 )
 
-// ErrBlockNotPinned reports a read or write of a block the transaction has not
-// pinned. Pinning is the caller's job, and without a pin there is no buffer to
-// work through: reaching for whatever the pool happens to hold would read, or
-// overwrite, some other block.
+// ErrBlockNotPinned is returned for a read or write of a block that the
+// transaction has not pinned. The caller is responsible for pinning. Without
+// a pin the transaction has no buffer for the block, and using an arbitrary
+// buffer from the pool would read or overwrite another block.
 var ErrBlockNotPinned = errors.New("block not pinned")
 
-// Transaction is one unit of work against the database. It ties together the
-// three things a unit of work needs: a recovery manager to log what it changed,
-// a concurrency manager to keep other transactions out of what it is using, and
-// a list of the buffers it has pinned.
+// Transaction is one unit of work against the database. It combines the three
+// components that a unit of work needs: a recovery manager that logs its
+// changes, a concurrency manager that locks the blocks it uses, and a list of
+// the buffers it has pinned.
 //
-// The buffer pool and the lock table behind those are shared by every
-// transaction, which is how they coordinate. What this type holds is what
-// belongs to this transaction alone.
+// The buffer pool and the lock table behind these components are shared by
+// all transactions, and transactions coordinate through them. This type holds
+// only the state that belongs to one transaction.
 type Transaction struct {
 	fileManager        *filemanager.FileManager
 	bufferManager      *buffermanager.BufferManager
@@ -33,16 +33,17 @@ type Transaction struct {
 	buffers            *buffermanager.BufferList
 	// txNum identifies this transaction in the log and on the buffers it
 	// modifies. The recovery manager keeps its own copy for the records it
-	// writes; this one is for stamping buffers.
+	// writes. This copy is used to mark buffers.
 	txNum int
 }
 
-// NewTransaction starts transaction txNum, which puts a start record on the log.
+// NewTransaction starts transaction txNum and appends its start record to the
+// log.
 //
-// The log manager and the lock table are only needed to build the recovery and
-// concurrency managers, so they are not kept. txNum comes from the caller
-// because handing out numbers belongs to whatever owns the database as a whole,
-// alongside the one lock table every transaction shares.
+// The log manager and the lock table are only needed to create the recovery
+// and concurrency managers, so the transaction does not keep them. The caller
+// supplies txNum, because the owner of the whole database assigns transaction
+// numbers, as it owns the one lock table that all transactions share.
 func NewTransaction(
 	fm *filemanager.FileManager,
 	lm *logmanager.LogManager,
@@ -65,25 +66,25 @@ func NewTransaction(
 	}, nil
 }
 
-// Pin keeps blk in a buffer so that the transaction can read and write it,
-// taking a shared lock on the block first. Every pin has to be matched by an
-// Unpin, or by the release that ends the transaction.
+// Pin pins blk in a buffer so that the transaction can read and write it. It
+// takes a shared lock on the block first. Every Pin must be matched by an
+// Unpin, or by the release at the end of the transaction.
 //
-// A transaction pins a block because it means to look at it, so the lock is
-// taken here rather than at each read. Taking it before the buffer is what
-// matters: a transaction waiting for the lock holds nothing, so contention over
-// one block cannot empty the pool for everybody else. Waiting with a buffer in
-// hand would turn a dispute between two transactions into a shortage for all of
-// them.
+// A transaction pins a block in order to read it, so the lock is taken here
+// and not at each read. The lock is taken before the buffer. A transaction
+// that waits for a lock therefore holds no buffer, and contention on one
+// block cannot exhaust the pool for other transactions. If a transaction
+// waited while it held a buffer, a conflict between two transactions would
+// become a buffer shortage for all of them.
 //
-// The lock outlives the pin. Unpin gives the buffer back, but the lock is held
-// until the transaction ends, so a pin that failed after taking the lock leaves
-// it held. There is no way to give up one lock on its own, and holding a lock
-// on a block that was never read costs only concurrency.
+// The lock outlives the pin. Unpin releases the buffer, but the lock is held
+// until the transaction ends. A pin that fails after the lock was taken
+// therefore leaves the lock held. A single lock cannot be released on its
+// own, and a lock on a block that was never read only reduces concurrency.
 //
-// The pin goes through the transaction's own list rather than straight to the
-// pool, which is what makes the release at the end possible: the pool records
-// that a buffer is in use, but not by whom.
+// The pin goes through the transaction's own buffer list and not directly to
+// the pool. The pool records that a buffer is pinned but not by which
+// transaction, so only the list makes the release at the end possible.
 func (tx *Transaction) Pin(blk *filemanager.BlockId) error {
 	if err := tx.concurrencyManager.SLock(blk); err != nil {
 		return fmt.Errorf("lock %s to pin it: %w", blk, err)
@@ -92,24 +93,24 @@ func (tx *Transaction) Pin(blk *filemanager.BlockId) error {
 	return tx.buffers.Pin(blk)
 }
 
-// Unpin gives up one pin on blk. The transaction may still hold others, so this
-// does not necessarily free the buffer.
+// Unpin releases one pin on blk. The transaction can still hold other pins on
+// it, so this does not necessarily free the buffer.
 func (tx *Transaction) Unpin(blk *filemanager.BlockId) {
 	tx.buffers.Unpin(blk)
 }
 
-// AvailableBuffers returns how many buffers in the pool are not pinned. The
-// pool is shared, so this counts the pins of every transaction, not only this
-// one's, and another transaction may take some of them before this one does.
+// AvailableBuffers returns the number of unpinned buffers in the pool. The
+// pool is shared, so the count reflects the pins of all transactions. Another
+// transaction can take some of these buffers before this one does.
 func (tx *Transaction) AvailableBuffers() int {
 	return tx.bufferManager.Available()
 }
 
 // GetInt returns the int at offset in blk.
 //
-// No lock is taken here: Pin already took the shared one, and reaching this
-// point means the block is pinned. Other transactions may read the block at the
-// same time, but none may change it until this transaction ends.
+// GetInt takes no lock. The block must be pinned to reach this point, and Pin
+// already took the shared lock. Other transactions can read the block at the
+// same time, but none can change it until this transaction ends.
 func (tx *Transaction) GetInt(blk *filemanager.BlockId, offset int) (int32, error) {
 	buf := tx.buffers.Buffer(blk)
 	if buf == nil {
@@ -119,8 +120,8 @@ func (tx *Transaction) GetInt(blk *filemanager.BlockId, offset int) (int32, erro
 	return buf.Contents().GetInt(offset), nil
 }
 
-// GetString returns the string at offset in blk. See GetInt for why it takes no
-// lock of its own.
+// GetString returns the string at offset in blk. Like GetInt, it takes no
+// lock.
 func (tx *Transaction) GetString(blk *filemanager.BlockId, offset int) (string, error) {
 	buf := tx.buffers.Buffer(blk)
 	if buf == nil {
@@ -130,16 +131,16 @@ func (tx *Transaction) GetString(blk *filemanager.BlockId, offset int) (string, 
 	return buf.Contents().GetString(offset), nil
 }
 
-// SetInt writes val at offset in blk, upgrading the shared lock Pin took to an
-// exclusive one so that nobody may even look at the block until this
-// transaction ends.
+// SetInt writes val at offset in blk. It upgrades the shared lock from Pin to
+// an exclusive lock, so that no other transaction can read the block until
+// this transaction ends.
 //
-// The old value is logged before the new one is written. Writing first would
-// leave the log holding the new value, so undoing the record would put back what
-// the transaction wrote and lose the change it was meant to reverse.
+// The old value is logged before the new value is written. If the write came
+// first, the log record would hold the new value. An undo of that record
+// would then write the new value again and would not reverse the change.
 //
-// The buffer is stamped with this transaction's number and the LSN of that
-// record, which is what makes the pool write the log out before the block.
+// The buffer is marked with this transaction's number and the LSN of the log
+// record. The LSN makes the pool flush the log before it writes the block.
 func (tx *Transaction) SetInt(blk *filemanager.BlockId, offset int, val int32) error {
 	if err := tx.concurrencyManager.XLock(blk); err != nil {
 		return fmt.Errorf("lock %s to write an int: %w", blk, err)
@@ -163,8 +164,8 @@ func (tx *Transaction) SetInt(blk *filemanager.BlockId, offset int, val int32) e
 	return nil
 }
 
-// SetString writes val at offset in blk. See SetInt for the locking and the
-// order the log and the block are written in.
+// SetString writes val at offset in blk. Its locking and its write order
+// are the same as in SetInt.
 func (tx *Transaction) SetString(blk *filemanager.BlockId, offset int, val string) error {
 	if err := tx.concurrencyManager.XLock(blk); err != nil {
 		return fmt.Errorf("lock %s to write a string: %w", blk, err)
@@ -189,21 +190,23 @@ func (tx *Transaction) SetString(blk *filemanager.BlockId, offset int, val strin
 }
 
 // BlockSize returns the number of bytes in a block, which is fixed for the
-// whole database. Callers that lay records out in a block need it to tell how
-// many fit, and asking for it takes no lock: it is settled when the database is
-// created and no transaction can change it.
+// whole database. Callers that lay out records in a block need it to compute
+// how many fit. It takes no lock, because the block size is set when the
+// database is created and no transaction can change it.
 func (tx *Transaction) BlockSize() int {
 	return tx.fileManager.BlockSize()
 }
 
-// endOfFile is the block number of the dummy block that stands for a file's
-// length. No block ever has this number, so locking it contends only with other
-// transactions asking about the same length, and never with the blocks in the
-// file: extending a file leaves whatever is already in it free to read.
+// endOfFile is the block number of the dummy block that represents the
+// length of a file. No real block has this number. A lock on it therefore
+// conflicts only with other transactions that use the same file length, and
+// never with the blocks of the file. A transaction that extends a file does
+// not block reads of the existing blocks.
 const endOfFile = -1
 
-// Size returns the number of blocks in fileName, taking a shared lock on its
-// length so that nobody may extend the file until this transaction ends.
+// Size returns the number of blocks in fileName. It takes a shared lock on
+// the file length, so that no other transaction can extend the file until
+// this transaction ends.
 func (tx *Transaction) Size(fileName string) (int, error) {
 	if err := tx.concurrencyManager.SLock(filemanager.NewBlockId(fileName, endOfFile)); err != nil {
 		return 0, fmt.Errorf("lock the length of %s to read it: %w", fileName, err)
@@ -212,9 +215,9 @@ func (tx *Transaction) Size(fileName string) (int, error) {
 	return tx.fileManager.Length(fileName)
 }
 
-// Append adds a block to the end of fileName and returns it. Extending the file
-// changes its length, so this takes an exclusive lock on the length and nobody
-// may read it until this transaction ends.
+// Append adds a block to the end of fileName and returns it. This changes the
+// file length, so Append takes an exclusive lock on the length. No other
+// transaction can read the length until this transaction ends.
 func (tx *Transaction) Append(fileName string) (*filemanager.BlockId, error) {
 	if err := tx.concurrencyManager.XLock(filemanager.NewBlockId(fileName, endOfFile)); err != nil {
 		return nil, fmt.Errorf("lock the length of %s to extend it: %w", fileName, err)
@@ -223,13 +226,14 @@ func (tx *Transaction) Append(fileName string) (*filemanager.BlockId, error) {
 	return tx.fileManager.Append(fileName)
 }
 
-// Commit makes the transaction's changes permanent and ends it.
+// Commit makes the changes of the transaction permanent and ends it.
 //
-// Releasing the locks and the pins is what lets the next transaction in, and it
-// happens only once the commit is on the log. A failed commit keeps them: some
-// buffers may already have been written out, so letting another transaction in
-// would show it changes that are not committed. Holding the locks stalls other
-// transactions until they give up, which is the lesser harm.
+// The locks and the pins are released only after the commit record is on the
+// log. This release lets other transactions proceed. A failed commit keeps
+// the locks and the pins. Some buffers may already have been written, so
+// another transaction could otherwise read uncommitted changes. The held
+// locks make other transactions wait until they time out, which is less
+// harmful.
 func (tx *Transaction) Commit() error {
 	if err := tx.recoveryManager.Commit(); err != nil {
 		return err
@@ -241,8 +245,8 @@ func (tx *Transaction) Commit() error {
 	return nil
 }
 
-// Rollback takes back everything the transaction did and ends it. See Commit
-// for why the locks and the pins are released only once that has succeeded.
+// Rollback undoes every change of the transaction and ends it. As in Commit,
+// the locks and the pins are released only after the rollback has succeeded.
 func (tx *Transaction) Rollback() error {
 	if err := tx.recoveryManager.Rollback(); err != nil {
 		return err
@@ -254,12 +258,12 @@ func (tx *Transaction) Rollback() error {
 	return nil
 }
 
-// Recover undoes every transaction the log shows as unfinished, which is what
-// the database does on start up after a crash. It has to run before any other
-// transaction, since it does not lock what it repairs.
+// Recover undoes every transaction that the log shows as unfinished. The
+// database calls it at startup after a crash. It must run before any other
+// transaction, because it does not lock the blocks it restores.
 //
-// There is nothing to release afterwards: recovery takes no locks, and the
-// buffers it pins to restore a block are unpinned as it goes.
+// Recover has nothing to release at the end. It takes no locks, and it unpins
+// each buffer as soon as the block is restored.
 func (tx *Transaction) Recover() error {
 	return tx.recoveryManager.Recover()
 }
