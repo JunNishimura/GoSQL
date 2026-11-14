@@ -4,9 +4,10 @@ import (
 	filemanager "github.com/JunNishimura/GoSQL/file_manager"
 )
 
-// lockType is what a transaction holds on a block. noLock is the zero value so
-// that looking up a block the transaction never locked reads as "not held"
-// without a separate presence check, which also means it is never stored.
+// lockType is the kind of lock that a transaction holds on a block. noLock is
+// the zero value, so a map lookup for a block that the transaction never
+// locked returns "not held" without a separate presence check. For the same
+// reason noLock is never stored.
 type lockType int
 
 const (
@@ -15,13 +16,13 @@ const (
 	exclusiveLock
 )
 
-// ConcurrencyManager serves one transaction. It remembers the locks that
-// transaction took, so that asking for the same block twice does not go to the
-// lock table again, and so that they can all be released at the end.
+// ConcurrencyManager serves one transaction. It records the locks that the
+// transaction has taken. A second request for the same block then does not
+// go to the lock table again, and all locks can be released at the end.
 //
-// The lock table is shared by every transaction and is what actually decides
-// who waits; the records here are private to this transaction. Sharing them
-// would let a transaction release a lock another one holds.
+// The lock table is shared by all transactions and decides which requests
+// wait. The records here are private to one transaction. If they were shared,
+// a transaction could release a lock that another one holds.
 type ConcurrencyManager struct {
 	lockTable *LockTable
 	locks     map[filemanager.BlockId]lockType
@@ -34,13 +35,13 @@ func NewConcurrencyManager(lt *LockTable) *ConcurrencyManager {
 	}
 }
 
-// SLock makes sure the transaction may read blk, taking a shared lock on it if
-// it holds none yet. Holding either kind of lock is already enough, so a block
-// this transaction has locked before needs nothing.
+// SLock ensures that the transaction may read blk. It takes a shared lock on
+// blk if the transaction holds no lock on it yet. Either kind of lock already
+// allows reading, so a block that is already locked needs nothing.
 //
-// Asking the table twice for the same block would count one transaction as two
-// readers, and an exclusive request would then wait for a lock that nobody
-// holds.
+// A second request to the table for the same block would count one
+// transaction as two readers. An exclusive request would then wait for a lock
+// that nobody holds.
 func (cm *ConcurrencyManager) SLock(blk *filemanager.BlockId) error {
 	if cm.locks[*blk] != noLock {
 		return nil
@@ -54,17 +55,17 @@ func (cm *ConcurrencyManager) SLock(blk *filemanager.BlockId) error {
 	return nil
 }
 
-// XLock makes sure the transaction may write to blk, upgrading to an exclusive
-// lock unless it already holds one.
+// XLock ensures that the transaction may write to blk. It upgrades to an
+// exclusive lock unless the transaction already holds one.
 //
-// The shared lock is taken first because that is what the table's exclusive
-// request assumes: it treats one shared hold as the caller's own, so it can
-// only tell another reader apart once this transaction has taken its own.
-// Going straight to the table would find a count of one, read it as nobody
-// else, and take the block away from the transaction reading it.
+// The shared lock is taken first because the table's exclusive request
+// assumes it. The table treats one shared lock as the caller's own, so it can
+// detect another reader only after this transaction has taken its own shared
+// lock. Without it, the table would find a count of one, conclude that there
+// is no other reader, and grant the block while another transaction reads it.
 //
-// A failed upgrade leaves the shared lock recorded, because it really is held.
-// The caller aborts and releases it along with everything else.
+// A failed upgrade keeps the shared lock recorded, because the transaction
+// does hold it. The caller aborts and releases it with all its other locks.
 func (cm *ConcurrencyManager) XLock(blk *filemanager.BlockId) error {
 	if cm.locks[*blk] == exclusiveLock {
 		return nil
@@ -82,13 +83,13 @@ func (cm *ConcurrencyManager) XLock(blk *filemanager.BlockId) error {
 	return nil
 }
 
-// Release gives up every lock the transaction took, which is what ends it.
-// A transaction holds its locks until then, so that nothing it read can change
-// under it before it finishes.
+// Release releases every lock that the transaction took. A transaction calls
+// it when it ends. It holds its locks until then, so that nothing it read can
+// change before it finishes.
 //
-// One release per block is enough even for a block held exclusively, which took
-// two calls on the table to acquire: the exclusive lock replaced the shared
-// count rather than adding to it.
+// One unlock per block is enough, even for a block held exclusively. Taking
+// that lock needed two calls on the table, but the exclusive lock replaced
+// the shared count and did not add to it.
 func (cm *ConcurrencyManager) Release() {
 	for blk := range cm.locks {
 		cm.lockTable.Unlock(&blk)

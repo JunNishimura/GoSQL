@@ -28,10 +28,10 @@ func TestNewConcurrencyManager(t *testing.T) {
 		}
 	})
 
-	// Every transaction gets its own concurrency manager, and they coordinate
-	// through one shared lock table. Each has to remember only the locks it
-	// took: a shared record would let a transaction release a lock another one
-	// holds.
+	// Every transaction has its own concurrency manager, and all managers
+	// coordinate through one shared lock table. Each manager must record only
+	// the locks it took. With a shared record, a transaction could release a
+	// lock that another one holds.
 	t.Run("given two managers over the same lock table, when one records a lock, then the other does not see it", func(t *testing.T) {
 		lt := NewLockTable()
 
@@ -51,9 +51,9 @@ func TestNewConcurrencyManager(t *testing.T) {
 }
 
 func TestLockType(t *testing.T) {
-	// The zero value of lockType has to mean "not held", so that a lookup for a
-	// block this transaction never locked reads correctly without a presence
-	// check.
+	// The zero value of lockType must mean "not held". A lookup for a block
+	// that this transaction never locked then returns the right answer without
+	// a presence check.
 	t.Run("its zero value is noLock, and the three kinds are distinct", func(t *testing.T) {
 		var held lockType
 
@@ -72,7 +72,7 @@ func TestLockType(t *testing.T) {
 func TestConcurrencyManagerSLock(t *testing.T) {
 	tests := []struct {
 		name string
-		// held is what this transaction has already recorded for the block.
+		// held is the lock that this transaction has already recorded for the block.
 		held lockType
 		// tableHeld is the count already in the lock table; 0 means no entry.
 		tableHeld int
@@ -87,8 +87,9 @@ func TestConcurrencyManagerSLock(t *testing.T) {
 			wantTable: 1,
 		},
 		{
-			// Going to the table again would count the same transaction twice,
-			// which would make an exclusive request wait for a lock nobody holds.
+			// A second request to the table would count the same transaction
+			// twice. An exclusive request would then wait for a lock that nobody
+			// holds.
 			name:      "given a block it already holds a shared lock on, it does not ask the table a second time",
 			held:      sharedLock,
 			tableHeld: 1,
@@ -151,15 +152,15 @@ func TestConcurrencyManagerSLock(t *testing.T) {
 		}
 	})
 
-	// A lock that could not be taken must not be recorded, or the transaction
-	// would later release a lock it never held and believe it may read the
-	// block.
+	// A lock that was not granted must not be recorded. Otherwise the
+	// transaction would assume that it may read the block, and would later
+	// release a lock that it never held.
 	t.Run("given a block another transaction holds exclusively, it reports ErrLockAbort and records nothing", func(t *testing.T) {
 		lt := NewLockTable()
 		lt.maxWaitTime = 50 * time.Millisecond
 		cm := NewConcurrencyManager(lt)
 		blk := filemanager.NewBlockId(testDataFile, 0)
-		// Another transaction holds the block exclusively and never lets go.
+		// Another transaction holds the block exclusively and never releases it.
 		lt.locks[*blk] = -1
 
 		err := cm.SLock(blk)
@@ -176,7 +177,7 @@ func TestConcurrencyManagerSLock(t *testing.T) {
 func TestConcurrencyManagerXLock(t *testing.T) {
 	tests := []struct {
 		name string
-		// held is what this transaction has already recorded for the block.
+		// held is the lock that this transaction has already recorded for the block.
 		held lockType
 		// tableHeld is the count already in the lock table; 0 means no entry.
 		tableHeld int
@@ -227,17 +228,17 @@ func TestConcurrencyManagerXLock(t *testing.T) {
 		})
 	}
 
-	// The table's exclusive request treats one shared hold as the caller's own,
-	// so it can only tell another reader apart once the caller has taken its own
-	// shared lock. Going straight to the table would find a count of one, read
-	// it as nobody else, and take the block away from the transaction reading
-	// it.
+	// The table's exclusive request treats one shared lock as the caller's own.
+	// It can therefore detect another reader only after the caller has taken
+	// its own shared lock. Without it, the table would find a count of one,
+	// conclude that there is no other reader, and grant the block while another
+	// transaction reads it.
 	t.Run("given a block another transaction is reading, it waits rather than taking the block away, and keeps the shared lock it took on the way", func(t *testing.T) {
 		lt := NewLockTable()
 		lt.maxWaitTime = 50 * time.Millisecond
 		cm := NewConcurrencyManager(lt)
 		blk := filemanager.NewBlockId(testDataFile, 0)
-		// Another transaction is reading the block and never lets go.
+		// Another transaction is reading the block and never releases it.
 		lt.locks[*blk] = 1
 
 		err := cm.XLock(blk)
@@ -245,9 +246,9 @@ func TestConcurrencyManagerXLock(t *testing.T) {
 		if !errors.Is(err, ErrLockAbort) {
 			t.Fatalf("XLock() error = %v, want %v", err, ErrLockAbort)
 		}
-		// The shared lock taken on the way is really held, so it stays recorded
-		// and counted. The caller aborts and releases it along with everything
-		// else.
+		// The shared lock taken during the upgrade is held, so it stays recorded
+		// and counted. The caller aborts and releases it with all its other
+		// locks.
 		if got := cm.locks[*blk]; got != sharedLock {
 			t.Errorf("locks[%v] = %d, want %d", blk, got, sharedLock)
 		}
@@ -261,7 +262,7 @@ func TestConcurrencyManagerXLock(t *testing.T) {
 		lt.maxWaitTime = 50 * time.Millisecond
 		cm := NewConcurrencyManager(lt)
 		blk := filemanager.NewBlockId(testDataFile, 0)
-		// Another transaction holds the block exclusively and never lets go.
+		// Another transaction holds the block exclusively and never releases it.
 		lt.locks[*blk] = -1
 
 		err := cm.XLock(blk)
@@ -276,10 +277,10 @@ func TestConcurrencyManagerXLock(t *testing.T) {
 }
 
 func TestConcurrencyManagerRelease(t *testing.T) {
-	// Release drops everything the transaction took, which is what ends it. A
-	// block held exclusively took two calls on the table to acquire, since the
-	// shared lock came first, but one release: taking the exclusive lock
-	// replaced the count rather than adding to it.
+	// Release releases everything the transaction took. A transaction calls it
+	// when it ends. Acquiring an exclusive lock needed two calls on the table,
+	// because the shared lock came first, but it needs only one unlock: the
+	// exclusive lock replaced the shared count and did not add to it.
 	t.Run("given a block read and a block written, it gives up both and leaves no entry behind", func(t *testing.T) {
 		lt := NewLockTable()
 		cm := NewConcurrencyManager(lt)

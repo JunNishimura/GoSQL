@@ -23,8 +23,8 @@ func TestNewLockTable(t *testing.T) {
 		if got := len(lt.locks); got != 0 {
 			t.Errorf("len(locks) = %d, want 0", got)
 		}
-		// Waiting on a nil condition variable panics, so the constructor has to
-		// build it rather than leave it to the first caller that has to wait.
+		// Waiting on a nil condition variable panics, so the constructor must
+		// create it and not leave that to the first caller that waits.
 		if lt.cond == nil {
 			t.Error("cond is nil, want non-nil")
 		}
@@ -33,8 +33,8 @@ func TestNewLockTable(t *testing.T) {
 		}
 	})
 
-	// Each lock table owns its own map. A table shared between callers would let
-	// one of them see, and release, locks it never took.
+	// Each lock table owns its map. With a shared map, a caller could see and
+	// release locks that it never took.
 	t.Run("given two lock tables, when one records a lock, then the other does not see it", func(t *testing.T) {
 		first := NewLockTable()
 		second := NewLockTable()
@@ -89,7 +89,7 @@ func TestSLock(t *testing.T) {
 		})
 	}
 
-	// Locks are per block, so one block being locked says nothing about another.
+	// Locks are per block, so a lock on one block does not affect another.
 	t.Run("when two blocks are locked, then each is counted on its own", func(t *testing.T) {
 		lt := NewLockTable()
 		first := filemanager.NewBlockId(testDataFile, 0)
@@ -163,7 +163,7 @@ func TestSLock(t *testing.T) {
 		if elapsed < maxWaitTime {
 			t.Errorf("SLock() gave up after %v, want it to wait at least %v", elapsed, maxWaitTime)
 		}
-		// A request that gave up must leave the table as it found it.
+		// A request that timed out must leave the table unchanged.
 		if got := lt.locks[*blk]; got != -1 {
 			t.Errorf("locks[%v] = %d, want -1", blk, got)
 		}
@@ -171,9 +171,9 @@ func TestSLock(t *testing.T) {
 }
 
 func TestXLock(t *testing.T) {
-	// XLock is only ever called by a transaction that already holds a shared
-	// lock on the block, so a count of one is the caller's own lock and nothing
-	// to wait for.
+	// XLock is only called by a transaction that already holds a shared lock
+	// on the block. A count of one is therefore the caller's own lock, and
+	// XLock does not wait for it.
 	t.Run("given a block only the caller is reading, it takes the block exclusively", func(t *testing.T) {
 		lt := NewLockTable()
 		blk := filemanager.NewBlockId(testDataFile, 0)
@@ -261,8 +261,8 @@ func TestXLock(t *testing.T) {
 		if elapsed < maxWaitTime {
 			t.Errorf("XLock() gave up after %v, want it to wait at least %v", elapsed, maxWaitTime)
 		}
-		// A request that gave up must leave the table as it found it, so that
-		// the shared lock the caller still holds is not lost.
+		// A request that timed out must leave the table unchanged, so that the
+		// caller's shared lock is not lost.
 		if got := lt.locks[*blk]; got != 2 {
 			t.Errorf("locks[%v] = %d, want 2", blk, got)
 		}
@@ -314,8 +314,8 @@ func TestUnlock(t *testing.T) {
 
 			lt.Unlock(blk)
 
-			// A released block must have no entry at all. A count of zero left
-			// behind would read as a lock that nobody holds.
+			// A released block must have no entry. A remaining count of zero
+			// would be read as a lock that nobody holds.
 			got, present := lt.locks[*blk]
 			if tt.want == 0 {
 				if present {
