@@ -8,16 +8,18 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// sevenBlocks is a right side of seven blocks of one record each, ids 1 to 7.
+// sevenBlocks is a right side of seven blocks with one record each, ids 1 to
+// 7.
 //
-// The test pool has 8 buffers and the left side holds one of them, so 7 are
-// free when the product is made. 7 blocks do not fit in what is left of them
-// after the reserve, 5, but half of them rounded up, 4, do: the product reads
-// the table in a chunk of blocks 0 to 3 and then one of blocks 4 to 6.
+// The test pool has 8 buffers, and the left side pins one of them, so 7 are
+// free when the product is created. Without the reserved buffers, 5 remain. 7
+// blocks do not fit in 5 buffers, but half of 7 rounded up, 4, does. The
+// product therefore reads the table as one chunk of blocks 0 to 3 and one
+// chunk of blocks 4 to 6.
 var sevenBlocks = [][]int32{{1}, {2}, {3}, {4}, {5}, {6}, {7}}
 
-// sevenBlocksPairs are the pairs of a left side of lids 10 and 20 and
-// sevenBlocks: the first chunk against the whole left, then the second.
+// sevenBlocksPairs are the pairs of a left side with lids 10 and 20 and
+// sevenBlocks: the first chunk with the whole left side, then the second.
 var sevenBlocksPairs = []pair{
 	{10, 1}, {10, 2}, {10, 3}, {10, 4},
 	{20, 1}, {20, 2}, {20, 3}, {20, 4},
@@ -26,7 +28,8 @@ var sevenBlocksPairs = []pair{
 }
 
 // newTestMultibufferProductScan writes blocks to the test table and opens the
-// product of a left side of lids and that table, closed when the test ends.
+// product of a left side with lids and that table. The scan is closed when
+// the test ends.
 func newTestMultibufferProductScan(t *testing.T, tx *transaction.Transaction, lids []int32, blocks [][]int32) *MultibufferProductScan {
 	t.Helper()
 

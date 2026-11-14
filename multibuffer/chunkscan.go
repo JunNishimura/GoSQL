@@ -10,45 +10,44 @@ import (
 	"github.com/JunNishimura/GoSQL/transaction"
 )
 
-// beforeFirstSlot is where the scan sits in a block it has moved to but not
-// yet looked at, one before slot 0, since a record page searches from past the
-// slot it is given.
+// beforeFirstSlot is the slot position of a scan that has moved to a block
+// but has not read any slot yet. It is one less than slot 0, because a record
+// page searches after the slot it is given.
 const beforeFirstSlot = -1
 
 var _ query.Scan = (*ChunkScan)(nil)
 
-// ChunkScan reads the records of a run of blocks of one file, from startBlock
-// to endBlock, holding every one of them pinned while it is open.
+// ChunkScan reads the records of a range of blocks of one file, from
+// startBlock to endBlock. It keeps all these blocks pinned while it is open.
 //
-// That is what lets a multibuffer product read its right side a chunk at a
-// time: the chunk is read through once for every record of the left, and with
-// all of it in buffers none of those reads goes to the disk. A table scan would
-// hold only the block it is on and read each block again every time round.
+// A multibuffer product uses it to read its right side one chunk at a time.
+// The chunk is scanned once for every left record. With the whole chunk in
+// buffers, none of these scans reads from disk. A table scan would pin only
+// its current block, and would read every block again in each scan.
 //
-// It only reads. The chunks it is used for are copies of a plan's records in a
-// temp table, which nothing writes to once they are made.
+// A chunk scan is read-only. Its chunks are copies of the records of a plan
+// in a temp table, and nothing writes to that table after it is created.
 type ChunkScan struct {
 	tx     *transaction.Transaction
 	layout *recordmanager.Layout
-	// pages are the blocks of the chunk in order, or nil once it is closed.
+	// pages are the blocks of the chunk in order, or nil after Close.
 	pages []*recordmanager.RecordPage
-	// current is the index in pages of the block the scan is in.
+	// current is the index in pages of the current block.
 	current int
-	// currentSlot is the slot of that block the scan is on, or
-	// beforeFirstSlot.
+	// currentSlot is the current slot in that block, or beforeFirstSlot.
 	currentSlot int
-	// onRecord is whether the scan is on a record: false before the first
-	// move and after the last record has been passed.
+	// onRecord reports whether the scan is on a record. It is false before
+	// the first move and after the last record.
 	onRecord bool
 }
 
-// NewChunkScan pins blocks startBlock to endBlock of fileName, both included,
-// and returns a scan of their records as layout lays them out, before the
-// first.
+// NewChunkScan pins the blocks startBlock to endBlock of fileName, inclusive.
+// It returns a scan of their records, which use layout, positioned before the
+// first record.
 //
-// An endBlock before startBlock is refused, since the chunk would have no
-// blocks for the scan to stand on. If a block cannot be pinned, the ones
-// already pinned are given back, since no scan comes back to close.
+// An endBlock less than startBlock is rejected, because the chunk would have
+// no blocks. If a block cannot be pinned, the blocks already pinned are
+// unpinned, because no scan is returned that the caller could close.
 func NewChunkScan(tx *transaction.Transaction, fileName string, layout *recordmanager.Layout, startBlock, endBlock int) (*ChunkScan, error) {
 	if endBlock < startBlock {
 		return nil, fmt.Errorf("open a chunk of blocks %d to %d of %s: the last block comes before the first", startBlock, endBlock, fileName)
@@ -76,8 +75,8 @@ func NewChunkScan(tx *transaction.Transaction, fileName string, layout *recordma
 	return cs, nil
 }
 
-// MoveBeforeFirstRecord puts the scan back before the first record of the
-// first block. Nothing is read from the disk, since every block is still
+// MoveBeforeFirstRecord positions the scan before the first record of the
+// first block. It reads nothing from disk, because every block is still
 // pinned.
 func (cs *ChunkScan) MoveBeforeFirstRecord() error {
 	if err := cs.requireOpen(); err != nil {
@@ -91,10 +90,9 @@ func (cs *ChunkScan) MoveBeforeFirstRecord() error {
 	return nil
 }
 
-// MoveToNextRecord moves on to the next record of the chunk and reports
-// whether there was one. Blocks with no records left are passed over, and the
-// end of the last block is the end of the chunk, whatever blocks the file has
-// after it.
+// MoveToNextRecord moves to the next record of the chunk and reports whether
+// one exists. Blocks with no remaining records are skipped. The end of the
+// last block is the end of the chunk, even if the file has more blocks.
 func (cs *ChunkScan) MoveToNextRecord() (bool, error) {
 	if err := cs.requireOpen(); err != nil {
 		return false, err
@@ -111,8 +109,8 @@ func (cs *ChunkScan) MoveToNextRecord() (bool, error) {
 			return false, err
 		}
 
-		// The slot is kept where it is on the last block, so that moving on
-		// again finds no more records there rather than starting it over.
+		// On the last block the slot is not reset. Another move then finds
+		// no more records there, and does not restart the block.
 		if cs.current == len(cs.pages)-1 {
 			cs.onRecord = false
 			return false, nil
@@ -122,7 +120,7 @@ func (cs *ChunkScan) MoveToNextRecord() (bool, error) {
 	}
 }
 
-// GetInt returns the int field fieldName of the record the scan is on.
+// GetInt returns the int field fieldName of the current record.
 func (cs *ChunkScan) GetInt(fieldName string) (int32, error) {
 	if err := cs.requireRecord(); err != nil {
 		return 0, err
@@ -131,7 +129,7 @@ func (cs *ChunkScan) GetInt(fieldName string) (int32, error) {
 	return cs.pages[cs.current].GetInt(cs.currentSlot, fieldName)
 }
 
-// GetString returns the varchar field fieldName of the record the scan is on.
+// GetString returns the varchar field fieldName of the current record.
 func (cs *ChunkScan) GetString(fieldName string) (string, error) {
 	if err := cs.requireRecord(); err != nil {
 		return "", err
@@ -140,8 +138,8 @@ func (cs *ChunkScan) GetString(fieldName string) (string, error) {
 	return cs.pages[cs.current].GetString(cs.currentSlot, fieldName)
 }
 
-// GetValue returns the field fieldName of the record the scan is on, of
-// whichever kind the layout says it is.
+// GetValue returns the field fieldName of the current record as a constant of
+// the type that the layout declares for the field.
 func (cs *ChunkScan) GetValue(fieldName string) (query.Constant, error) {
 	fieldType, err := cs.layout.Schema().Type(fieldName)
 	if err != nil {
@@ -173,8 +171,8 @@ func (cs *ChunkScan) HasField(fieldName string) bool {
 	return cs.layout.Schema().HasField(fieldName)
 }
 
-// Close gives back the pin on every block of the chunk. Closing it again does
-// nothing, and reading it afterwards is ErrNoCurrentRecord.
+// Close unpins every block of the chunk. A second Close does nothing, and a
+// read after Close returns ErrNoCurrentRecord.
 func (cs *ChunkScan) Close() {
 	for _, rp := range cs.pages {
 		cs.tx.Unpin(rp.BlockID())
@@ -183,8 +181,8 @@ func (cs *ChunkScan) Close() {
 	cs.onRecord = false
 }
 
-// requireOpen is the error for moving a scan that has been closed, which is
-// on no block to move through.
+// requireOpen returns an error if the scan has been closed. A closed scan has
+// no blocks to move through.
 func (cs *ChunkScan) requireOpen() error {
 	if cs.pages == nil {
 		return fmt.Errorf("move a closed chunk scan: %w", query.ErrNoCurrentRecord)
@@ -193,8 +191,7 @@ func (cs *ChunkScan) requireOpen() error {
 	return nil
 }
 
-// requireRecord is the error for reading a field when the scan is on no
-// record.
+// requireRecord returns an error if the scan is on no record.
 func (cs *ChunkScan) requireRecord() error {
 	if !cs.onRecord {
 		return query.ErrNoCurrentRecord
