@@ -185,34 +185,18 @@ func cheaperJoin(join, product Plan) Plan {
 }
 
 // chooseIndex returns the plan of reading the table tp reads through the index
-// pred lets it be read through for the fewest blocks, or tp itself if pred
-// equates none of its indexed fields with a constant.
-//
-// Of two that cost the same, the one on the field that comes first by name is
-// taken, so that which one a query is read through does not turn on the order
-// the indexes happen to be listed in.
+// pred lets it be read through for the fewest blocks, as cheapestIndexSelect
+// picks it, or tp itself if pred equates none of its indexed fields with a
+// constant.
 func (qp *IndexQueryPlanner) chooseIndex(tp *TablePlan, pred query.Predicate, tx *transaction.Transaction) (Plan, error) {
 	indexes, err := qp.mm.GetIndexInfo(tx, tp.tableName)
 	if err != nil {
 		return nil, err
 	}
 
-	var best *IndexSelectPlan
-	for _, fieldName := range slices.Sorted(maps.Keys(indexes)) {
-		value, ok := constantEquatedWith(pred, fieldName)
-		if !ok {
-			continue
-		}
-
-		candidate := NewIndexSelectPlan(tp, indexes[fieldName], value)
-		if best == nil || candidate.BlocksAccessed() < best.BlocksAccessed() {
-			best = candidate
-		}
+	if best, ok := cheapestIndexSelect(tp, indexes, pred); ok {
+		return best, nil
 	}
 
-	if best == nil {
-		return tp, nil
-	}
-
-	return best, nil
+	return tp, nil
 }
