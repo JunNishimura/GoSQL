@@ -1,8 +1,10 @@
 # GoSQL
 
-GoSQL is a small relational database written in Go. It is a port of
+GoSQL is a small relational database written in Go. It implements
 SimpleDB, the teaching database from Edward Sciore's book
 [*Database Design and Implementation*](#references).
+It follows the design and the code listings in the book.
+The tests are written for this project, because the book has none.
 
 It is a learning project, not a production database.
 
@@ -136,4 +138,9 @@ golangci-lint run
 
 ## License
 
-[MIT](LICENSE)
+The code written for this project is released under the [MIT License](LICENSE).
+
+GoSQL follows the design and the code listings in
+*Database Design and Implementation*.
+Edward Sciore holds the copyright in the book's code listings
+and in the original SimpleDB code.
